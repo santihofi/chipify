@@ -44,6 +44,13 @@ def main():
     
     # 4. Daten analysieren und Konsolen-Dashboard ausgeben
     print_summary(df, stim)
+    
+def run_gui():
+    """Startet die native Tkinter Desktop-App für Simify."""
+    # Wir importieren hier erst, damit das CLI ohne X11-Server lauffähig bleibt
+    from simify import gui_tk
+    print("[*] Starte Simify Desktop GUI...")
+    gui_tk.main()
 
 if __name__ == "__main__":
     main()

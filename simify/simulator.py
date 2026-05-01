@@ -144,8 +144,7 @@ def generate_cases(stim):
     param_values = stim.params.values()
     return [dict(zip(param_names, combo)) for combo in itertools.product(*param_values)]
 
-def run_sim(stim):
-    """Executes the simulations and returns a Pandas DataFrame with the results."""
+def run_sim(stim, progress_callback=None): # <--- HIER FEHLTE DAS ARGUMENT!
     param_sets = generate_cases(stim)
     generate_templates(stim)
     stage_files_to_ram()
@@ -164,8 +163,16 @@ def run_sim(stim):
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         futures = [executor.submit(simulate_single_case, arg) for arg in worker_args]
         
-        for future in tqdm(as_completed(futures), total=len(param_sets)):
+        total_tasks = len(futures)
+        completed = 0
+        
+        for future in tqdm(as_completed(futures), total=total_tasks):
             results.append(future.result())
+            completed += 1
+            
+            # Der GUI Bescheid geben, dass ein weiterer Run fertig ist
+            if progress_callback:
+                progress_callback(completed, total_tasks)
             
     df = pd.DataFrame(results)
     return df
