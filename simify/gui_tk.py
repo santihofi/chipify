@@ -566,20 +566,22 @@ class SimifyGUI(ctk.CTk):
         control_frame = ctk.CTkFrame(self.tab_adv, fg_color="transparent")
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         
-        self.adv_mode_var = ctk.StringVar(value="Sensitivity (Tornado)")
-        self.adv_mode_selector = ctk.CTkSegmentedButton(control_frame, values=["Scatter Plot", "Correlation Heatmap", "Sensitivity (Tornado)"], variable=self.adv_mode_var, command=self.on_adv_mode_change)
+        self.adv_mode_var = ctk.StringVar(value="Fail Breakdown (Pie Chart)")
+        self.adv_mode_selector = ctk.CTkSegmentedButton(
+            control_frame, 
+            values=["Scatter Plot", "Correlation Heatmap", "Sensitivity (Tornado)", "Fail Breakdown (Pie Chart)"], 
+            variable=self.adv_mode_var, 
+            command=self.on_adv_mode_change
+        )
         self.adv_mode_selector.pack(side=tk.LEFT, padx=(0, 30))
         
-        # Container for dynamic dropdowns
         self.adv_controls_frame = ctk.CTkFrame(control_frame, fg_color="transparent")
         self.adv_controls_frame.pack(side=tk.LEFT, fill="x", expand=True)
         
-        # Variables
         self.scatter_x_var = ctk.StringVar(value="-")
         self.scatter_y_var = ctk.StringVar(value="-")
         self.tornado_target_var = ctk.StringVar(value="-")
         
-        # Sub-Widgets (created but not packed yet)
         self.lbl_x = ctk.CTkLabel(self.adv_controls_frame, text="X-Axis:")
         self.scatter_x_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.scatter_x_var, command=self.update_adv_plots)
         self.lbl_y = ctk.CTkLabel(self.adv_controls_frame, text="Y-Axis:")
@@ -594,7 +596,6 @@ class SimifyGUI(ctk.CTk):
         self.adv_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
     def on_adv_mode_change(self, mode):
-        # Hide all dynamic elements first
         self.lbl_x.pack_forget()
         self.scatter_x_dropdown.pack_forget()
         self.lbl_y.pack_forget()
@@ -602,7 +603,6 @@ class SimifyGUI(ctk.CTk):
         self.lbl_tornado.pack_forget()
         self.tornado_target_dropdown.pack_forget()
         
-        # Show only what is needed for the current mode
         if mode == "Scatter Plot":
             self.lbl_x.pack(side=tk.LEFT, padx=(0, 5))
             self.scatter_x_dropdown.pack(side=tk.LEFT, padx=(0, 15))
@@ -686,14 +686,11 @@ class SimifyGUI(ctk.CTk):
             correlations = []
             for p in params:
                 if p not in valid_df.columns: continue
-                    
-                # Skip parameters that didn't change (no variance)
                 if valid_df[p].nunique() <= 1: continue
                 
                 if pd.api.types.is_numeric_dtype(valid_df[p]):
                     corr = valid_df[p].corr(valid_df[target])
                 else:
-                    # Trick: Convert String parameters (like 'tt_mismatch') to numbers (0, 1) just for the math!
                     factorized, _ = pd.factorize(valid_df[p])
                     corr = pd.Series(factorized).corr(valid_df[target])
                     
@@ -706,7 +703,6 @@ class SimifyGUI(ctk.CTk):
                 self.adv_canvas.draw()
                 return
                 
-            # Sort by absolute impact (highest impact at the top of the tornado)
             correlations.sort(key=lambda x: abs(x[1]))
             
             labels = [x[0] for x in correlations]
@@ -724,6 +720,49 @@ class SimifyGUI(ctk.CTk):
             self.adv_ax.spines['right'].set_visible(False)
             self.adv_ax.spines['left'].set_color('gray')
             self.adv_ax.spines['bottom'].set_color('gray')
+            
+        elif mode == "Fail Breakdown (Pie Chart)":
+            # Extract all pass/fail columns for individual measurements
+            pass_cols = [c for c in valid_df.columns if c.endswith('_pass') and not c.endswith('_overall_pass') and c != 'global_pass']
+            
+            fail_counts = {}
+            for c in pass_cols:
+                # Count how many times this specific constraint failed (where value is False/0)
+                fails = (valid_df[c] == False).sum()
+                if fails > 0:
+                    clean_name = c.replace('_pass', '')
+                    fail_counts[clean_name] = fails
+                    
+            if not fail_counts:
+                self.adv_ax.text(0.5, 0.5, "100% Yield! No failures to analyze.", color='#2ecc71', ha='center', va='center', fontsize=14, weight='bold')
+                self.adv_ax.axis('off')
+                self.adv_fig.tight_layout()
+                self.adv_canvas.draw()
+                return
+
+            labels = list(fail_counts.keys())
+            sizes = list(fail_counts.values())
+            
+            colors = plt.cm.Pastel1(np.linspace(0, 1, len(labels)))
+            explode = [0.1 if s == max(sizes) else 0 for s in sizes] # Highlight top offender
+            
+            patches, texts, autotexts = self.adv_ax.pie(
+                sizes, 
+                explode=explode, 
+                labels=labels, 
+                colors=colors, 
+                autopct='%1.1f%%', 
+                startangle=140,
+                textprops={'color': 'white', 'fontsize': 10},
+                wedgeprops={'edgecolor': 'gray', 'linewidth': 1}
+            )
+            
+            for autotext in autotexts:
+                autotext.set_color('black')
+                autotext.set_weight('bold')
+                
+            self.adv_ax.set_title("Fail Breakdown: Which constraints caused the most failures?", color='white', pad=20)
+            self.adv_ax.axis('equal') 
 
         self.adv_fig.tight_layout()
         self.adv_canvas.draw()
@@ -832,7 +871,6 @@ class SimifyGUI(ctk.CTk):
                         
                     self.tree.insert("", tk.END, values=(p_name, fmt(sim_min), fmt(sim_typ), fmt(sim_max), spec_min, spec_typ, spec_max, status), tags=tags)
                     
-        # Update Dropdowns for Analytics
         numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
         all_plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
         
