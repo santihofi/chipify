@@ -125,13 +125,13 @@ class SimifyGUI(ctk.CTk):
         self.tab_table = self.tabs.add("Measurements")
         self.tab_worst = self.tabs.add("Worst-Case Analysis")
         self.tab_hist = self.tabs.add("Histograms")
-        self.tab_adv = self.tabs.add("Advanced Analytics") # --- NEW TAB ---
+        self.tab_adv = self.tabs.add("Advanced Analytics") 
         
         self.setup_editor_tab()
         self.setup_table_tab()
         self.setup_worst_case_tab()
         self.setup_histogram_tab()
-        self.setup_adv_analytics_tab() # --- SETUP NEW TAB ---
+        self.setup_adv_analytics_tab() 
 
     # ==========================================
     # DATASHEET EDITOR
@@ -532,7 +532,7 @@ class SimifyGUI(ctk.CTk):
         control_frame = ctk.CTkFrame(self.tab_hist, fg_color="transparent")
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         
-        ctk.CTkLabel(control_frame, text="Parameter:").pack(side=tk.LEFT, padx=(0, 10))
+        ctk.CTkLabel(control_frame, text="Measurement:").pack(side=tk.LEFT, padx=(0, 10))
         self.plot_param_var = ctk.StringVar(value="-")
         self.plot_param_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.plot_param_var, command=self.update_plot)
         self.plot_param_dropdown.pack(side=tk.LEFT, padx=(0, 30))
@@ -566,24 +566,27 @@ class SimifyGUI(ctk.CTk):
         control_frame = ctk.CTkFrame(self.tab_adv, fg_color="transparent")
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         
-        self.adv_mode_var = ctk.StringVar(value="Scatter Plot")
-        self.adv_mode_selector = ctk.CTkSegmentedButton(control_frame, values=["Scatter Plot", "Correlation Heatmap"], variable=self.adv_mode_var, command=self.on_adv_mode_change)
+        self.adv_mode_var = ctk.StringVar(value="Sensitivity (Tornado)")
+        self.adv_mode_selector = ctk.CTkSegmentedButton(control_frame, values=["Scatter Plot", "Correlation Heatmap", "Sensitivity (Tornado)"], variable=self.adv_mode_var, command=self.on_adv_mode_change)
         self.adv_mode_selector.pack(side=tk.LEFT, padx=(0, 30))
         
-        # Scatter Dropdowns
+        # Container for dynamic dropdowns
+        self.adv_controls_frame = ctk.CTkFrame(control_frame, fg_color="transparent")
+        self.adv_controls_frame.pack(side=tk.LEFT, fill="x", expand=True)
+        
+        # Variables
         self.scatter_x_var = ctk.StringVar(value="-")
         self.scatter_y_var = ctk.StringVar(value="-")
+        self.tornado_target_var = ctk.StringVar(value="-")
         
-        self.scatter_x_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.scatter_x_var, command=self.update_adv_plots)
-        self.scatter_y_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.scatter_y_var, command=self.update_adv_plots)
+        # Sub-Widgets (created but not packed yet)
+        self.lbl_x = ctk.CTkLabel(self.adv_controls_frame, text="X-Axis:")
+        self.scatter_x_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.scatter_x_var, command=self.update_adv_plots)
+        self.lbl_y = ctk.CTkLabel(self.adv_controls_frame, text="Y-Axis:")
+        self.scatter_y_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.scatter_y_var, command=self.update_adv_plots)
         
-        self.lbl_x = ctk.CTkLabel(control_frame, text="X-Axis:")
-        self.lbl_y = ctk.CTkLabel(control_frame, text="Y-Axis:")
-        
-        self.lbl_x.pack(side=tk.LEFT, padx=(0, 5))
-        self.scatter_x_dropdown.pack(side=tk.LEFT, padx=(0, 15))
-        self.lbl_y.pack(side=tk.LEFT, padx=(0, 5))
-        self.scatter_y_dropdown.pack(side=tk.LEFT, padx=(0, 15))
+        self.lbl_tornado = ctk.CTkLabel(self.adv_controls_frame, text="Target Measurement:")
+        self.tornado_target_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.tornado_target_var, command=self.update_adv_plots)
 
         self.adv_fig = plt.figure(figsize=(8, 5))
         self.adv_fig.patch.set_facecolor('#2b2b2b')
@@ -591,10 +594,24 @@ class SimifyGUI(ctk.CTk):
         self.adv_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
     def on_adv_mode_change(self, mode):
-        # Enable/Disable dropdowns based on mode
-        state = "normal" if mode == "Scatter Plot" else "disabled"
-        self.scatter_x_dropdown.configure(state=state)
-        self.scatter_y_dropdown.configure(state=state)
+        # Hide all dynamic elements first
+        self.lbl_x.pack_forget()
+        self.scatter_x_dropdown.pack_forget()
+        self.lbl_y.pack_forget()
+        self.scatter_y_dropdown.pack_forget()
+        self.lbl_tornado.pack_forget()
+        self.tornado_target_dropdown.pack_forget()
+        
+        # Show only what is needed for the current mode
+        if mode == "Scatter Plot":
+            self.lbl_x.pack(side=tk.LEFT, padx=(0, 5))
+            self.scatter_x_dropdown.pack(side=tk.LEFT, padx=(0, 15))
+            self.lbl_y.pack(side=tk.LEFT, padx=(0, 5))
+            self.scatter_y_dropdown.pack(side=tk.LEFT, padx=(0, 15))
+        elif mode == "Sensitivity (Tornado)":
+            self.lbl_tornado.pack(side=tk.LEFT, padx=(0, 5))
+            self.tornado_target_dropdown.pack(side=tk.LEFT, padx=(0, 15))
+            
         self.update_adv_plots()
 
     def update_adv_plots(self, *args):
@@ -603,7 +620,7 @@ class SimifyGUI(ctk.CTk):
         if valid_df.empty: return
 
         mode = self.adv_mode_var.get()
-        self.adv_fig.clf() # Clear entirely to avoid overlaying colorbars
+        self.adv_fig.clf() 
         self.adv_ax = self.adv_fig.add_subplot(111)
         self.adv_ax.set_facecolor('#2b2b2b')
 
@@ -615,11 +632,9 @@ class SimifyGUI(ctk.CTk):
 
             pass_mask = valid_df['global_pass'] == True
 
-            # Plot Passes (Green)
             if pass_mask.any():
                 self.adv_ax.scatter(valid_df[pass_mask][x_col], valid_df[pass_mask][y_col], 
                                     c='#2ecc71', label='Pass', alpha=0.7, edgecolors='white', linewidths=0.5)
-            # Plot Fails (Red)
             if (~pass_mask).any():
                 self.adv_ax.scatter(valid_df[~pass_mask][x_col], valid_df[~pass_mask][y_col], 
                                     c='#e74c3c', label='Fail', alpha=0.7, edgecolors='white', linewidths=0.5)
@@ -635,7 +650,6 @@ class SimifyGUI(ctk.CTk):
                 self.adv_ax.legend(facecolor='#2b2b2b', edgecolor='gray')
 
         elif mode == "Correlation Heatmap":
-            # Extract strictly numeric columns (exclude tracking columns)
             numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
             plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
             
@@ -646,13 +660,11 @@ class SimifyGUI(ctk.CTk):
                 corr = valid_df[plot_cols].corr()
                 cax = self.adv_ax.matshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
                 
-                # Setup Colorbar
                 cbar = self.adv_fig.colorbar(cax, ax=self.adv_ax, fraction=0.046, pad=0.04)
                 cbar.ax.yaxis.set_tick_params(color='white')
                 cbar.outline.set_edgecolor('gray')
                 plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
 
-                # Ticks and Labels
                 self.adv_ax.set_xticks(range(len(plot_cols)))
                 self.adv_ax.set_yticks(range(len(plot_cols)))
                 self.adv_ax.set_xticklabels(plot_cols, rotation=45, ha='left', color='white', fontsize=9)
@@ -660,6 +672,58 @@ class SimifyGUI(ctk.CTk):
                 
                 self.adv_ax.xaxis.set_ticks_position('bottom')
                 self.adv_ax.set_title("Parameter & Measurement Correlation Matrix", color='white', pad=20)
+                
+        elif mode == "Sensitivity (Tornado)":
+            target = self.tornado_target_var.get()
+            if target == "-" or target not in valid_df.columns or self.current_stim is None:
+                self.adv_ax.text(0.5, 0.5, "Select a target measurement first.", color='white', ha='center', va='center')
+                self.adv_fig.tight_layout()
+                self.adv_canvas.draw()
+                return
+
+            params = list(self.current_stim.params.keys())
+            
+            correlations = []
+            for p in params:
+                if p not in valid_df.columns: continue
+                    
+                # Skip parameters that didn't change (no variance)
+                if valid_df[p].nunique() <= 1: continue
+                
+                if pd.api.types.is_numeric_dtype(valid_df[p]):
+                    corr = valid_df[p].corr(valid_df[target])
+                else:
+                    # Trick: Convert String parameters (like 'tt_mismatch') to numbers (0, 1) just for the math!
+                    factorized, _ = pd.factorize(valid_df[p])
+                    corr = pd.Series(factorized).corr(valid_df[target])
+                    
+                if not np.isnan(corr):
+                    correlations.append((p, corr))
+                    
+            if not correlations:
+                self.adv_ax.text(0.5, 0.5, "No varied parameters found.", color='white', ha='center', va='center')
+                self.adv_fig.tight_layout()
+                self.adv_canvas.draw()
+                return
+                
+            # Sort by absolute impact (highest impact at the top of the tornado)
+            correlations.sort(key=lambda x: abs(x[1]))
+            
+            labels = [x[0] for x in correlations]
+            values = [x[1] for x in correlations]
+            colors = ['#2ecc71' if v >= 0 else '#e74c3c' for v in values]
+            
+            self.adv_ax.barh(labels, values, color=colors, edgecolor='white', linewidth=0.5, alpha=0.8)
+            self.adv_ax.axvline(0, color='gray', linestyle='-', linewidth=1)
+            
+            self.adv_ax.set_xlabel("Correlation Impact (Sensitivity)", color='white')
+            self.adv_ax.set_title(f"Sensitivity Analysis: What impacts '{target}' the most?", color='white', pad=15)
+            self.adv_ax.tick_params(colors='white')
+            
+            self.adv_ax.spines['top'].set_visible(False)
+            self.adv_ax.spines['right'].set_visible(False)
+            self.adv_ax.spines['left'].set_color('gray')
+            self.adv_ax.spines['bottom'].set_color('gray')
 
         self.adv_fig.tight_layout()
         self.adv_canvas.draw()
@@ -746,12 +810,13 @@ class SimifyGUI(ctk.CTk):
             return f"{val:.4g}"
 
         failed_params = []
-        plot_cols = []
+        meas_cols = [] 
 
         for test in stim.tests:
             for val_obj in test.value_lst:
                 p_name = val_obj.name
                 if p_name in valid_df.columns:
+                    meas_cols.append(p_name)
                     sim_min, sim_max, sim_typ = valid_df[p_name].min(), valid_df[p_name].max(), valid_df[p_name].mean()
                     
                     spec_min = fmt(getattr(val_obj, 'vmin', getattr(val_obj, 'min', None)))
@@ -769,20 +834,23 @@ class SimifyGUI(ctk.CTk):
                     
         # Update Dropdowns for Analytics
         numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
-        plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
+        all_plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
         
-        if plot_cols:
-            # Histograms
-            self.plot_param_dropdown.configure(values=plot_cols)
-            self.plot_param_var.set(plot_cols[0])
+        if meas_cols:
+            self.plot_param_dropdown.configure(values=meas_cols)
+            self.plot_param_var.set(meas_cols[0])
             self.update_plot()
             
-            # Advanced Analytics
-            self.scatter_x_dropdown.configure(values=plot_cols)
-            self.scatter_y_dropdown.configure(values=plot_cols)
-            self.scatter_x_var.set(plot_cols[0])
-            self.scatter_y_var.set(plot_cols[1] if len(plot_cols) > 1 else plot_cols[0])
-            self.update_adv_plots()
+            self.tornado_target_dropdown.configure(values=meas_cols)
+            self.tornado_target_var.set(meas_cols[0])
+            
+        if all_plot_cols:
+            self.scatter_x_dropdown.configure(values=all_plot_cols)
+            self.scatter_y_dropdown.configure(values=all_plot_cols)
+            self.scatter_x_var.set(all_plot_cols[0])
+            self.scatter_y_var.set(all_plot_cols[1] if len(all_plot_cols) > 1 else all_plot_cols[0])
+            
+        self.update_adv_plots()
                     
         for widget in self.wc_scroll.winfo_children(): widget.destroy()
             
@@ -821,7 +889,7 @@ class SimifyGUI(ctk.CTk):
                     params_text = "\n".join([f"• {k}: {worst_row[k]}" for k in param_cols if k in worst_row])
                     ctk.CTkLabel(card, text=f"Triggering parameters:\n{params_text}", justify="left").pack(anchor="w", padx=15, pady=(0, 15))
 
-        self.tabs.set("Advanced Analytics") # Jump to the cool new tab after simulation!
+        self.tabs.set("Measurements") 
         self.lbl_status.configure(text=f"Status: Done! Saved to out/", text_color="#2ecc71")
         self.btn_start.configure(state="normal")
         self.btn_refresh.configure(state="normal")
