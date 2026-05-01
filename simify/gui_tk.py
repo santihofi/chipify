@@ -11,7 +11,6 @@ import yaml
 # ==========================================
 # --- YAML FORMATTING OVERRIDES ---
 # ==========================================
-# 1. Force all lists to format inline with brackets: [a, b, c]
 def represent_list_inline(dumper, data):
     return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
 
@@ -19,7 +18,6 @@ yaml.add_representer(list, represent_list_inline)
 yaml.SafeDumper.add_representer(list, represent_list_inline)
 yaml.Dumper.add_representer(list, represent_list_inline)
 
-# 2. Custom String Class to explicitly force quotes in YAML output
 class QuotedString(str): pass
 
 def represent_quoted_str(dumper, data):
@@ -46,7 +44,7 @@ class SimifyGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Simify EDA Dashboard")
-        self.geometry("1150x850")
+        self.geometry("1200x900")
         
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -127,11 +125,13 @@ class SimifyGUI(ctk.CTk):
         self.tab_table = self.tabs.add("Measurements")
         self.tab_worst = self.tabs.add("Worst-Case Analysis")
         self.tab_hist = self.tabs.add("Histograms")
+        self.tab_adv = self.tabs.add("Advanced Analytics") # --- NEW TAB ---
         
         self.setup_editor_tab()
         self.setup_table_tab()
         self.setup_worst_case_tab()
         self.setup_histogram_tab()
+        self.setup_adv_analytics_tab() # --- SETUP NEW TAB ---
 
     # ==========================================
     # DATASHEET EDITOR
@@ -266,7 +266,6 @@ class SimifyGUI(ctk.CTk):
         for p_name, p_val in params_dict.items():
             key_var = ctk.StringVar(value=str(p_name))
             
-            # WICHTIG: Erlaube Skalare wie "range(30)" als String in der GUI (ohne Listenklammern)
             if not isinstance(p_val, list):
                 val_str = self.gui_repr_param(p_val)
             else:
@@ -284,7 +283,7 @@ class SimifyGUI(ctk.CTk):
         if r == 0:
             ctk.CTkLabel(params_frame, text="No parameters defined.", text_color="gray").grid(row=0, column=0, padx=10, pady=10)
 
-        # --- 2. TESTS SECTION (FLAT DICT) ---
+        # --- 2. TESTS SECTION ---
         test_header = ctk.CTkFrame(self.editor_scroll, fg_color="transparent")
         test_header.pack(fill="x", pady=(20, 5))
         ctk.CTkLabel(test_header, text="Specifications (Boundaries)", font=ctk.CTkFont(size=16, weight="bold"), text_color="#3484F0").pack(side="left", padx=5)
@@ -352,13 +351,10 @@ class SimifyGUI(ctk.CTk):
             v_str = p_dict['val'].get().strip()
             if not k: continue 
             
-            # 1. Fall: Wenn der Benutzer eine Funktion wie "range(30)" eingibt:
-            # Diese darf NICHT in eine Liste [], da der Simulator den Befehl sonst nicht erkennt!
             if v_str.startswith("range(") or v_str.startswith("np."):
                 self.current_yaml_data[self.param_key][k] = v_str
                 continue
                 
-            # 2. Fall: Reguläre Sweeps oder einzelne Skalare (Zahlen oder Strings in Quotes)
             parsed_list = []
             for x in v_str.split(','):
                 x = x.strip()
@@ -372,7 +368,6 @@ class SimifyGUI(ctk.CTk):
                     except ValueError: 
                         parsed_list.append(x)
                         
-            # WICHTIG: Normale Zahlen/Strings werden IMMER als Liste formatiert!
             self.current_yaml_data[self.param_key][k] = parsed_list
             
         self.current_yaml_data[self.test_key] = {}
@@ -407,7 +402,6 @@ class SimifyGUI(ctk.CTk):
                 
             self.current_yaml_data[self.test_key][tb_name] = tb_content
 
-    # --- ACTIONS: ADD & DELETE ---
     def action_add_param(self):
         self.sync_ui_to_state()
         self.current_yaml_data[self.param_key]['new_param'] = [1, 2]
@@ -435,14 +429,12 @@ class SimifyGUI(ctk.CTk):
         keys = list(self.current_yaml_data[self.test_key].keys())
         if test_idx < len(keys):
             tb_key = keys[test_idx]
-            
             base_name = 'new_measurement'
             name = base_name
             count = 1
             while name in self.current_yaml_data[self.test_key][tb_key]:
                 name = f"{base_name}_{count}"
                 count += 1
-                
             self.current_yaml_data[self.test_key][tb_key][name] = {}
         self.build_editor_ui()
 
@@ -457,7 +449,6 @@ class SimifyGUI(ctk.CTk):
 
     def save_yaml(self):
         if not self.current_yaml_path: return
-        
         try:
             if self.editor_mode.get() == "Form View":
                 self.sync_ui_to_state()
@@ -467,16 +458,14 @@ class SimifyGUI(ctk.CTk):
             else:
                 text_to_save = self.raw_editor.get("1.0", "end-1c")
                 yaml.safe_load(text_to_save) 
-
             with open(self.current_yaml_path, 'w') as f:
                 f.write(text_to_save)
-                
             self.lbl_status.configure(text=f"Status: Datasheet saved successfully!", text_color="#2ecc71")
         except Exception as e:
             messagebox.showerror("Save Error", f"Could not save datasheet:\n{str(e)}")
 
     # ==========================================
-    # REST OF GUI
+    # REST OF GUI & ADVANCED ANALYTICS
     # ==========================================
     def refresh_yamls(self):
         yaml_files = glob.glob(os.path.join(settings.IN_DIR, "*.yaml"))
@@ -517,8 +506,7 @@ class SimifyGUI(ctk.CTk):
         self.tree.heading("spec_max", text="Spec Max")
         self.tree.heading("status", text="Status")
         
-        for col in columns:
-            self.tree.column(col, width=90, anchor=tk.CENTER)
+        for col in columns: self.tree.column(col, width=90, anchor=tk.CENTER)
         self.tree.column("param", width=140, anchor=tk.W)
         
         scrollbar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -569,6 +557,113 @@ class SimifyGUI(ctk.CTk):
         
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.tab_hist)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
+
+    # --- ADVANCED ANALYTICS TAB ---
+    def setup_adv_analytics_tab(self):
+        self.tab_adv.grid_columnconfigure(0, weight=1)
+        self.tab_adv.grid_rowconfigure(1, weight=1)
+        
+        control_frame = ctk.CTkFrame(self.tab_adv, fg_color="transparent")
+        control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        
+        self.adv_mode_var = ctk.StringVar(value="Scatter Plot")
+        self.adv_mode_selector = ctk.CTkSegmentedButton(control_frame, values=["Scatter Plot", "Correlation Heatmap"], variable=self.adv_mode_var, command=self.on_adv_mode_change)
+        self.adv_mode_selector.pack(side=tk.LEFT, padx=(0, 30))
+        
+        # Scatter Dropdowns
+        self.scatter_x_var = ctk.StringVar(value="-")
+        self.scatter_y_var = ctk.StringVar(value="-")
+        
+        self.scatter_x_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.scatter_x_var, command=self.update_adv_plots)
+        self.scatter_y_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.scatter_y_var, command=self.update_adv_plots)
+        
+        self.lbl_x = ctk.CTkLabel(control_frame, text="X-Axis:")
+        self.lbl_y = ctk.CTkLabel(control_frame, text="Y-Axis:")
+        
+        self.lbl_x.pack(side=tk.LEFT, padx=(0, 5))
+        self.scatter_x_dropdown.pack(side=tk.LEFT, padx=(0, 15))
+        self.lbl_y.pack(side=tk.LEFT, padx=(0, 5))
+        self.scatter_y_dropdown.pack(side=tk.LEFT, padx=(0, 15))
+
+        self.adv_fig = plt.figure(figsize=(8, 5))
+        self.adv_fig.patch.set_facecolor('#2b2b2b')
+        self.adv_canvas = FigureCanvasTkAgg(self.adv_fig, master=self.tab_adv)
+        self.adv_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
+
+    def on_adv_mode_change(self, mode):
+        # Enable/Disable dropdowns based on mode
+        state = "normal" if mode == "Scatter Plot" else "disabled"
+        self.scatter_x_dropdown.configure(state=state)
+        self.scatter_y_dropdown.configure(state=state)
+        self.update_adv_plots()
+
+    def update_adv_plots(self, *args):
+        if self.current_df is None: return
+        valid_df = self.current_df[self.current_df['sim_error'] == 'None']
+        if valid_df.empty: return
+
+        mode = self.adv_mode_var.get()
+        self.adv_fig.clf() # Clear entirely to avoid overlaying colorbars
+        self.adv_ax = self.adv_fig.add_subplot(111)
+        self.adv_ax.set_facecolor('#2b2b2b')
+
+        if mode == "Scatter Plot":
+            x_col = self.scatter_x_var.get()
+            y_col = self.scatter_y_var.get()
+            
+            if x_col not in valid_df.columns or y_col not in valid_df.columns: return
+
+            pass_mask = valid_df['global_pass'] == True
+
+            # Plot Passes (Green)
+            if pass_mask.any():
+                self.adv_ax.scatter(valid_df[pass_mask][x_col], valid_df[pass_mask][y_col], 
+                                    c='#2ecc71', label='Pass', alpha=0.7, edgecolors='white', linewidths=0.5)
+            # Plot Fails (Red)
+            if (~pass_mask).any():
+                self.adv_ax.scatter(valid_df[~pass_mask][x_col], valid_df[~pass_mask][y_col], 
+                                    c='#e74c3c', label='Fail', alpha=0.7, edgecolors='white', linewidths=0.5)
+
+            self.adv_ax.set_xlabel(x_col, color='white')
+            self.adv_ax.set_ylabel(y_col, color='white')
+            self.adv_ax.set_title(f"Shmoo Plot: {y_col} vs {x_col}", color='white', pad=10)
+            self.adv_ax.grid(True, linestyle='--', alpha=0.3)
+            self.adv_ax.spines['top'].set_visible(False)
+            self.adv_ax.spines['right'].set_visible(False)
+            
+            if len(self.adv_ax.get_legend_handles_labels()[1]) > 0:
+                self.adv_ax.legend(facecolor='#2b2b2b', edgecolor='gray')
+
+        elif mode == "Correlation Heatmap":
+            # Extract strictly numeric columns (exclude tracking columns)
+            numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
+            plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
+            
+            if len(plot_cols) < 2:
+                self.adv_ax.text(0.5, 0.5, "Not enough numeric data for correlation map.", 
+                                 color='white', ha='center', va='center', transform=self.adv_ax.transAxes)
+            else:
+                corr = valid_df[plot_cols].corr()
+                cax = self.adv_ax.matshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
+                
+                # Setup Colorbar
+                cbar = self.adv_fig.colorbar(cax, ax=self.adv_ax, fraction=0.046, pad=0.04)
+                cbar.ax.yaxis.set_tick_params(color='white')
+                cbar.outline.set_edgecolor('gray')
+                plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
+
+                # Ticks and Labels
+                self.adv_ax.set_xticks(range(len(plot_cols)))
+                self.adv_ax.set_yticks(range(len(plot_cols)))
+                self.adv_ax.set_xticklabels(plot_cols, rotation=45, ha='left', color='white', fontsize=9)
+                self.adv_ax.set_yticklabels(plot_cols, color='white', fontsize=9)
+                
+                self.adv_ax.xaxis.set_ticks_position('bottom')
+                self.adv_ax.set_title("Parameter & Measurement Correlation Matrix", color='white', pad=20)
+
+        self.adv_fig.tight_layout()
+        self.adv_canvas.draw()
+    # --------------------------------
 
     def apply_treeview_dark_style(self):
         style = ttk.Style()
@@ -651,13 +746,12 @@ class SimifyGUI(ctk.CTk):
             return f"{val:.4g}"
 
         failed_params = []
-        plot_params = []
+        plot_cols = []
 
         for test in stim.tests:
             for val_obj in test.value_lst:
                 p_name = val_obj.name
                 if p_name in valid_df.columns:
-                    plot_params.append(p_name)
                     sim_min, sim_max, sim_typ = valid_df[p_name].min(), valid_df[p_name].max(), valid_df[p_name].mean()
                     
                     spec_min = fmt(getattr(val_obj, 'vmin', getattr(val_obj, 'min', None)))
@@ -673,10 +767,22 @@ class SimifyGUI(ctk.CTk):
                         
                     self.tree.insert("", tk.END, values=(p_name, fmt(sim_min), fmt(sim_typ), fmt(sim_max), spec_min, spec_typ, spec_max, status), tags=tags)
                     
-        if plot_params:
-            self.plot_param_dropdown.configure(values=plot_params)
-            self.plot_param_var.set(plot_params[0])
+        # Update Dropdowns for Analytics
+        numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
+        plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
+        
+        if plot_cols:
+            # Histograms
+            self.plot_param_dropdown.configure(values=plot_cols)
+            self.plot_param_var.set(plot_cols[0])
             self.update_plot()
+            
+            # Advanced Analytics
+            self.scatter_x_dropdown.configure(values=plot_cols)
+            self.scatter_y_dropdown.configure(values=plot_cols)
+            self.scatter_x_var.set(plot_cols[0])
+            self.scatter_y_var.set(plot_cols[1] if len(plot_cols) > 1 else plot_cols[0])
+            self.update_adv_plots()
                     
         for widget in self.wc_scroll.winfo_children(): widget.destroy()
             
@@ -715,7 +821,7 @@ class SimifyGUI(ctk.CTk):
                     params_text = "\n".join([f"• {k}: {worst_row[k]}" for k in param_cols if k in worst_row])
                     ctk.CTkLabel(card, text=f"Triggering parameters:\n{params_text}", justify="left").pack(anchor="w", padx=15, pady=(0, 15))
 
-        self.tabs.set("Measurements")
+        self.tabs.set("Advanced Analytics") # Jump to the cool new tab after simulation!
         self.lbl_status.configure(text=f"Status: Done! Saved to out/", text_color="#2ecc71")
         self.btn_start.configure(state="normal")
         self.btn_refresh.configure(state="normal")
