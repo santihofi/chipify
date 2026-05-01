@@ -1,10 +1,10 @@
 # datasheet.yaml
 parameters:
   temp: [-40, 27, 100]
-  corner_mos: ["tt_mismatch"]
-  corner_res: ["res_typ_mismatch"]
-  corner_cap: ["cap_typ_mismatch"]
-  seed: range(30)
+  corner_mos: ["tt"]
+  corner_res: ["res_typ"]
+  corner_cap: ["cap_typ"]
+  seed: range(1)
   sigma: [1]
   vcm: [0.75]
   vincm: [0.75]
