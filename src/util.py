@@ -14,6 +14,12 @@ class Stimuli:
         # 1. Parameter 1:1 übernehmen
         self.params = data.get('parameters', {})
         
+        for key, value in self.params.items():
+            if isinstance(value, str) and value.startswith("range("):
+                # Extrahiert die Zahl aus den Klammern und konvertiert sie
+                num = int(value.replace("range(", "").replace(")", ""))
+                self.params[key] = list(range(num))
+        
         # 2. Tests generieren
         for tb_path, measurements in data.get('tests', {}).items():
             value_lst = []

@@ -1,113 +1,204 @@
-import re
-import subprocess
-import numpy as np
-import util
-from tqdm import tqdm
+import os
+import sys
+import glob
+import shutil
 import itertools
-from jinja2 import Template
+import subprocess
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 import pandas as pd
+import numpy as np
+from tqdm import tqdm
+from jinja2 import Template
 
-#define path variables
+import util
 
+# --- PATH CONFIGURATION ---
 IN_DIR = "../in/"
 OUT_DIR = "../out/"
 WORK_DIR = "../tmp/"
 TB_DIR = "../tb/"
 
-def run_xschem(WORK_DIR, XSCHEM_FILE):
-    print(f"[*] Generiere SPICE-Netzliste aus {XSCHEM_FILE}...")
+# Fast RAM drive for Docker I/O bypass
+FAST_TMP = "/tmp/sim_work/"
+
+# Ensure required output directories exist
+os.makedirs(FAST_TMP, exist_ok=True)
+os.makedirs(OUT_DIR, exist_ok=True)
+os.makedirs(WORK_DIR, exist_ok=True)
+
+
+def stage_files_to_ram():
+    """Copies all PDK library files to the fast Linux RAM drive."""
+    print("[*] Kopiere Bibliotheken in den Linux-RAM (/tmp/sim_work/)...")
+    search_patterns = ["*.lib", "*.mod", "*.inc"]
+    
+    for pattern in search_patterns:
+        for file_path in glob.glob(os.path.join(WORK_DIR, pattern)):
+            filename = os.path.basename(file_path)
+            dest_path = os.path.join(FAST_TMP, filename)
+            
+            if not os.path.exists(dest_path):
+                try:
+                    shutil.copy2(file_path, dest_path)
+                except Exception as e:
+                    print(f"[-] Warnung: Konnte {filename} nicht kopieren: {e}")
+
+def run_xschem(xschem_file):
+    """Generates the SPICE netlist from the Xschem schematic."""
+    print(f"[*] Generiere SPICE-Netzliste aus {xschem_file}...")
     try:
-        # Xschem im Batch-Modus aufrufen
         subprocess.run(
-            ['xschem', '-n', '-s', '-q', '-x', '-o', WORK_DIR, XSCHEM_FILE],
+            ['xschem', '-n', '-s', '-q', '-x', '-o', FAST_TMP, xschem_file],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            cwd=WORK_DIR
+            cwd=WORK_DIR 
         )
-        print("[+] Netzliste erfolgreich generiert.")
     except subprocess.CalledProcessError as e:
         print("[-] Fehler beim Ausführen von Xschem!")
         print("Fehlermeldung:\n", e.stderr)
         sys.exit(1)
-        
-def run_ngspice(netlist):
-    try:
-        process_result = subprocess.run(
-            ["ngspice", "-b", "-q"],      # -b für Batch, - für stdin
-            input=netlist,       # Dein Jinja-String
-            text=True,                   # Wichtig: Behandle Input/Output als Text (nicht Bytes)
-            capture_output=True,         # Fange die Ausgabe (stdout) ein
-            check=True                   # Wirft einen Fehler, wenn ngspice abstürzt
-        )
-        
-        # Die Ergebnisse von ngspice stehen jetzt als reiner Text zur Verfügung
-        ngspice_output = process_result.stdout
-        #print("Simulation erfolgreich! Hier ist der Output:")
-        #print(ngspice_output)
-        return ngspice_output
 
-        # Hier müsstest du jetzt den String 'ngspice_output' mit Python parsen (z.B. per Regex)
+def run_ngspice(netlist, timeout_sec=10):
+    """Runs a single Ngspice simulation on exactly 1 CPU core."""
+    # Force Ngspice to run on a single thread, bypassing .spiceinit limits
+    if ".control" in netlist:
+        netlist = netlist.replace(".control", ".control\nset num_threads=1\n")
+    else:
+        netlist += "\n.control\nset num_threads=1\n.endc\n"
+
+    custom_env = os.environ.copy()
+    custom_env["OMP_NUM_THREADS"] = "1"
+    
+    pid = os.getpid()
+    temp_spice_file = os.path.join(FAST_TMP, f"sim_{pid}.spice")
+    temp_log_file = os.path.join(FAST_TMP, f"sim_{pid}.log")
+    
+    with open(temp_spice_file, 'w') as f:
+        f.write(netlist)
         
-    except subprocess.CalledProcessError as e:
-        #print("Fehler bei der ngspice-Simulation:")
-        #print(e.stderr)
-        return e.stderr
+    try:
+        with open(temp_log_file, 'w') as log_file:
+            subprocess.run(
+                ["ngspice", "-b", "-r", os.devnull, temp_spice_file], 
+                stdout=log_file,          
+                stderr=subprocess.STDOUT, 
+                text=True,
+                check=True,
+                timeout=timeout_sec,
+                cwd=FAST_TMP,
+                env=custom_env
+            )
+            
+        output_line = ""
+        with open(temp_log_file, 'r') as log_file:
+            for line in log_file:
+                if line.startswith("MY_DATA:"):
+                    output_line = line.strip()
+                    break 
+                    
+        return output_line, None
         
+    except subprocess.TimeoutExpired:
+        return None, "TIMEOUT"
+    except subprocess.CalledProcessError:
+        err_msg = "CRASH"
+        if os.path.exists(temp_log_file):
+            with open(temp_log_file, 'r') as f:
+                err_msg = "".join(f.readlines()[-5:]).strip()
+        return None, f"CRASH: {err_msg}"
+
+def simulate_single_case(args):
+    """Worker function for multiprocessing."""
+    params, tests = args
+    sample = params.copy()
+    sample['sim_error'] = "None"
+    
+    for test in tests:
+        rendering = Template(test.template_str).render(**params)
+        ngspice_output, error_msg = run_ngspice(rendering)
+        
+        # Error handling
+        if error_msg:
+            sample['sim_error'] = f"{test.tb_path}: {error_msg}"
+            sample[f"{test.tb_path}_overall_pass"] = False
+            for val_obj in test.value_lst:
+                sample[val_obj.name] = float('nan')
+                sample[f"{val_obj.name}_pass"] = False
+            continue 
+            
+        # Success handling & parsing
+        if ngspice_output and ngspice_output.startswith("MY_DATA:"):
+            clean_line = ngspice_output.replace("MY_DATA:", "").strip()
+            values = clean_line.split(' ')
+            
+            all_passed = True
+            for i, val_str in enumerate(values):
+                val_float = float(val_str)
+                val_obj = test.value_lst[i]
+                
+                sample[val_obj.name] = val_float
+                sample[f"{val_obj.name}_pass"] = val_obj.isPass(val_float)
+                
+                if not val_obj.isPass(val_float):
+                    all_passed = False
+                    
+            sample[f"{test.tb_path}_overall_pass"] = all_passed
+        else:
+             sample['sim_error'] = f"{test.tb_path}: NO_MY_DATA_FOUND"
+             sample[f"{test.tb_path}_overall_pass"] = False
+
+    return sample
+
 def generate_templates(stim):
-    
+    """Generates all required base netlists using Xschem."""
     for test in stim.tests:
-    
-        run_xschem(WORK_DIR, TB_DIR + test.tb_path + ".sch")
+        tb_path = os.path.join(TB_DIR, test.tb_path + ".sch")
+        run_xschem(tb_path)
         
-        with open(WORK_DIR + test.tb_path + ".spice") as f:
-            test.template = Template(f.read())
-        
-def generate_case(stim):
-    
+        spice_file = os.path.join(FAST_TMP, test.tb_path + ".spice")
+        with open(spice_file, "r") as f:
+            test.template_str = f.read()
+
+def generate_cases(stim):
+    """Creates a list of dictionaries containing all parameter permutations."""
     param_names = stim.params.keys()
     param_values = stim.params.values()
-
-    param_sets = [
-        dict(zip(param_names, combo)) 
-        for combo in itertools.product(*param_values)
-        ]
- 
-    return param_sets
+    return [dict(zip(param_names, combo)) for combo in itertools.product(*param_values)]
 
 def run_sim(stim):
-    
-    result = []
-    
-    param_sets = generate_case(stim)
+    """Main simulation loop orchestrating multiprocessing."""
+    param_sets = generate_cases(stim)
     generate_templates(stim)
+    stage_files_to_ram()
     
-    for i, params in tqdm(enumerate(param_sets)):
-        sample = params
-        for test in stim.tests:
-            rendering = test.template.render(**params)
-            ngspice_output = run_ngspice(rendering)
-            for line in ngspice_output.split('\n'):
-                line = line.strip()
-                
-                if line.startswith("MY_DATA:"):
-                    clean_line = line.replace("MY_DATA:", "").strip()
-                    values = clean_line.split(' ')
-                    for i in range(len(values)):
-                        sample[test.value_lst[i].name] = float(values[i])
-                    break
-                
-        result.append(sample)
+    worker_args = [(params, stim.tests) for params in param_sets]
+    results = []
+    
+    try:
+        available_cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        available_cores = os.cpu_count()
         
-    df = pd.DataFrame(result)
-    df.to_csv(OUT_DIR + "simulation_results.csv", index=False)
+    num_cores = max(1, available_cores - 1)
+    print(f"[*] Starte Multiprocessing mit {num_cores} ECHTEN Kernen für {len(param_sets)} Iterationen...")
+    
+    with ProcessPoolExecutor(max_workers=num_cores) as executor:
+        futures = [executor.submit(simulate_single_case, arg) for arg in worker_args]
+        
+        for future in tqdm(as_completed(futures), total=len(param_sets)):
+            results.append(future.result())
+            
+    df = pd.DataFrame(results)
+    csv_out = os.path.join(OUT_DIR, "simulation_results.csv")
+    df.to_csv(csv_out, index=False)
+    print(f"[+] Fertig! Ergebnisse in {csv_out} gespeichert.")
 
 def main():
-    
-    stim = util.Stimuli(IN_DIR + "datasheet.yaml")
+    stim = util.Stimuli(os.path.join(IN_DIR, "datasheet.yaml"))
     run_sim(stim)
-    
-if __name__=="__main__":
-    main()
 
+if __name__ == "__main__":
+    main()

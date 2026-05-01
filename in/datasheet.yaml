@@ -4,7 +4,7 @@ parameters:
   corner_mos: ["tt_mismatch"]
   corner_res: ["res_typ_mismatch"]
   corner_cap: ["cap_typ_mismatch"]
-  seed: [0, 1, 2, 3, 4, 5]
+  seed: range(30)
   sigma: [1]
   vcm: [0.75]
   vincm: [0.75]
