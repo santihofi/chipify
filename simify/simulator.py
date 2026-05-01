@@ -11,7 +11,7 @@ import pandas as pd
 from tqdm import tqdm
 from jinja2 import Template
 
-import settings
+from simify import settings
 
 def stage_files_to_ram():
     print(f"[*] Kopiere Bibliotheken in den Linux-RAM ({settings.FAST_TMP})...")

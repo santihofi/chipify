@@ -1,2 +1,4 @@
 out/
 tmp/
+venv/
+*.egg-info

@@ -3,10 +3,10 @@ import argparse
 import os
 import sys
 
-import util
-import settings
-import simulator
-from analyzer import print_summary
+from simify import util
+from simify import settings
+from simify import simulator
+from simify.analyzer import print_summary
 
 def main():
     parser = argparse.ArgumentParser(
