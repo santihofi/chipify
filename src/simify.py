@@ -101,27 +101,13 @@ def run_sim(stim):
         result.append(sample)
         
     df = pd.DataFrame(result)
-    df.to_csv("simulation_results.csv", index=False)
+    df.to_csv(OUT_DIR + "simulation_results.csv", index=False)
 
 def main():
     
-    stim = util.Stimuli()
-    stim.addEnumParam("temp", [-40, 27, 100])
-    stim.addEnumParam("corner_mos", ["tt_mismatch"])
-    stim.addEnumParam("corner_res", ["res_typ_mismatch"])
-    stim.addEnumParam("corner_cap", ["cap_typ_mismatch"])
-    stim.addEnumParam("seed", range(2))
-    stim.addEnumParam("sigma", [1])
-    stim.addEnumParam("vcm", [0.75])
-    stim.addEnumParam("vincm", [0.75])
-    stim.addEnumParam("vdd", [1.5])
-
-    stim.addTest(util.Test("tb_mult_cell_op", [util.Value("ve", 0.7, 0.8, 0.75), util.Value("vd", -0.02, 0.02, 0)]))
-    stim.addTest(util.Test("tb_mult_cell_gain", [util.Value("gain", 5, 50, 10), util.Value("bandwidth", 1e7, 1e8, 1e9)]))
-    stim.addTest(util.Test("tb_cm_feedback_loop", [util.Value("phase_margin", 20, 30, 60)]))
-    
+    stim = util.Stimuli(IN_DIR + "datasheet.yaml")
     run_sim(stim)
-
+    
 if __name__=="__main__":
     main()
 

@@ -1,18 +1,36 @@
-    
+import yaml
+
 class Stimuli:
-    def __init__(self):
+    def __init__(self, yaml_file=None):
         self.params = {}
         self.tests = []
-    
-    def addEnumParam(self, name, values):
-        self.params[name] = values
+        if yaml_file:
+            self._load_from_yaml(yaml_file)
+            
+    def _load_from_yaml(self, file_path):
+        with open(file_path, 'r') as file:
+            data = yaml.safe_load(file)
+            
+        # 1. Parameter 1:1 übernehmen
+        self.params = data.get('parameters', {})
         
-    def addRangeParam(self, start, stop, step):
-        self.params[name] = range(start, stop, step)
-    
+        # 2. Tests generieren
+        for tb_path, measurements in data.get('tests', {}).items():
+            value_lst = []
+            for val_name, bounds in measurements.items():
+                value_lst.append(
+                    Value(
+                        name=val_name, 
+                        vmin=bounds.get('min'), 
+                        vmax=bounds.get('max'), 
+                        vtyp=bounds.get('typ')
+                    )
+                )
+            self.addTest(Test(tb_path, value_lst))
+
     def addTest(self, test):
         self.tests.append(test)
-    
+
 class Test:
     def __init__(self, tb_path, value_lst):
         self.tb_path = tb_path
@@ -27,11 +45,8 @@ class Value:
         self.vtyp = vtyp
         
     def isPass(self, val):
-        return False
-        
-    
-   # def addEnumParam(self, name, param_list):
-        
-        
-    
-   
+        if self.vmin is not None and val < self.vmin:
+            return False
+        if self.vmax is not None and val > self.vmax:
+            return False
+        return True
