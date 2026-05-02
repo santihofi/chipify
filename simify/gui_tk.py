@@ -712,6 +712,9 @@ class SimifyGUI(ctk.CTk):
         self.zoom_checkbox = ctk.CTkCheckBox(row2, text="Zoom to Fit Data", variable=self.zoom_var, command=self.update_plot)
         self.zoom_checkbox.pack(side=tk.LEFT)
 
+        self.btn_latex = ctk.CTkButton(row2, text="TeX Export", command=self.action_export_latex, fg_color="#27ae60", hover_color="#2ecc71", width=90)
+        self.btn_latex.pack(side=tk.LEFT)
+
         plt.style.use('dark_background')
         self.fig, self.ax = plt.subplots(figsize=(6, 4))
         self.fig.patch.set_facecolor('#2b2b2b') 
@@ -723,6 +726,28 @@ class SimifyGUI(ctk.CTk):
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.tab_hist)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
+    def action_export_latex(self):
+        if self.current_df is None or self.plot_param_var.get() == "-": return
+            
+        param = self.plot_param_var.get()
+        dist_type = self.plot_dist_var.get()
+        bins_val = self.bins_var.get()
+        b = 'auto' if bins_val == "Auto" else int(bins_val)
+        
+        valid_df = self.current_df[self.current_df['sim_error'] == 'None']
+        if param not in valid_df.columns: return
+        data = valid_df[param].dropna()
+        if len(data) == 0: return
+
+        # Unser neues Modul laden
+        from simify import export_latex
+        out_dir = os.path.join(settings.OUT_DIR, "latex")
+        
+        try:
+            export_latex.generate_latex_export(param, data, dist_type, b, out_dir)
+            messagebox.showinfo("LaTeX Export", f"Erfolgreich exportiert nach:\n{out_dir}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"LaTeX Export fehlgeschlagen:\n{e}")
     def on_group_by_change(self, choice):
         if choice != "None":
             self.compare_dropdown.configure(state="disabled")
