@@ -205,19 +205,15 @@ class SimifyGUI(ctk.CTk):
 
     def on_yaml_select(self, selected_yaml):
         if not selected_yaml or selected_yaml == "No files found": return
-        
         self.current_yaml_path = os.path.join(settings.IN_DIR, selected_yaml)
         
         try:
             with open(self.current_yaml_path, 'r') as f:
                 raw_text = f.read()
             self.current_yaml_data = yaml.safe_load(raw_text) or {}
-            
             self.param_key, _ = self.get_params_dict()
             self.test_key, _ = self.get_tests_dict()
-            
             self.raw_yaml_text = yaml.dump(self.current_yaml_data, default_flow_style=False, sort_keys=False)
-            
         except Exception as e:
             messagebox.showerror("Load Error", f"Error loading {selected_yaml}:\n{e}")
             return
@@ -248,11 +244,9 @@ class SimifyGUI(ctk.CTk):
             
         self.param_vars = []
         self.test_vars = []
-        
         self.param_key, params_dict = self.get_params_dict()
         self.test_key, tests_dict = self.get_tests_dict()
         
-        # --- 1. PARAMETER SECTION ---
         param_header = ctk.CTkFrame(self.editor_scroll, fg_color="transparent")
         param_header.pack(fill="x", pady=(10, 5))
         ctk.CTkLabel(param_header, text="Sweep Parameters", font=ctk.CTkFont(size=16, weight="bold"), text_color="#3484F0").pack(side="left", padx=5)
@@ -265,25 +259,21 @@ class SimifyGUI(ctk.CTk):
         r = 0
         for p_name, p_val in params_dict.items():
             key_var = ctk.StringVar(value=str(p_name))
-            
             if not isinstance(p_val, list):
                 val_str = self.gui_repr_param(p_val)
             else:
                 val_str = ", ".join(self.gui_repr_param(x) for x in p_val)
-                
             val_var = ctk.StringVar(value=val_str)
             
             ctk.CTkEntry(params_frame, textvariable=key_var, width=150).grid(row=r, column=0, padx=10, pady=5, sticky="w")
             ctk.CTkEntry(params_frame, textvariable=val_var).grid(row=r, column=1, padx=10, pady=5, sticky="ew")
             ctk.CTkButton(params_frame, text="🗑️", width=30, fg_color="#e74c3c", hover_color="#c0392b", command=lambda idx=r: self.action_del_param(idx)).grid(row=r, column=2, padx=10, pady=5)
-            
             self.param_vars.append({'key': key_var, 'val': val_var})
             r += 1
             
         if r == 0:
             ctk.CTkLabel(params_frame, text="No parameters defined.", text_color="gray").grid(row=0, column=0, padx=10, pady=10)
 
-        # --- 2. TESTS SECTION ---
         test_header = ctk.CTkFrame(self.editor_scroll, fg_color="transparent")
         test_header.pack(fill="x", pady=(20, 5))
         ctk.CTkLabel(test_header, text="Specifications (Boundaries)", font=ctk.CTkFont(size=16, weight="bold"), text_color="#3484F0").pack(side="left", padx=5)
@@ -291,13 +281,11 @@ class SimifyGUI(ctk.CTk):
 
         for t_idx, (tb_name, tb_data) in enumerate(tests_dict.items()):
             if not isinstance(tb_data, dict): tb_data = {}
-            
             frame = ctk.CTkFrame(self.editor_scroll, border_width=1, border_color="#565b5e")
             frame.pack(fill="x", pady=10, padx=5)
             frame.grid_columnconfigure(1, weight=1)
             
             tb_name_var = ctk.StringVar(value=str(tb_name))
-            
             row_header = ctk.CTkFrame(frame, fg_color="transparent")
             row_header.pack(fill="x", padx=10, pady=(10, 5))
             
@@ -314,13 +302,11 @@ class SimifyGUI(ctk.CTk):
             ctk.CTkLabel(val_frame, text="Max Spec", text_color="gray").grid(row=0, column=3, padx=5, pady=2, sticky="w")
             
             test_val_vars = []
-            
             for v_idx, (v_name, v_data) in enumerate(tb_data.items()):
                 if v_name == 'values': continue 
                 if not isinstance(v_data, dict): v_data = {}
                     
                 v_name_var = ctk.StringVar(value=str(v_name))
-                
                 min_val = v_data.get('vmin', v_data.get('min', ''))
                 typ_val = v_data.get('vtyp', v_data.get('typ', ''))
                 max_val = v_data.get('vmax', v_data.get('max', ''))
@@ -333,13 +319,11 @@ class SimifyGUI(ctk.CTk):
                 ctk.CTkEntry(val_frame, textvariable=v_min, width=80).grid(row=1+v_idx, column=1, padx=5, pady=2)
                 ctk.CTkEntry(val_frame, textvariable=v_typ, width=80).grid(row=1+v_idx, column=2, padx=5, pady=2)
                 ctk.CTkEntry(val_frame, textvariable=v_max, width=80).grid(row=1+v_idx, column=3, padx=5, pady=2)
-                
                 ctk.CTkButton(val_frame, text="X", width=24, height=24, fg_color="transparent", border_width=1, command=lambda t=t_idx, v=v_name: self.action_del_value(t, v)).grid(row=1+v_idx, column=4, padx=5, pady=2)
                 
                 test_val_vars.append({'name': v_name_var, 'vmin': v_min, 'typ': v_typ, 'vmax': v_max})
                 
             self.test_vars.append({'tb_name': tb_name_var, 'values': test_val_vars})
-            
             ctk.CTkButton(frame, text="+ Add Measurement", width=140, height=24, fg_color="transparent", border_width=1, command=lambda idx=t_idx: self.action_add_value(idx)).pack(anchor="w", padx=10, pady=(5, 10))
 
     def sync_ui_to_state(self):
@@ -363,15 +347,12 @@ class SimifyGUI(ctk.CTk):
                 if (x.startswith("'") and x.endswith("'")) or (x.startswith('"') and x.endswith('"')):
                     parsed_list.append(QuotedString(x[1:-1]))
                 else:
-                    try: 
-                        parsed_list.append(float(x) if '.' in x else int(x))
-                    except ValueError: 
-                        parsed_list.append(x)
+                    try: parsed_list.append(float(x) if '.' in x else int(x))
+                    except ValueError: parsed_list.append(x)
                         
             self.current_yaml_data[self.param_key][k] = parsed_list
             
         self.current_yaml_data[self.test_key] = {}
-        
         for t_dict in self.test_vars:
             tb_name = t_dict['tb_name'].get().strip()
             if not tb_name: continue
@@ -389,17 +370,14 @@ class SimifyGUI(ctk.CTk):
                 if vmin_str and vmin_str.lower() != 'none': 
                     try: v_data['min'] = float(vmin_str)
                     except ValueError: v_data['min'] = vmin_str
-                    
                 if vtyp_str and vtyp_str.lower() != 'none': 
                     try: v_data['typ'] = float(vtyp_str)
                     except ValueError: v_data['typ'] = vtyp_str
-                    
                 if vmax_str and vmax_str.lower() != 'none': 
                     try: v_data['max'] = float(vmax_str)
                     except ValueError: v_data['max'] = vmax_str
                 
                 tb_content[name] = v_data
-                
             self.current_yaml_data[self.test_key][tb_name] = tb_content
 
     def action_add_param(self):
@@ -521,7 +499,6 @@ class SimifyGUI(ctk.CTk):
         
         self.wc_scroll = ctk.CTkScrollableFrame(self.tab_worst, fg_color="transparent")
         self.wc_scroll.grid(row=0, column=0, sticky="nsew")
-        
         self.lbl_wc_empty = ctk.CTkLabel(self.wc_scroll, text="Start a simulation to see outliers...", text_color="gray")
         self.lbl_wc_empty.pack(pady=50)
 
@@ -534,7 +511,7 @@ class SimifyGUI(ctk.CTk):
         
         ctk.CTkLabel(control_frame, text="Measurement:").pack(side=tk.LEFT, padx=(0, 10))
         self.plot_param_var = ctk.StringVar(value="-")
-        self.plot_param_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.plot_param_var, command=self.update_plot)
+        self.plot_param_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.plot_param_var, command=self.update_plot, dynamic_resizing=False)
         self.plot_param_dropdown.pack(side=tk.LEFT, padx=(0, 30))
         
         ctk.CTkLabel(control_frame, text="Fit Curve:").pack(side=tk.LEFT, padx=(0, 10))
@@ -543,7 +520,8 @@ class SimifyGUI(ctk.CTk):
             control_frame, 
             variable=self.plot_dist_var, 
             values=["Gauss (Normal)", "KDE (Smoothed)", "Uniform", "None"],
-            command=self.update_plot
+            command=self.update_plot,
+            dynamic_resizing=False
         )
         self.plot_dist_dropdown.pack(side=tk.LEFT)
 
@@ -563,8 +541,10 @@ class SimifyGUI(ctk.CTk):
         self.tab_adv.grid_columnconfigure(0, weight=1)
         self.tab_adv.grid_rowconfigure(1, weight=1)
         
-        control_frame = ctk.CTkFrame(self.tab_adv, fg_color="transparent")
+        # --- UI SHIFT FIX: Fixed height for the control panel ---
+        control_frame = ctk.CTkFrame(self.tab_adv, fg_color="transparent", height=40)
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        control_frame.pack_propagate(False) # Prevents the frame from shrinking/growing
         
         self.adv_mode_var = ctk.StringVar(value="Fail Breakdown (Pie Chart)")
         self.adv_mode_selector = ctk.CTkSegmentedButton(
@@ -583,12 +563,12 @@ class SimifyGUI(ctk.CTk):
         self.tornado_target_var = ctk.StringVar(value="-")
         
         self.lbl_x = ctk.CTkLabel(self.adv_controls_frame, text="X-Axis:")
-        self.scatter_x_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.scatter_x_var, command=self.update_adv_plots)
+        self.scatter_x_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.scatter_x_var, command=self.update_adv_plots, dynamic_resizing=False)
         self.lbl_y = ctk.CTkLabel(self.adv_controls_frame, text="Y-Axis:")
-        self.scatter_y_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.scatter_y_var, command=self.update_adv_plots)
+        self.scatter_y_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.scatter_y_var, command=self.update_adv_plots, dynamic_resizing=False)
         
         self.lbl_tornado = ctk.CTkLabel(self.adv_controls_frame, text="Target Measurement:")
-        self.tornado_target_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.tornado_target_var, command=self.update_adv_plots)
+        self.tornado_target_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.tornado_target_var, command=self.update_adv_plots, dynamic_resizing=False)
 
         self.adv_fig = plt.figure(figsize=(8, 5))
         self.adv_fig.patch.set_facecolor('#2b2b2b')
@@ -627,7 +607,6 @@ class SimifyGUI(ctk.CTk):
         if mode == "Scatter Plot":
             x_col = self.scatter_x_var.get()
             y_col = self.scatter_y_var.get()
-            
             if x_col not in valid_df.columns or y_col not in valid_df.columns: return
 
             pass_mask = valid_df['global_pass'] == True
@@ -653,11 +632,14 @@ class SimifyGUI(ctk.CTk):
             numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
             plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
             
-            if len(plot_cols) < 2:
-                self.adv_ax.text(0.5, 0.5, "Not enough numeric data for correlation map.", 
+            # --- NEW: Filter out constants for correlation ---
+            active_cols = [c for c in plot_cols if valid_df[c].nunique() > 1]
+            
+            if len(active_cols) < 2:
+                self.adv_ax.text(0.5, 0.5, "Not enough varying data for correlation map.", 
                                  color='white', ha='center', va='center', transform=self.adv_ax.transAxes)
             else:
-                corr = valid_df[plot_cols].corr()
+                corr = valid_df[active_cols].corr()
                 cax = self.adv_ax.matshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
                 
                 cbar = self.adv_fig.colorbar(cax, ax=self.adv_ax, fraction=0.046, pad=0.04)
@@ -665,10 +647,10 @@ class SimifyGUI(ctk.CTk):
                 cbar.outline.set_edgecolor('gray')
                 plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
 
-                self.adv_ax.set_xticks(range(len(plot_cols)))
-                self.adv_ax.set_yticks(range(len(plot_cols)))
-                self.adv_ax.set_xticklabels(plot_cols, rotation=45, ha='left', color='white', fontsize=9)
-                self.adv_ax.set_yticklabels(plot_cols, color='white', fontsize=9)
+                self.adv_ax.set_xticks(range(len(active_cols)))
+                self.adv_ax.set_yticks(range(len(active_cols)))
+                self.adv_ax.set_xticklabels(active_cols, rotation=45, ha='left', color='white', fontsize=9)
+                self.adv_ax.set_yticklabels(active_cols, color='white', fontsize=9)
                 
                 self.adv_ax.xaxis.set_ticks_position('bottom')
                 self.adv_ax.set_title("Parameter & Measurement Correlation Matrix", color='white', pad=20)
@@ -682,7 +664,6 @@ class SimifyGUI(ctk.CTk):
                 return
 
             params = list(self.current_stim.params.keys())
-            
             correlations = []
             for p in params:
                 if p not in valid_df.columns: continue
@@ -704,30 +685,25 @@ class SimifyGUI(ctk.CTk):
                 return
                 
             correlations.sort(key=lambda x: abs(x[1]))
-            
             labels = [x[0] for x in correlations]
             values = [x[1] for x in correlations]
             colors = ['#2ecc71' if v >= 0 else '#e74c3c' for v in values]
             
             self.adv_ax.barh(labels, values, color=colors, edgecolor='white', linewidth=0.5, alpha=0.8)
             self.adv_ax.axvline(0, color='gray', linestyle='-', linewidth=1)
-            
             self.adv_ax.set_xlabel("Correlation Impact (Sensitivity)", color='white')
             self.adv_ax.set_title(f"Sensitivity Analysis: What impacts '{target}' the most?", color='white', pad=15)
             self.adv_ax.tick_params(colors='white')
-            
             self.adv_ax.spines['top'].set_visible(False)
             self.adv_ax.spines['right'].set_visible(False)
             self.adv_ax.spines['left'].set_color('gray')
             self.adv_ax.spines['bottom'].set_color('gray')
             
         elif mode == "Fail Breakdown (Pie Chart)":
-            # Extract all pass/fail columns for individual measurements
             pass_cols = [c for c in valid_df.columns if c.endswith('_pass') and not c.endswith('_overall_pass') and c != 'global_pass']
             
             fail_counts = {}
             for c in pass_cols:
-                # Count how many times this specific constraint failed (where value is False/0)
                 fails = (valid_df[c] == False).sum()
                 if fails > 0:
                     clean_name = c.replace('_pass', '')
@@ -742,9 +718,8 @@ class SimifyGUI(ctk.CTk):
 
             labels = list(fail_counts.keys())
             sizes = list(fail_counts.values())
-            
             colors = plt.cm.Pastel1(np.linspace(0, 1, len(labels)))
-            explode = [0.1 if s == max(sizes) else 0 for s in sizes] # Highlight top offender
+            explode = [0.1 if s == max(sizes) else 0 for s in sizes] 
             
             patches, texts, autotexts = self.adv_ax.pie(
                 sizes, 
@@ -927,6 +902,7 @@ class SimifyGUI(ctk.CTk):
                     params_text = "\n".join([f"• {k}: {worst_row[k]}" for k in param_cols if k in worst_row])
                     ctk.CTkLabel(card, text=f"Triggering parameters:\n{params_text}", justify="left").pack(anchor="w", padx=15, pady=(0, 15))
 
+        # --- JUMP TO MEASUREMENTS TAB ---
         self.tabs.set("Measurements") 
         self.lbl_status.configure(text=f"Status: Done! Saved to out/", text_color="#2ecc71")
         self.btn_start.configure(state="normal")
