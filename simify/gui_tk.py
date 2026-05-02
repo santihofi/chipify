@@ -12,6 +12,7 @@ import yaml
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.lines import Line2D
 import scipy.stats as stats
 
 from simify import settings
@@ -465,8 +466,7 @@ class SimifyGUI(ctk.CTk):
             val_frame.pack(fill="x", padx=10, pady=5)
             ctk.CTkLabel(val_frame, text="Measurement", text_color="gray").grid(row=0, column=0, padx=5, pady=2, sticky="w")
             ctk.CTkLabel(val_frame, text="Min Spec", text_color="gray").grid(row=0, column=1, padx=5, pady=2, sticky="w")
-            ctk.CTkLabel(val_frame, text="Typ Spec", text_color="gray").grid(row=0, column=2, padx=5, pady=2, sticky="w")
-            ctk.CTkLabel(val_frame, text="Max Spec", text_color="gray").grid(row=0, column=3, padx=5, pady=2, sticky="w")
+            ctk.CTkLabel(val_frame, text="Max Spec", text_color="gray").grid(row=0, column=2, padx=5, pady=2, sticky="w")
             
             test_val_vars = []
             for v_idx, (v_name, v_data) in enumerate(tb_data.items()):
@@ -475,20 +475,17 @@ class SimifyGUI(ctk.CTk):
                 v_name_var = ctk.StringVar(value=str(v_name))
                 
                 min_val = v_data.get('vmin', v_data.get('min', ''))
-                typ_val = v_data.get('vtyp', v_data.get('typ', ''))
                 max_val = v_data.get('vmax', v_data.get('max', ''))
                 
                 v_min = ctk.StringVar(value=str(min_val) if min_val is not None else '')
-                v_typ = ctk.StringVar(value=str(typ_val) if typ_val is not None else '')
                 v_max = ctk.StringVar(value=str(max_val) if max_val is not None else '')
                 
                 ctk.CTkEntry(val_frame, textvariable=v_name_var, width=150).grid(row=1+v_idx, column=0, padx=5, pady=2)
                 ctk.CTkEntry(val_frame, textvariable=v_min, width=80).grid(row=1+v_idx, column=1, padx=5, pady=2)
-                ctk.CTkEntry(val_frame, textvariable=v_typ, width=80).grid(row=1+v_idx, column=2, padx=5, pady=2)
-                ctk.CTkEntry(val_frame, textvariable=v_max, width=80).grid(row=1+v_idx, column=3, padx=5, pady=2)
-                ctk.CTkButton(val_frame, text="X", width=24, height=24, fg_color="transparent", border_width=1, command=lambda t=t_idx, v=v_name: self.action_del_value(t, v)).grid(row=1+v_idx, column=4, padx=5, pady=2)
+                ctk.CTkEntry(val_frame, textvariable=v_max, width=80).grid(row=1+v_idx, column=2, padx=5, pady=2)
+                ctk.CTkButton(val_frame, text="X", width=24, height=24, fg_color="transparent", border_width=1, command=lambda t=t_idx, v=v_name: self.action_del_value(t, v)).grid(row=1+v_idx, column=3, padx=5, pady=2)
                 
-                test_val_vars.append({'name': v_name_var, 'vmin': v_min, 'typ': v_typ, 'vmax': v_max})
+                test_val_vars.append({'name': v_name_var, 'vmin': v_min, 'vmax': v_max})
                 
             self.test_vars.append({'tb_name': tb_name_var, 'values': test_val_vars})
             ctk.CTkButton(frame, text="+ Add Measurement", width=140, height=24, fg_color="transparent", border_width=1, command=lambda idx=t_idx: self.action_add_value(idx)).pack(anchor="w", padx=10, pady=(5, 10))
@@ -527,15 +524,11 @@ class SimifyGUI(ctk.CTk):
                 if not name: continue
                 v_data = {}
                 vmin_str = v_dict['vmin'].get().strip()
-                vtyp_str = v_dict['typ'].get().strip()
                 vmax_str = v_dict['vmax'].get().strip()
                 
                 if vmin_str and vmin_str.lower() != 'none': 
                     try: v_data['min'] = float(vmin_str)
                     except ValueError: v_data['min'] = vmin_str
-                if vtyp_str and vtyp_str.lower() != 'none': 
-                    try: v_data['typ'] = float(vtyp_str)
-                    except ValueError: v_data['typ'] = vtyp_str
                 if vmax_str and vmax_str.lower() != 'none': 
                     try: v_data['max'] = float(vmax_str)
                     except ValueError: v_data['max'] = vmax_str
@@ -634,7 +627,8 @@ class SimifyGUI(ctk.CTk):
         self.tree_frame.grid_columnconfigure(0, weight=1)
         self.tree_frame.grid_rowconfigure(0, weight=1)
         
-        columns = ("param", "sim_min", "sim_typ", "sim_max", "spec_min", "spec_typ", "spec_max", "status")
+        # --- NEU: Cpk und Sigma in der Tabelle! ---
+        columns = ("param", "sim_min", "sim_typ", "sim_max", "spec_min", "spec_max", "cpk", "sigma", "status")
         self.tree = ttk.Treeview(self.tree_frame, columns=columns, show="headings")
         
         self.tree.heading("param", text="Parameter")
@@ -642,12 +636,14 @@ class SimifyGUI(ctk.CTk):
         self.tree.heading("sim_typ", text="Sim Typ")
         self.tree.heading("sim_max", text="Sim Max")
         self.tree.heading("spec_min", text="Spec Min")
-        self.tree.heading("spec_typ", text="Spec Typ")
         self.tree.heading("spec_max", text="Spec Max")
+        self.tree.heading("cpk", text="Cpk")
+        self.tree.heading("sigma", text="Sigma")
         self.tree.heading("status", text="Status")
         
-        for col in columns: self.tree.column(col, width=90, anchor=tk.CENTER)
-        self.tree.column("param", width=140, anchor=tk.W)
+        for col in columns: self.tree.column(col, width=70, anchor=tk.CENTER)
+        self.tree.column("param", width=120, anchor=tk.W)
+        self.tree.column("status", width=60, anchor=tk.CENTER)
         
         scrollbar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scrollbar.set)
@@ -710,7 +706,7 @@ class SimifyGUI(ctk.CTk):
         
         self.zoom_var = ctk.BooleanVar(value=False)
         self.zoom_checkbox = ctk.CTkCheckBox(row2, text="Zoom to Fit Data", variable=self.zoom_var, command=self.update_plot)
-        self.zoom_checkbox.pack(side=tk.LEFT)
+        self.zoom_checkbox.pack(side=tk.LEFT, padx=(0, 20))
 
         self.btn_latex = ctk.CTkButton(row2, text="TeX Export", command=self.action_export_latex, fg_color="#27ae60", hover_color="#2ecc71", width=90)
         self.btn_latex.pack(side=tk.LEFT)
@@ -739,7 +735,6 @@ class SimifyGUI(ctk.CTk):
         data = valid_df[param].dropna()
         if len(data) == 0: return
 
-        # Unser neues Modul laden
         from simify import export_latex
         out_dir = os.path.join(settings.OUT_DIR, "latex")
         
@@ -748,6 +743,7 @@ class SimifyGUI(ctk.CTk):
             messagebox.showinfo("LaTeX Export", f"Erfolgreich exportiert nach:\n{out_dir}")
         except Exception as e:
             messagebox.showerror("Export Error", f"LaTeX Export fehlgeschlagen:\n{e}")
+
     def on_group_by_change(self, choice):
         if choice != "None":
             self.compare_dropdown.configure(state="disabled")
@@ -792,6 +788,47 @@ class SimifyGUI(ctk.CTk):
         self.adv_canvas = FigureCanvasTkAgg(self.adv_fig, master=self.tab_adv)
         self.adv_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
+        # --- NEU: Interactive Hover Tooltip für Scatter Plots ---
+        self.scatter_annot = self.adv_fig.add_subplot(111).annotate(
+            "", xy=(0,0), xytext=(15,15), textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.5", fc="#1c1c1c", ec="#3484F0", lw=1, alpha=0.9),
+            color="white", arrowprops=dict(arrowstyle="-|>", color="#3484F0")
+        )
+        self.scatter_annot.set_visible(False)
+        self.adv_canvas.mpl_connect("motion_notify_event", self.on_hover_scatter)
+
+    def on_hover_scatter(self, event):
+        if self.adv_mode_var.get() != "Scatter Plot": return
+        if not hasattr(self, 'sc_plot') or not hasattr(self, 'scatter_df'): return
+        
+        vis = self.scatter_annot.get_visible()
+        if event.inaxes == self.adv_ax:
+            cont, ind = self.sc_plot.contains(event)
+            if cont:
+                idx = ind["ind"][0] # Greife den ersten Punkt bei Überlappung
+                row = self.scatter_df.iloc[idx]
+                run_id = row.name 
+                
+                x_val = row[self.scatter_x_col]
+                y_val = row[self.scatter_y_col]
+                
+                text_lines = [f"Run #{run_id}", "-"*15, f"{self.scatter_x_col}: {x_val:.4g}", f"{self.scatter_y_col}: {y_val:.4g}", "-"*15]
+                
+                # Zeige alle aktiven Sweep Parameter für genau diesen Punkt an!
+                if self.current_stim:
+                    for p in self.current_stim.params.keys():
+                        if p in row and self.scatter_df[p].nunique() > 1:
+                            text_lines.append(f"{p}: {row[p]}")
+                            
+                self.scatter_annot.xy = (x_val, y_val)
+                self.scatter_annot.set_text("\n".join(text_lines))
+                self.scatter_annot.set_visible(True)
+                self.adv_canvas.draw_idle()
+            else:
+                if vis:
+                    self.scatter_annot.set_visible(False)
+                    self.adv_canvas.draw_idle()
+
     def on_adv_mode_change(self, mode):
         self.lbl_x.pack_forget()
         self.scatter_x_dropdown.pack_forget()
@@ -827,23 +864,31 @@ class SimifyGUI(ctk.CTk):
             if x_col not in valid_df.columns or y_col not in valid_df.columns: return
 
             pass_mask = valid_df['global_pass'] == True
-
-            if pass_mask.any():
-                self.adv_ax.scatter(valid_df[pass_mask][x_col], valid_df[pass_mask][y_col], 
-                                    c='#2ecc71', label='Pass', alpha=0.7, edgecolors='white', linewidths=0.5)
-            if (~pass_mask).any():
-                self.adv_ax.scatter(valid_df[~pass_mask][x_col], valid_df[~pass_mask][y_col], 
-                                    c='#e74c3c', label='Fail', alpha=0.7, edgecolors='white', linewidths=0.5)
+            colors = np.where(pass_mask, '#2ecc71', '#e74c3c')
+            
+            # Scatter Plot zeichnen & für Hover-Event speichern
+            self.sc_plot = self.adv_ax.scatter(valid_df[x_col], valid_df[y_col], c=colors, alpha=0.7, edgecolors='white', linewidths=0.5, picker=5)
+            self.scatter_df = valid_df.copy()
+            self.scatter_x_col = x_col
+            self.scatter_y_col = y_col
+            
+            # Hover-Annotation neu initialisieren (weil self.adv_fig.clf() sie oben löscht!)
+            self.scatter_annot = self.adv_ax.annotate("", xy=(0,0), xytext=(15,15), textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.4", fc="#1c1c1c", ec="#3484F0", lw=1, alpha=0.95),
+                color="white", arrowprops=dict(arrowstyle="-|>", color="#3484F0"))
+            self.scatter_annot.set_visible(False)
 
             self.adv_ax.set_xlabel(x_col, color='white')
             self.adv_ax.set_ylabel(y_col, color='white')
-            self.adv_ax.set_title(f"Shmoo Plot: {y_col} vs {x_col}", color='white', pad=10)
+            self.adv_ax.set_title(f"Interactive Shmoo Plot: {y_col} vs {x_col}", color='white', pad=10)
             self.adv_ax.grid(True, linestyle='--', alpha=0.3)
             self.adv_ax.spines['top'].set_visible(False)
             self.adv_ax.spines['right'].set_visible(False)
             
-            if len(self.adv_ax.get_legend_handles_labels()[1]) > 0:
-                self.adv_ax.legend(facecolor='#2b2b2b', edgecolor='gray')
+            # Fake Legend für die Farben
+            legend_elements = [Line2D([0], [0], marker='o', color='w', markerfacecolor='#2ecc71', label='Pass', markersize=8),
+                               Line2D([0], [0], marker='o', color='w', markerfacecolor='#e74c3c', label='Fail', markersize=8)]
+            self.adv_ax.legend(handles=legend_elements, facecolor='#2b2b2b', edgecolor='gray')
 
         elif mode == "Correlation Heatmap":
             numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
@@ -1069,11 +1114,46 @@ class SimifyGUI(ctk.CTk):
                 p_name = val_obj.name
                 if p_name in valid_df.columns:
                     meas_cols.append(p_name)
-                    sim_min, sim_max, sim_typ = valid_df[p_name].min(), valid_df[p_name].max(), valid_df[p_name].mean()
                     
-                    spec_min = fmt(getattr(val_obj, 'vmin', getattr(val_obj, 'min', None)))
-                    spec_typ = fmt(getattr(val_obj, 'typ', getattr(val_obj, 'vtyp', None)))
-                    spec_max = fmt(getattr(val_obj, 'vmax', getattr(val_obj, 'max', None)))
+                    data_col = valid_df[p_name].dropna()
+                    sim_min = data_col.min() if not data_col.empty else np.nan
+                    sim_max = data_col.max() if not data_col.empty else np.nan
+                    sim_typ = data_col.mean() if not data_col.empty else np.nan
+                    sim_std = data_col.std() if len(data_col) > 1 else 0.0
+                    
+                    v_min = getattr(val_obj, 'vmin', getattr(val_obj, 'min', None))
+                    v_max = getattr(val_obj, 'vmax', getattr(val_obj, 'max', None))
+                    spec_min = fmt(v_min)
+                    spec_max = fmt(v_max)
+                    
+                    # --- NEU: Cpk und Sigma Berechnung ---
+                    cpk_vals = []
+                    z_vals = []
+                    
+                    if sim_std > 0:
+                        if v_min is not None:
+                            z_l = (sim_typ - v_min) / sim_std
+                            cpk_vals.append(z_l / 3.0)
+                            z_vals.append(z_l)
+                        if v_max is not None:
+                            z_u = (v_max - sim_typ) / sim_std
+                            cpk_vals.append(z_u / 3.0)
+                            z_vals.append(z_u)
+                            
+                    if cpk_vals:
+                        cpk = min(cpk_vals)
+                        sigma_lvl = min(z_vals)
+                        cpk_str = f"{cpk:.2f}"
+                        sigma_str = f"{sigma_lvl:.2f}σ"
+                    else:
+                        if sim_std == 0.0 and (v_min is not None or v_max is not None):
+                            # Konstante Werte ohne Abweichung = "Perfekter" Cpk, sofern innerhalb Spec
+                            if (v_min is None or sim_typ >= v_min) and (v_max is None or sim_typ <= v_max):
+                                cpk_str, sigma_str = "INF", "INF"
+                            else:
+                                cpk_str, sigma_str = "0.00", "0.00"
+                        else:
+                            cpk_str, sigma_str = "-", "-"
                     
                     pass_col = f"{p_name}_pass"
                     if pass_col in valid_df.columns and valid_df[pass_col].all():
@@ -1082,10 +1162,10 @@ class SimifyGUI(ctk.CTk):
                         status, tags = "FAIL", ('fail',)
                         failed_params.append((test, val_obj))
                         
-                    self.tree.insert("", tk.END, values=(p_name, fmt(sim_min), fmt(sim_typ), fmt(sim_max), spec_min, spec_typ, spec_max, status), tags=tags)
+                    self.tree.insert("", tk.END, values=(p_name, fmt(sim_min), fmt(sim_typ), fmt(sim_max), spec_min, spec_max, cpk_str, sigma_str, status), tags=tags)
                     
         if not meas_cols and total > 0:
-             self.tree.insert("", tk.END, values=("No matching params", "-", "-", "-", "-", "-", "-", "WARN"), tags=('warn',))
+             self.tree.insert("", tk.END, values=("No matching params", "-", "-", "-", "-", "-", "-", "-", "WARN"), tags=('warn',))
                     
         numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
         all_plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
@@ -1240,20 +1320,12 @@ class SimifyGUI(ctk.CTk):
                 except Exception:
                     pass
 
-            # 1. Histogramm ZUERST zeichnen, um die echten Y-Werte (Density) zu bekommen
             counts, bins_plot, patches = self.ax.hist(grp_data, bins=b, density=True, color=c, alpha=0.5, edgecolor='white', linewidth=0.5, label=label_text)
-            
-            # 2. Den höchsten Punkt des Histogramms finden
             max_hist_height = max(counts) if len(counts) > 0 else 1.0
 
-            # 3. Fit-Kurve zeichnen und RADIKAL clippen!
             if fit_x is not None and fit_y is not None:
-                # Macht aus NaN und Infinity -> 0.0
                 fit_y_safe = np.nan_to_num(fit_y, nan=0.0, posinf=0.0, neginf=0.0)
-                # Verhindert, dass scipy astronomisch hohe Werte (wie 1e100) ausspuckt
-                # Wir kappen die Linie bei der 1.5-fachen Höhe des höchsten Histogramm-Balkens!
                 fit_y_safe = np.clip(fit_y_safe, 0.0, max_hist_height * 1.5)
-                
                 self.ax.plot(fit_x, fit_y_safe, color=c, linewidth=2)
         
         comp_run = self.compare_var.get()
