@@ -83,9 +83,7 @@ class SimifyGUI(ctk.CTk):
         self.left_frame.grid_rowconfigure(10, weight=1) 
         self.left_frame.pack_propagate(False)
         
-        # --- Config Section ---
         ctk.CTkLabel(self.left_frame, text="Configuration", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=20, pady=(20, 5), sticky="w")
-        
         ctk.CTkLabel(self.left_frame, text="Current Datasheet:").grid(row=1, column=0, padx=20, pady=(5, 0), sticky="w")
         self.yaml_dropdown = ctk.CTkOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_yaml_select)
         self.yaml_dropdown.grid(row=2, column=0, padx=20, pady=(5, 10), sticky="ew")
@@ -99,16 +97,13 @@ class SimifyGUI(ctk.CTk):
         self.btn_stop = ctk.CTkButton(self.left_frame, text="Stop Simulation", command=self.stop_simulation, fg_color="#e74c3c", hover_color="#c0392b", state="disabled")
         self.btn_stop.grid(row=5, column=0, padx=20, pady=(0, 20), sticky="ew")
         
-        # --- History & Reports Section ---
         ctk.CTkLabel(self.left_frame, text="History & Export", font=ctk.CTkFont(size=18, weight="bold")).grid(row=6, column=0, padx=20, pady=(10, 5), sticky="w")
-        
         self.history_dropdown = ctk.CTkOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_history_select)
         self.history_dropdown.grid(row=7, column=0, padx=20, pady=(5, 10), sticky="ew")
         
         self.btn_pdf = ctk.CTkButton(self.left_frame, text="📄 Export PDF Report", command=self.export_pdf, fg_color="#8e44ad", hover_color="#9b59b6")
         self.btn_pdf.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="ew")
 
-        # --- Status ---
         self.progress_bar = ctk.CTkProgressBar(self.left_frame)
         self.progress_bar.grid(row=11, column=0, padx=20, pady=(10, 0), sticky="ew")
         self.progress_bar.set(0)
@@ -673,38 +668,52 @@ class SimifyGUI(ctk.CTk):
         self.tab_hist.grid_columnconfigure(0, weight=1)
         self.tab_hist.grid_rowconfigure(1, weight=1)
         
-        control_frame = ctk.CTkFrame(self.tab_hist, fg_color="transparent", height=40)
+        # --- UI LAYOUT REWORK: Two Rows for more space ---
+        control_frame = ctk.CTkFrame(self.tab_hist, fg_color="transparent")
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        control_frame.pack_propagate(False)
         
-        ctk.CTkLabel(control_frame, text="Meas:").pack(side=tk.LEFT, padx=(0, 5))
+        row1 = ctk.CTkFrame(control_frame, fg_color="transparent")
+        row1.pack(fill="x", pady=2)
+        row2 = ctk.CTkFrame(control_frame, fg_color="transparent")
+        row2.pack(fill="x", pady=2)
+        
+        # Row 1 Controls
+        ctk.CTkLabel(row1, text="Meas:").pack(side=tk.LEFT, padx=(0, 5))
         self.plot_param_var = ctk.StringVar(value="-")
-        self.plot_param_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.plot_param_var, command=self.update_plot, dynamic_resizing=False, width=130)
-        self.plot_param_dropdown.pack(side=tk.LEFT, padx=(0, 10))
+        self.plot_param_dropdown = ctk.CTkOptionMenu(row1, variable=self.plot_param_var, command=self.update_plot, dynamic_resizing=False, width=130)
+        self.plot_param_dropdown.pack(side=tk.LEFT, padx=(0, 15))
         
-        # --- NEW: Group By Dropdown ---
-        ctk.CTkLabel(control_frame, text="Group by:").pack(side=tk.LEFT, padx=(5, 5))
+        ctk.CTkLabel(row1, text="Group by:").pack(side=tk.LEFT, padx=(5, 5))
         self.group_by_var = ctk.StringVar(value="None")
-        self.group_by_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.group_by_var, command=self.update_plot, dynamic_resizing=False, width=110)
-        self.group_by_dropdown.pack(side=tk.LEFT, padx=(0, 10))
+        self.group_by_dropdown = ctk.CTkOptionMenu(row1, variable=self.group_by_var, command=self.update_plot, dynamic_resizing=False, width=130)
+        self.group_by_dropdown.pack(side=tk.LEFT, padx=(0, 15))
         
-        # --- NEW: More distributions ---
-        ctk.CTkLabel(control_frame, text="Fit:").pack(side=tk.LEFT, padx=(5, 5))
+        ctk.CTkLabel(row1, text="Fit Curve:").pack(side=tk.LEFT, padx=(5, 5))
         self.plot_dist_var = ctk.StringVar(value="Gauss (Normal)")
         self.plot_dist_dropdown = ctk.CTkOptionMenu(
-            control_frame, 
+            row1, 
             variable=self.plot_dist_var, 
-            values=["Gauss (Normal)", "KDE (Smoothed)", "Uniform", "Log-Normal", "Exponential", "None"],
+            values=["Gauss (Normal)", "KDE (Smoothed)", "Uniform", "Log-Normal", "Exponential", "Chi-Squared", "None"],
             command=self.update_plot,
             dynamic_resizing=False,
-            width=130
+            width=140
         )
-        self.plot_dist_dropdown.pack(side=tk.LEFT, padx=(0, 10))
+        self.plot_dist_dropdown.pack(side=tk.LEFT)
 
-        ctk.CTkLabel(control_frame, text="Ref:").pack(side=tk.LEFT, padx=(5, 5))
+        # Row 2 Controls
+        ctk.CTkLabel(row2, text="Compare (Ref):", text_color="#f1c40f").pack(side=tk.LEFT, padx=(0, 5))
         self.compare_var = ctk.StringVar(value="None")
-        self.compare_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.compare_var, command=self.update_plot, dynamic_resizing=False, fg_color="#d35400", button_color="#8e44ad", button_hover_color="#9b59b6", width=140)
-        self.compare_dropdown.pack(side=tk.LEFT)
+        self.compare_dropdown = ctk.CTkOptionMenu(row2, variable=self.compare_var, command=self.update_plot, dynamic_resizing=False, fg_color="#d35400", button_color="#8e44ad", button_hover_color="#9b59b6", width=140)
+        self.compare_dropdown.pack(side=tk.LEFT, padx=(0, 20))
+        
+        ctk.CTkLabel(row2, text="Bins:").pack(side=tk.LEFT, padx=(5, 5))
+        self.bins_var = ctk.StringVar(value="Auto")
+        self.bins_dropdown = ctk.CTkOptionMenu(row2, variable=self.bins_var, values=["Auto", "10", "20", "50", "100", "200"], command=self.update_plot, dynamic_resizing=False, width=80)
+        self.bins_dropdown.pack(side=tk.LEFT, padx=(0, 20))
+        
+        self.zoom_var = ctk.BooleanVar(value=False)
+        self.zoom_checkbox = ctk.CTkCheckBox(row2, text="Zoom to Fit Data", variable=self.zoom_var, command=self.update_plot)
+        self.zoom_checkbox.pack(side=tk.LEFT)
 
         plt.style.use('dark_background')
         self.fig, self.ax = plt.subplots(figsize=(6, 4))
@@ -1052,7 +1061,6 @@ class SimifyGUI(ctk.CTk):
         numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
         all_plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
         
-        # --- NEW: Group By Dropdown Logic ---
         sweep_params = [p for p in list(stim.params.keys()) if p in valid_df.columns and valid_df[p].nunique() > 1]
         self.group_by_dropdown.configure(values=["None"] + sweep_params)
         if self.group_by_var.get() not in ["None"] + sweep_params:
@@ -1130,6 +1138,8 @@ class SimifyGUI(ctk.CTk):
         param = self.plot_param_var.get()
         dist_type = self.plot_dist_var.get()
         group_col = self.group_by_var.get()
+        bins_val = self.bins_var.get()
+        do_zoom = self.zoom_var.get()
         
         valid_df = self.current_df[self.current_df['sim_error'] == 'None']
         if param not in valid_df.columns: return
@@ -1141,10 +1151,12 @@ class SimifyGUI(ctk.CTk):
         self.ax.set_xlabel("Simulated Value")
         self.ax.set_ylabel("Density")
         
-        # --- NEW: Grouping Logic ---
+        b = 'auto' if bins_val == "Auto" else int(bins_val)
+        data_min = float('inf')
+        data_max = float('-inf')
+        
         if group_col != "None" and group_col in valid_df.columns:
             unique_vals = valid_df[group_col].unique()
-            # Erzeuge Tupel (Gruppen-Name, Daten)
             groups = [(f"{group_col}={val}", valid_df[valid_df[group_col] == val][param].dropna()) for val in unique_vals]
         else:
             groups = [("Current Run", valid_df[param].dropna())]
@@ -1154,9 +1166,11 @@ class SimifyGUI(ctk.CTk):
         for i, (grp_name, grp_data) in enumerate(groups):
             if grp_data.empty: continue
             
+            if min(grp_data) < data_min: data_min = min(grp_data)
+            if max(grp_data) > data_max: data_max = max(grp_data)
+            
             c = '#3484F0' if group_col == "None" else colors[i % 10]
             
-            # 1. Daten fitten und berechnen
             label_text = grp_name
             fit_x = None
             fit_y = None
@@ -1181,17 +1195,22 @@ class SimifyGUI(ctk.CTk):
                         shape, loc, scale = stats.lognorm.fit(grp_data)
                         fit_y = stats.lognorm.pdf(x_fit, shape, loc, scale)
                         fit_x = x_fit
+                        label_text += f" (s={shape:.2g}, loc={loc:.2g}, scale={scale:.2g})"
                     elif dist_type == "Exponential":
                         loc, scale = stats.expon.fit(grp_data)
                         fit_y = stats.expon.pdf(x_fit, loc, scale)
                         fit_x = x_fit
+                        label_text += f" (loc={loc:.2g}, scale={scale:.2g})"
+                    elif dist_type == "Chi-Squared":
+                        df_stat, loc, scale = stats.chi2.fit(grp_data)
+                        fit_y = stats.chi2.pdf(x_fit, df_stat, loc, scale)
+                        fit_x = x_fit
+                        label_text += f" (df={df_stat:.2g}, loc={loc:.2g}, scale={scale:.2g})"
                 except Exception:
                     pass
 
-            # 2. Histogramm zeichnen (mit vollem Label)
-            self.ax.hist(grp_data, bins='auto', density=True, color=c, alpha=0.5, edgecolor='white', linewidth=0.5, label=label_text)
+            self.ax.hist(grp_data, bins=b, density=True, color=c, alpha=0.5, edgecolor='white', linewidth=0.5, label=label_text)
             
-            # 3. Fit-Kurve zeichnen (ohne extra Label, damit die Legende clean bleibt)
             if fit_x is not None and fit_y is not None:
                 self.ax.plot(fit_x, fit_y, color=c, linewidth=2)
         
@@ -1210,10 +1229,13 @@ class SimifyGUI(ctk.CTk):
                 if param in c_valid.columns:
                     c_data = c_valid[param].dropna()
                     if not c_data.empty:
-                        self.ax.hist(c_data, bins='auto', density=True, color='#e67e22', alpha=0.5, edgecolor='#d35400', linewidth=0.5, label=f"Ref: {comp_run.replace('.csv', '')}")
+                        if min(c_data) < data_min: data_min = min(c_data)
+                        if max(c_data) > data_max: data_max = max(c_data)
+                        self.ax.hist(c_data, bins=b, density=True, color='#e67e22', alpha=0.5, edgecolor='#d35400', linewidth=0.5, label=f"Ref: {comp_run.replace('.csv', '')}")
             except Exception as e:
                 print(f"Could not overlay comparison run: {e}")
 
+        # Specs Overlay
         spec_min, spec_max = None, None
         if self.current_stim:
             for t in self.current_stim.tests:
@@ -1226,6 +1248,12 @@ class SimifyGUI(ctk.CTk):
             self.ax.axvline(spec_min, color='#e74c3c', linestyle='dashed', linewidth=2, label=f'Min Spec ({spec_min:.4g})')
         if spec_max is not None:
             self.ax.axvline(spec_max, color='#e74c3c', linestyle='dashed', linewidth=2, label=f'Max Spec ({spec_max:.4g})')
+
+        # Zoom to fit logic
+        if do_zoom and data_min != float('inf') and data_max != float('-inf'):
+            padding = (data_max - data_min) * 0.05
+            if padding == 0: padding = 0.1 
+            self.ax.set_xlim(data_min - padding, data_max + padding)
 
         if len(self.ax.get_legend_handles_labels()[1]) > 0:
             self.ax.legend(loc='best', facecolor='#2b2b2b', edgecolor='gray')
