@@ -4,9 +4,19 @@ import tkinter as tk
 import os
 import glob
 import threading
+import datetime
 import pandas as pd
 import numpy as np
 import yaml
+
+from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import scipy.stats as stats
+
+from simify import settings
+from simify import simulator
+from simify import util
 
 # ==========================================
 # --- YAML FORMATTING OVERRIDES ---
@@ -28,15 +38,6 @@ yaml.SafeDumper.add_representer(QuotedString, represent_quoted_str)
 yaml.Dumper.add_representer(QuotedString, represent_quoted_str)
 # ==========================================
 
-# --- PLOTTING MODULE ---
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import scipy.stats as stats
-
-from simify import settings
-from simify import simulator
-from simify import util
-
 ctk.set_appearance_mode("dark")  
 ctk.set_default_color_theme("blue")  
 
@@ -44,13 +45,15 @@ class SimifyGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Simify EDA Dashboard")
-        self.geometry("1200x900")
+        self.geometry("1250x950")
         
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         
         self.current_df = None
         self.current_stim = None
+        
+        self.stop_event = threading.Event()
         
         # --- EDITOR STATE ---
         self.current_yaml_path = None
@@ -59,7 +62,6 @@ class SimifyGUI(ctk.CTk):
         
         self.param_vars = [] 
         self.test_vars = []  
-        
         self.param_key = 'params'
         self.test_key = 'tests'
         
@@ -71,32 +73,48 @@ class SimifyGUI(ctk.CTk):
         
     def _startup_load(self):
         self.refresh_yamls()
+        self.refresh_history()
         self.tabs.set("Datasheet Editor")
+        self.after(500, self.auto_load_latest_run)
         
     def setup_left_panel(self):
-        self.left_frame = ctk.CTkFrame(self, width=250, corner_radius=0)
+        self.left_frame = ctk.CTkFrame(self, width=260, corner_radius=0)
         self.left_frame.grid(row=0, column=0, sticky="nsew")
-        self.left_frame.grid_rowconfigure(5, weight=1) 
+        self.left_frame.grid_rowconfigure(10, weight=1) 
+        self.left_frame.pack_propagate(False)
         
-        ctk.CTkLabel(self.left_frame, text="Configuration", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
+        # --- Config Section ---
+        ctk.CTkLabel(self.left_frame, text="Configuration", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=20, pady=(20, 5), sticky="w")
         
-        ctk.CTkLabel(self.left_frame, text="Current Datasheet:").grid(row=1, column=0, padx=20, pady=(10, 0), sticky="w")
-        
+        ctk.CTkLabel(self.left_frame, text="Current Datasheet:").grid(row=1, column=0, padx=20, pady=(5, 0), sticky="w")
         self.yaml_dropdown = ctk.CTkOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_yaml_select)
-        self.yaml_dropdown.grid(row=2, column=0, padx=20, pady=(5, 20), sticky="ew")
+        self.yaml_dropdown.grid(row=2, column=0, padx=20, pady=(5, 10), sticky="ew")
         
-        self.btn_refresh = ctk.CTkButton(self.left_frame, text="Refresh List", command=self.refresh_yamls, fg_color="transparent", border_width=1, text_color=("gray10", "#DCE4EE"))
-        self.btn_refresh.grid(row=3, column=0, padx=20, pady=(0, 10), sticky="ew")
+        self.btn_refresh = ctk.CTkButton(self.left_frame, text="Refresh Yamls", command=self.refresh_yamls, fg_color="transparent", border_width=1, text_color=("gray10", "#DCE4EE"))
+        self.btn_refresh.grid(row=3, column=0, padx=20, pady=(0, 15), sticky="ew")
         
         self.btn_start = ctk.CTkButton(self.left_frame, text="Start Simulation", command=self.start_simulation)
-        self.btn_start.grid(row=4, column=0, padx=20, pady=(20, 0), sticky="ew")
+        self.btn_start.grid(row=4, column=0, padx=20, pady=(5, 5), sticky="ew")
         
+        self.btn_stop = ctk.CTkButton(self.left_frame, text="Stop Simulation", command=self.stop_simulation, fg_color="#e74c3c", hover_color="#c0392b", state="disabled")
+        self.btn_stop.grid(row=5, column=0, padx=20, pady=(0, 20), sticky="ew")
+        
+        # --- History & Reports Section ---
+        ctk.CTkLabel(self.left_frame, text="History & Export", font=ctk.CTkFont(size=18, weight="bold")).grid(row=6, column=0, padx=20, pady=(10, 5), sticky="w")
+        
+        self.history_dropdown = ctk.CTkOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_history_select)
+        self.history_dropdown.grid(row=7, column=0, padx=20, pady=(5, 10), sticky="ew")
+        
+        self.btn_pdf = ctk.CTkButton(self.left_frame, text="📄 Export PDF Report", command=self.export_pdf, fg_color="#8e44ad", hover_color="#9b59b6")
+        self.btn_pdf.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="ew")
+
+        # --- Status ---
         self.progress_bar = ctk.CTkProgressBar(self.left_frame)
-        self.progress_bar.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="ew")
+        self.progress_bar.grid(row=11, column=0, padx=20, pady=(10, 0), sticky="ew")
         self.progress_bar.set(0)
         
         self.lbl_status = ctk.CTkLabel(self.left_frame, text="Status: Ready", text_color="gray")
-        self.lbl_status.grid(row=7, column=0, padx=20, pady=(5, 20), sticky="w")
+        self.lbl_status.grid(row=12, column=0, padx=20, pady=(5, 20), sticky="w")
         
     def setup_right_panel(self):
         self.right_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -104,7 +122,13 @@ class SimifyGUI(ctk.CTk):
         self.right_frame.grid_columnconfigure(0, weight=1)
         self.right_frame.grid_rowconfigure(2, weight=1) 
         
-        ctk.CTkLabel(self.right_frame, text="Dashboard", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 15))
+        header_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(header_frame, text="Dashboard", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w")
+        self.lbl_current_run = ctk.CTkLabel(header_frame, text="Viewing: [No Data]", text_color="gray", font=ctk.CTkFont(size=14))
+        self.lbl_current_run.grid(row=0, column=1, sticky="e")
         
         self.metrics_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
         self.metrics_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
@@ -132,6 +156,182 @@ class SimifyGUI(ctk.CTk):
         self.setup_worst_case_tab()
         self.setup_histogram_tab()
         self.setup_adv_analytics_tab() 
+
+    # ==========================================
+    # HISTORY & DATA LOADING
+    # ==========================================
+    def refresh_history(self):
+        history_dir = os.path.join(settings.OUT_DIR, "history")
+        runs = []
+        
+        if os.path.exists(os.path.join(settings.OUT_DIR, "simulation_results.csv")):
+            runs.append("Latest (simulation_results)")
+            
+        if os.path.exists(history_dir):
+            hist_files = glob.glob(os.path.join(history_dir, "run_*.csv"))
+            hist_files.sort(reverse=True) 
+            for f in hist_files:
+                runs.append(os.path.basename(f))
+                
+        if not runs:
+            self.history_dropdown.configure(values=["No runs found"])
+            self.history_dropdown.set("No runs found")
+            self.compare_dropdown.configure(values=["None"])
+            self.compare_dropdown.set("None")
+        else:
+            self.history_dropdown.configure(values=runs)
+            self.history_dropdown.set(runs[0])
+            comp_runs = ["None"] + runs
+            self.compare_dropdown.configure(values=comp_runs)
+            self.compare_dropdown.set("None")
+
+    def auto_load_latest_run(self):
+        runs = self.history_dropdown.cget("values")
+        if runs and runs[0] != "No runs found" and self.current_yaml_path:
+            self.on_history_select(runs[0], switch_tab=False)
+            self.lbl_status.configure(text="Status: Auto-loaded last run.", text_color="#3484F0")
+
+    def on_history_select(self, selection, switch_tab=True):
+        if not selection or selection == "No runs found" or not self.current_yaml_path: return
+        
+        if selection == "Latest (simulation_results)":
+            csv_path = os.path.join(settings.OUT_DIR, "simulation_results.csv")
+        else:
+            csv_path = os.path.join(settings.OUT_DIR, "history", selection)
+            
+        if not os.path.exists(csv_path): return
+        
+        try:
+            df = pd.read_csv(csv_path)
+            stim = util.Stimuli(self.current_yaml_path)
+            
+            self.lbl_current_run.configure(text=f"Viewing: {selection}")
+            self.update_ui_results(df, stim, switch_tab=switch_tab)
+            self.lbl_status.configure(text=f"Status: Loaded {selection}", text_color="#2ecc71")
+        except Exception as e:
+            messagebox.showwarning("Load Error", f"Could not parse run data. Ensure the current Datasheet fits the old run.\n\n{e}")
+
+    # ==========================================
+    # PDF EXPORT
+    # ==========================================
+    def export_pdf(self):
+        if self.current_df is None or self.current_stim is None:
+            messagebox.showwarning("Export Error", "No simulation data available to export.")
+            return
+
+        report_dir = os.path.join(settings.OUT_DIR, "reports")
+        os.makedirs(report_dir, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_path = os.path.join(report_dir, f"report_{timestamp}.pdf")
+
+        self.lbl_status.configure(text="Status: Generating PDF Report...", text_color="yellow")
+        self.update() 
+        
+        valid_df = self.current_df[self.current_df['sim_error'] == 'None']
+
+        try:
+            with PdfPages(pdf_path) as pdf:
+                # Page 1: Summary Text
+                fig_text = plt.figure(figsize=(8.27, 11.69)) 
+                fig_text.patch.set_facecolor('white')
+                ax_text = fig_text.add_subplot(111)
+                ax_text.axis('off')
+                
+                total = len(self.current_df)
+                crashes = len(self.current_df[self.current_df['sim_error'] != 'None'])
+                tb_pass_cols = [c for c in self.current_df.columns if c.endswith('_overall_pass')]
+                tmp_df = self.current_df.copy()
+                tmp_df['global_pass'] = True 
+                for col in tb_pass_cols: tmp_df['global_pass'] = tmp_df['global_pass'] & tmp_df[col]
+                global_yield = (int(tmp_df['global_pass'].sum()) / total) * 100 if total > 0 else 0
+                
+                title = f"Simify EDA Report - {os.path.basename(self.current_yaml_path)}"
+                ax_text.text(0.5, 0.95, title, fontsize=18, weight='bold', ha='center', va='top', color='black')
+                ax_text.text(0.5, 0.90, f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", fontsize=10, ha='center', va='top', color='gray')
+                
+                summary = (
+                    f"Simulation Summary:\n"
+                    f"-----------------------------\n"
+                    f"Total Iterations: {total}\n"
+                    f"Simulator Crashes: {crashes}\n"
+                    f"Global Yield: {global_yield:.1f}%\n"
+                )
+                ax_text.text(0.1, 0.80, summary, fontsize=12, ha='left', va='top', family='monospace', color='black')
+                pdf.savefig(fig_text)
+                plt.close(fig_text)
+
+                # Page 2+: Histograms 
+                plot_cols = []
+                for test in self.current_stim.tests:
+                    for val_obj in test.value_lst:
+                        if val_obj.name in valid_df.columns:
+                            plot_cols.append((val_obj.name, getattr(val_obj, 'vmin', getattr(val_obj, 'min', None)), getattr(val_obj, 'vmax', getattr(val_obj, 'max', None))))
+                
+                for param, s_min, s_max in plot_cols:
+                    data = valid_df[param].dropna()
+                    if len(data) == 0: continue
+                    
+                    fig = plt.figure(figsize=(8, 5))
+                    fig.patch.set_facecolor('white')
+                    ax = fig.add_subplot(111)
+                    ax.grid(True, linestyle='--', alpha=0.5, color='gray')
+                    ax.set_title(f"Distribution: {param}", color='black', pad=10)
+                    ax.set_xlabel("Simulated Value", color='black')
+                    ax.set_ylabel("Density", color='black')
+                    
+                    ax.hist(data, bins='auto', density=True, color='#3498db', alpha=0.7, edgecolor='black', linewidth=0.5)
+                    
+                    if s_min is not None:
+                        ax.axvline(s_min, color='red', linestyle='dashed', linewidth=2, label=f'Min Spec ({s_min:.4g})')
+                    if s_max is not None:
+                        ax.axvline(s_max, color='red', linestyle='dashed', linewidth=2, label=f'Max Spec ({s_max:.4g})')
+                        
+                    ax.tick_params(colors='black')
+                    if len(ax.get_legend_handles_labels()[1]) > 0:
+                        ax.legend(loc='best', facecolor='white', edgecolor='gray')
+                    
+                    fig.tight_layout()
+                    pdf.savefig(fig)
+                    plt.close(fig)
+
+                # Page N: Tornado Plot
+                target = plot_cols[0][0] if plot_cols else None
+                if target:
+                    correlations = []
+                    for p in list(self.current_stim.params.keys()):
+                        if p in valid_df.columns and valid_df[p].nunique() > 1:
+                            if pd.api.types.is_numeric_dtype(valid_df[p]):
+                                corr = valid_df[p].corr(valid_df[target])
+                            else:
+                                factorized, _ = pd.factorize(valid_df[p])
+                                corr = pd.Series(factorized).corr(valid_df[target])
+                            if not np.isnan(corr):
+                                correlations.append((p, corr))
+                                
+                    if correlations:
+                        correlations.sort(key=lambda x: abs(x[1]))
+                        labels = [x[0] for x in correlations]
+                        values = [x[1] for x in correlations]
+                        colors = ['#2ecc71' if v >= 0 else '#e74c3c' for v in values]
+                        
+                        fig = plt.figure(figsize=(8, 6))
+                        fig.patch.set_facecolor('white')
+                        ax = fig.add_subplot(111)
+                        ax.barh(labels, values, color=colors, edgecolor='black', linewidth=0.5, alpha=0.8)
+                        ax.axvline(0, color='black', linestyle='-', linewidth=1)
+                        ax.set_xlabel("Correlation Impact (Sensitivity)", color='black')
+                        ax.set_title(f"Sensitivity Analysis for: {target}", color='black', pad=15)
+                        ax.tick_params(colors='black')
+                        fig.tight_layout()
+                        pdf.savefig(fig)
+                        plt.close(fig)
+
+            self.lbl_status.configure(text=f"Status: PDF saved to out/reports/", text_color="#2ecc71")
+            messagebox.showinfo("Export Successful", f"Report saved as:\n{os.path.basename(pdf_path)}")
+            
+        except Exception as e:
+            self.lbl_status.configure(text="Status: PDF Export Failed", text_color="red")
+            messagebox.showerror("Export Error", f"Failed to generate PDF:\n{e}")
 
     # ==========================================
     # DATASHEET EDITOR
@@ -198,15 +398,13 @@ class SimifyGUI(ctk.CTk):
                     for tb_name, tb_data in val.items():
                         if isinstance(tb_data, dict) and 'values' in tb_data:
                             v = tb_data.pop('values')
-                            if isinstance(v, dict):
-                                tb_data.update(v)
+                            if isinstance(v, dict): tb_data.update(v)
                     return key, val
         return 'tests', {}
 
     def on_yaml_select(self, selected_yaml):
         if not selected_yaml or selected_yaml == "No files found": return
         self.current_yaml_path = os.path.join(settings.IN_DIR, selected_yaml)
-        
         try:
             with open(self.current_yaml_path, 'r') as f:
                 raw_text = f.read()
@@ -217,13 +415,10 @@ class SimifyGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Load Error", f"Error loading {selected_yaml}:\n{e}")
             return
-            
         self.lbl_editor_title.configure(text=f"Editing: {selected_yaml}")
         self.raw_editor.delete("1.0", "end")
         self.raw_editor.insert("1.0", self.raw_yaml_text)
-        
         self.build_editor_ui()
-        
         if self.editor_mode.get() == "Form View":
             self.raw_editor.grid_remove()
             self.editor_scroll.grid(row=1, column=0, sticky="nsew")
@@ -239,9 +434,7 @@ class SimifyGUI(ctk.CTk):
         return str(x)
         
     def build_editor_ui(self):
-        for widget in self.editor_scroll.winfo_children():
-            widget.destroy()
-            
+        for widget in self.editor_scroll.winfo_children(): widget.destroy()
         self.param_vars = []
         self.test_vars = []
         self.param_key, params_dict = self.get_params_dict()
@@ -259,10 +452,8 @@ class SimifyGUI(ctk.CTk):
         r = 0
         for p_name, p_val in params_dict.items():
             key_var = ctk.StringVar(value=str(p_name))
-            if not isinstance(p_val, list):
-                val_str = self.gui_repr_param(p_val)
-            else:
-                val_str = ", ".join(self.gui_repr_param(x) for x in p_val)
+            if not isinstance(p_val, list): val_str = self.gui_repr_param(p_val)
+            else: val_str = ", ".join(self.gui_repr_param(x) for x in p_val)
             val_var = ctk.StringVar(value=val_str)
             
             ctk.CTkEntry(params_frame, textvariable=key_var, width=150).grid(row=r, column=0, padx=10, pady=5, sticky="w")
@@ -288,14 +479,12 @@ class SimifyGUI(ctk.CTk):
             tb_name_var = ctk.StringVar(value=str(tb_name))
             row_header = ctk.CTkFrame(frame, fg_color="transparent")
             row_header.pack(fill="x", padx=10, pady=(10, 5))
-            
             ctk.CTkLabel(row_header, text="Testbench Name:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 10))
             ctk.CTkEntry(row_header, textvariable=tb_name_var, width=200).pack(side="left")
             ctk.CTkButton(row_header, text="🗑️ Delete Testbench", width=140, height=24, fg_color="#e74c3c", hover_color="#c0392b", command=lambda idx=t_idx: self.action_del_test(idx)).pack(side="right")
             
             val_frame = ctk.CTkFrame(frame, fg_color="transparent")
             val_frame.pack(fill="x", padx=10, pady=5)
-            
             ctk.CTkLabel(val_frame, text="Measurement", text_color="gray").grid(row=0, column=0, padx=5, pady=2, sticky="w")
             ctk.CTkLabel(val_frame, text="Min Spec", text_color="gray").grid(row=0, column=1, padx=5, pady=2, sticky="w")
             ctk.CTkLabel(val_frame, text="Typ Spec", text_color="gray").grid(row=0, column=2, padx=5, pady=2, sticky="w")
@@ -305,8 +494,8 @@ class SimifyGUI(ctk.CTk):
             for v_idx, (v_name, v_data) in enumerate(tb_data.items()):
                 if v_name == 'values': continue 
                 if not isinstance(v_data, dict): v_data = {}
-                    
                 v_name_var = ctk.StringVar(value=str(v_name))
+                
                 min_val = v_data.get('vmin', v_data.get('min', ''))
                 typ_val = v_data.get('vtyp', v_data.get('typ', ''))
                 max_val = v_data.get('vmax', v_data.get('max', ''))
@@ -328,7 +517,6 @@ class SimifyGUI(ctk.CTk):
 
     def sync_ui_to_state(self):
         if not isinstance(self.current_yaml_data, dict): self.current_yaml_data = {}
-        
         self.current_yaml_data[self.param_key] = {}
         for p_dict in self.param_vars:
             k = p_dict['key'].get().strip()
@@ -343,13 +531,11 @@ class SimifyGUI(ctk.CTk):
             for x in v_str.split(','):
                 x = x.strip()
                 if not x: continue
-                
                 if (x.startswith("'") and x.endswith("'")) or (x.startswith('"') and x.endswith('"')):
                     parsed_list.append(QuotedString(x[1:-1]))
                 else:
                     try: parsed_list.append(float(x) if '.' in x else int(x))
                     except ValueError: parsed_list.append(x)
-                        
             self.current_yaml_data[self.param_key][k] = parsed_list
             
         self.current_yaml_data[self.test_key] = {}
@@ -361,7 +547,6 @@ class SimifyGUI(ctk.CTk):
             for v_dict in t_dict['values']:
                 name = v_dict['name'].get().strip()
                 if not name: continue
-                
                 v_data = {}
                 vmin_str = v_dict['vmin'].get().strip()
                 vtyp_str = v_dict['typ'].get().strip()
@@ -376,7 +561,6 @@ class SimifyGUI(ctk.CTk):
                 if vmax_str and vmax_str.lower() != 'none': 
                     try: v_data['max'] = float(vmax_str)
                     except ValueError: v_data['max'] = vmax_str
-                
                 tb_content[name] = v_data
             self.current_yaml_data[self.test_key][tb_name] = tb_content
 
@@ -443,7 +627,7 @@ class SimifyGUI(ctk.CTk):
             messagebox.showerror("Save Error", f"Could not save datasheet:\n{str(e)}")
 
     # ==========================================
-    # REST OF GUI & ADVANCED ANALYTICS
+    # REST OF GUI
     # ==========================================
     def refresh_yamls(self):
         yaml_files = glob.glob(os.path.join(settings.IN_DIR, "*.yaml"))
@@ -506,13 +690,14 @@ class SimifyGUI(ctk.CTk):
         self.tab_hist.grid_columnconfigure(0, weight=1)
         self.tab_hist.grid_rowconfigure(1, weight=1)
         
-        control_frame = ctk.CTkFrame(self.tab_hist, fg_color="transparent")
+        control_frame = ctk.CTkFrame(self.tab_hist, fg_color="transparent", height=40)
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        control_frame.pack_propagate(False)
         
         ctk.CTkLabel(control_frame, text="Measurement:").pack(side=tk.LEFT, padx=(0, 10))
         self.plot_param_var = ctk.StringVar(value="-")
         self.plot_param_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.plot_param_var, command=self.update_plot, dynamic_resizing=False)
-        self.plot_param_dropdown.pack(side=tk.LEFT, padx=(0, 30))
+        self.plot_param_dropdown.pack(side=tk.LEFT, padx=(0, 20))
         
         ctk.CTkLabel(control_frame, text="Fit Curve:").pack(side=tk.LEFT, padx=(0, 10))
         self.plot_dist_var = ctk.StringVar(value="Gauss (Normal)")
@@ -523,7 +708,13 @@ class SimifyGUI(ctk.CTk):
             command=self.update_plot,
             dynamic_resizing=False
         )
-        self.plot_dist_dropdown.pack(side=tk.LEFT)
+        self.plot_dist_dropdown.pack(side=tk.LEFT, padx=(0, 30))
+
+        # --- A/B Comparison Overlay ---
+        ctk.CTkLabel(control_frame, text="Compare to:", text_color="#f1c40f").pack(side=tk.LEFT, padx=(0, 10))
+        self.compare_var = ctk.StringVar(value="None")
+        self.compare_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.compare_var, command=self.update_plot, dynamic_resizing=False, fg_color="#d35400", button_color="#8e44ad", button_hover_color="#9b59b6")
+        self.compare_dropdown.pack(side=tk.LEFT)
 
         plt.style.use('dark_background')
         self.fig, self.ax = plt.subplots(figsize=(6, 4))
@@ -536,15 +727,13 @@ class SimifyGUI(ctk.CTk):
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.tab_hist)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
-    # --- ADVANCED ANALYTICS TAB ---
     def setup_adv_analytics_tab(self):
         self.tab_adv.grid_columnconfigure(0, weight=1)
         self.tab_adv.grid_rowconfigure(1, weight=1)
         
-        # --- UI SHIFT FIX: Fixed height for the control panel ---
         control_frame = ctk.CTkFrame(self.tab_adv, fg_color="transparent", height=40)
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        control_frame.pack_propagate(False) # Prevents the frame from shrinking/growing
+        control_frame.pack_propagate(False)
         
         self.adv_mode_var = ctk.StringVar(value="Fail Breakdown (Pie Chart)")
         self.adv_mode_selector = ctk.CTkSegmentedButton(
@@ -631,13 +820,10 @@ class SimifyGUI(ctk.CTk):
         elif mode == "Correlation Heatmap":
             numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
             plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
-            
-            # --- NEW: Filter out constants for correlation ---
             active_cols = [c for c in plot_cols if valid_df[c].nunique() > 1]
             
             if len(active_cols) < 2:
-                self.adv_ax.text(0.5, 0.5, "Not enough varying data for correlation map.", 
-                                 color='white', ha='center', va='center', transform=self.adv_ax.transAxes)
+                self.adv_ax.text(0.5, 0.5, "Not enough varying data for correlation map.", color='white', ha='center', va='center', transform=self.adv_ax.transAxes)
             else:
                 corr = valid_df[active_cols].corr()
                 cax = self.adv_ax.matshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
@@ -651,7 +837,6 @@ class SimifyGUI(ctk.CTk):
                 self.adv_ax.set_yticks(range(len(active_cols)))
                 self.adv_ax.set_xticklabels(active_cols, rotation=45, ha='left', color='white', fontsize=9)
                 self.adv_ax.set_yticklabels(active_cols, color='white', fontsize=9)
-                
                 self.adv_ax.xaxis.set_ticks_position('bottom')
                 self.adv_ax.set_title("Parameter & Measurement Correlation Matrix", color='white', pad=20)
                 
@@ -701,7 +886,6 @@ class SimifyGUI(ctk.CTk):
             
         elif mode == "Fail Breakdown (Pie Chart)":
             pass_cols = [c for c in valid_df.columns if c.endswith('_pass') and not c.endswith('_overall_pass') and c != 'global_pass']
-            
             fail_counts = {}
             for c in pass_cols:
                 fails = (valid_df[c] == False).sum()
@@ -722,14 +906,8 @@ class SimifyGUI(ctk.CTk):
             explode = [0.1 if s == max(sizes) else 0 for s in sizes] 
             
             patches, texts, autotexts = self.adv_ax.pie(
-                sizes, 
-                explode=explode, 
-                labels=labels, 
-                colors=colors, 
-                autopct='%1.1f%%', 
-                startangle=140,
-                textprops={'color': 'white', 'fontsize': 10},
-                wedgeprops={'edgecolor': 'gray', 'linewidth': 1}
+                sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', 
+                startangle=140, textprops={'color': 'white', 'fontsize': 10}, wedgeprops={'edgecolor': 'gray', 'linewidth': 1}
             )
             
             for autotext in autotexts:
@@ -741,7 +919,6 @@ class SimifyGUI(ctk.CTk):
 
         self.adv_fig.tight_layout()
         self.adv_canvas.draw()
-    # --------------------------------
 
     def apply_treeview_dark_style(self):
         style = ttk.Style()
@@ -752,8 +929,11 @@ class SimifyGUI(ctk.CTk):
         style.map("Treeview.Heading", background=[('active', '#3484F0')])
         self.tree.tag_configure('pass', background='#1a4d1a') 
         self.tree.tag_configure('fail', background='#4d1a1a') 
+        self.tree.tag_configure('warn', background='#e67e22', foreground='black')
 
-    def update_progress(self, current, total):
+    def progress_callback_wrapper(self, current, total):
+        if self.stop_event.is_set():
+            raise InterruptedError("Simulation abgebrochen durch Benutzer")
         self.after(0, self._set_progress_ui, current, total)
         
     def _set_progress_ui(self, current, total):
@@ -769,36 +949,65 @@ class SimifyGUI(ctk.CTk):
         
         self.btn_start.configure(state="disabled")
         self.btn_refresh.configure(state="disabled")
+        self.btn_stop.configure(state="normal") 
+        self.stop_event.clear() 
+        
         self.progress_bar.set(0)
         self.lbl_status.configure(text="Status: Initializing cores...", text_color="yellow")
         
         for item in self.tree.get_children(): self.tree.delete(item)
-        
         for widget in self.wc_scroll.winfo_children(): widget.destroy()
         self.lbl_wc_empty = ctk.CTkLabel(self.wc_scroll, text="Simulating...", text_color="gray")
         self.lbl_wc_empty.pack(pady=50)
             
         threading.Thread(target=self.run_sim_thread, args=(yaml_path,), daemon=True).start()
 
+    def stop_simulation(self):
+        self.stop_event.set()
+        self.lbl_status.configure(text="Status: Canceling simulation...", text_color="orange")
+        self.btn_stop.configure(state="disabled")
+
     def run_sim_thread(self, yaml_path):
         try:
             stim = util.Stimuli(yaml_path)
-            df = simulator.run_sim(stim, progress_callback=self.update_progress)
+            df = simulator.run_sim(stim, progress_callback=self.progress_callback_wrapper)
+            
             csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
             df.to_csv(csv_out, index=False)
-            self.after(0, self.update_ui_results, df, stim)
+            
+            try:
+                history_dir = os.path.join(settings.OUT_DIR, "history")
+                os.makedirs(history_dir, exist_ok=True)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                history_file = os.path.join(history_dir, f"run_{timestamp}.csv")
+                df.to_csv(history_file, index=False)
+            except Exception as e:
+                print(f"Konnte Run nicht in Historie speichern: {e}")
+                
+            self.after(0, self.refresh_history)
+            self.after(0, self.update_ui_results, df, stim, True)
+            
+        except InterruptedError as e:
+            self.after(0, self.show_error, str(e))
         except Exception as e:
             self.after(0, self.show_error, str(e))
 
     def show_error(self, error_msg):
-        self.lbl_status.configure(text="Status: Error occurred!", text_color="red")
+        self.lbl_status.configure(text="Status: Error / Aborted!", text_color="red")
         self.btn_start.configure(state="normal")
+        self.btn_stop.configure(state="disabled")
         self.btn_refresh.configure(state="normal")
         
         for widget in self.wc_scroll.winfo_children(): widget.destroy()
-        ctk.CTkLabel(self.wc_scroll, text=f"CRASH LOG:\n{error_msg}", text_color="red", justify="left").pack(anchor="w", padx=20, pady=20)
+        ctk.CTkLabel(self.wc_scroll, text=f"LOG:\n{error_msg}", text_color="red", justify="left").pack(anchor="w", padx=20, pady=20)
 
-    def update_ui_results(self, df, stim):
+    def update_ui_results(self, df, stim, switch_tab=False):
+        # --- PANDAS NaN FIX ---
+        if 'sim_error' not in df.columns:
+            df['sim_error'] = 'None'
+        df['sim_error'] = df['sim_error'].fillna('None').astype(str)
+        df.loc[df['sim_error'].str.lower() == 'nan', 'sim_error'] = 'None'
+        
         self.current_df = df
         self.current_stim = stim
         
@@ -825,6 +1034,8 @@ class SimifyGUI(ctk.CTk):
 
         failed_params = []
         meas_cols = [] 
+        
+        for item in self.tree.get_children(): self.tree.delete(item)
 
         for test in stim.tests:
             for val_obj in test.value_lst:
@@ -846,28 +1057,33 @@ class SimifyGUI(ctk.CTk):
                         
                     self.tree.insert("", tk.END, values=(p_name, fmt(sim_min), fmt(sim_typ), fmt(sim_max), spec_min, spec_typ, spec_max, status), tags=tags)
                     
+        # Check if run matched YAML at all
+        if not meas_cols and total > 0:
+             self.tree.insert("", tk.END, values=("No matching params", "-", "-", "-", "-", "-", "-", "WARN"), tags=('warn',))
+                    
         numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
         all_plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
         
         if meas_cols:
             self.plot_param_dropdown.configure(values=meas_cols)
-            self.plot_param_var.set(meas_cols[0])
+            if self.plot_param_var.get() not in meas_cols: self.plot_param_var.set(meas_cols[0])
             self.update_plot()
-            
             self.tornado_target_dropdown.configure(values=meas_cols)
-            self.tornado_target_var.set(meas_cols[0])
+            if self.tornado_target_var.get() not in meas_cols: self.tornado_target_var.set(meas_cols[0])
             
         if all_plot_cols:
             self.scatter_x_dropdown.configure(values=all_plot_cols)
             self.scatter_y_dropdown.configure(values=all_plot_cols)
-            self.scatter_x_var.set(all_plot_cols[0])
-            self.scatter_y_var.set(all_plot_cols[1] if len(all_plot_cols) > 1 else all_plot_cols[0])
+            if self.scatter_x_var.get() not in all_plot_cols: self.scatter_x_var.set(all_plot_cols[0])
+            if self.scatter_y_var.get() not in all_plot_cols: self.scatter_y_var.set(all_plot_cols[1] if len(all_plot_cols) > 1 else all_plot_cols[0])
             
         self.update_adv_plots()
                     
         for widget in self.wc_scroll.winfo_children(): widget.destroy()
             
-        if not failed_params:
+        if not meas_cols and total > 0:
+            ctk.CTkLabel(self.wc_scroll, text="Loaded CSV does not match the current Datasheet specifications.", text_color="#e67e22", font=ctk.CTkFont(size=14)).pack(pady=50)
+        elif not failed_params:
             ctk.CTkLabel(self.wc_scroll, text="All specifications met! No outliers found.", text_color="#2ecc71", font=ctk.CTkFont(size=16)).pack(pady=50)
         else:
             param_cols = list(stim.params.keys())
@@ -892,20 +1108,21 @@ class SimifyGUI(ctk.CTk):
                     
                     card = ctk.CTkFrame(self.wc_scroll, border_width=2, border_color="#e74c3c", corner_radius=8)
                     card.pack(fill="x", padx=10, pady=10)
-                    
                     header = ctk.CTkFrame(card, fg_color="#e74c3c", corner_radius=0)
                     header.pack(fill="x")
                     ctk.CTkLabel(header, text=f"FAIL: {p_name} = {fmt(worst_val)}", font=ctk.CTkFont(weight="bold", size=14), text_color="white").pack(anchor="w", padx=15, pady=5)
-                    
                     ctk.CTkLabel(card, text=f"Specification exceeded: {violation}", text_color="#ff9999").pack(anchor="w", padx=15, pady=(10, 5))
-                    
                     params_text = "\n".join([f"• {k}: {worst_row[k]}" for k in param_cols if k in worst_row])
                     ctk.CTkLabel(card, text=f"Triggering parameters:\n{params_text}", justify="left").pack(anchor="w", padx=15, pady=(0, 15))
 
-        # --- JUMP TO MEASUREMENTS TAB ---
-        self.tabs.set("Measurements") 
-        self.lbl_status.configure(text=f"Status: Done! Saved to out/", text_color="#2ecc71")
+        if switch_tab:
+            self.tabs.set("Measurements") 
+            self.lbl_current_run.configure(text=f"Viewing: Latest (simulation_results)")
+            self.history_dropdown.set("Latest (simulation_results)")
+            
+        self.lbl_status.configure(text=f"Status: Ready", text_color="#2ecc71")
         self.btn_start.configure(state="normal")
+        self.btn_stop.configure(state="disabled")
         self.btn_refresh.configure(state="normal")
 
     def update_plot(self, *args):
@@ -926,8 +1143,27 @@ class SimifyGUI(ctk.CTk):
         self.ax.set_xlabel("Simulated Value")
         self.ax.set_ylabel("Density")
         
-        count, bins, ignored = self.ax.hist(data, bins='auto', density=True, color='#3484F0', alpha=0.7, edgecolor='white', linewidth=0.5)
+        self.ax.hist(data, bins='auto', density=True, color='#3484F0', alpha=0.7, edgecolor='white', linewidth=0.5, label="Current Run")
         
+        # --- A/B Comparison Overlay ---
+        comp_run = self.compare_var.get()
+        if comp_run != "None" and comp_run != "-":
+            try:
+                c_path = os.path.join(settings.OUT_DIR, "history", comp_run) if "run_" in comp_run else os.path.join(settings.OUT_DIR, "simulation_results.csv")
+                c_df = pd.read_csv(c_path)
+                
+                if 'sim_error' not in c_df.columns: c_df['sim_error'] = 'None'
+                c_df['sim_error'] = c_df['sim_error'].fillna('None').astype(str)
+                c_df.loc[c_df['sim_error'].str.lower() == 'nan', 'sim_error'] = 'None'
+                
+                c_valid = c_df[c_df['sim_error'] == 'None']
+                if param in c_valid.columns:
+                    c_data = c_valid[param].dropna()
+                    if not c_data.empty:
+                        self.ax.hist(c_data, bins='auto', density=True, color='#e67e22', alpha=0.5, edgecolor='#d35400', linewidth=0.5, label=f"Ref: {comp_run.replace('.csv', '')}")
+            except Exception as e:
+                print(f"Could not overlay comparison run: {e}")
+
         spec_min, spec_max = None, None
         if self.current_stim:
             for t in self.current_stim.tests:
