@@ -668,7 +668,6 @@ class SimifyGUI(ctk.CTk):
         self.tab_hist.grid_columnconfigure(0, weight=1)
         self.tab_hist.grid_rowconfigure(1, weight=1)
         
-        # --- UI LAYOUT REWORK: Two Rows for more space ---
         control_frame = ctk.CTkFrame(self.tab_hist, fg_color="transparent")
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         
@@ -677,7 +676,6 @@ class SimifyGUI(ctk.CTk):
         row2 = ctk.CTkFrame(control_frame, fg_color="transparent")
         row2.pack(fill="x", pady=2)
         
-        # Row 1 Controls
         ctk.CTkLabel(row1, text="Meas:").pack(side=tk.LEFT, padx=(0, 5))
         self.plot_param_var = ctk.StringVar(value="-")
         self.plot_param_dropdown = ctk.CTkOptionMenu(row1, variable=self.plot_param_var, command=self.update_plot, dynamic_resizing=False, width=130)
@@ -685,7 +683,7 @@ class SimifyGUI(ctk.CTk):
         
         ctk.CTkLabel(row1, text="Group by:").pack(side=tk.LEFT, padx=(5, 5))
         self.group_by_var = ctk.StringVar(value="None")
-        self.group_by_dropdown = ctk.CTkOptionMenu(row1, variable=self.group_by_var, command=self.update_plot, dynamic_resizing=False, width=130)
+        self.group_by_dropdown = ctk.CTkOptionMenu(row1, variable=self.group_by_var, command=self.on_group_by_change, dynamic_resizing=False, width=130)
         self.group_by_dropdown.pack(side=tk.LEFT, padx=(0, 15))
         
         ctk.CTkLabel(row1, text="Fit Curve:").pack(side=tk.LEFT, padx=(5, 5))
@@ -700,7 +698,6 @@ class SimifyGUI(ctk.CTk):
         )
         self.plot_dist_dropdown.pack(side=tk.LEFT)
 
-        # Row 2 Controls
         ctk.CTkLabel(row2, text="Compare (Ref):", text_color="#f1c40f").pack(side=tk.LEFT, padx=(0, 5))
         self.compare_var = ctk.StringVar(value="None")
         self.compare_dropdown = ctk.CTkOptionMenu(row2, variable=self.compare_var, command=self.update_plot, dynamic_resizing=False, fg_color="#d35400", button_color="#8e44ad", button_hover_color="#9b59b6", width=140)
@@ -725,6 +722,13 @@ class SimifyGUI(ctk.CTk):
         
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.tab_hist)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
+
+    def on_group_by_change(self, choice):
+        if choice != "None":
+            self.compare_dropdown.configure(state="disabled")
+        else:
+            self.compare_dropdown.configure(state="normal")
+        self.update_plot()
 
     def setup_adv_analytics_tab(self):
         self.tab_adv.grid_columnconfigure(0, weight=1)
@@ -1063,8 +1067,10 @@ class SimifyGUI(ctk.CTk):
         
         sweep_params = [p for p in list(stim.params.keys()) if p in valid_df.columns and valid_df[p].nunique() > 1]
         self.group_by_dropdown.configure(values=["None"] + sweep_params)
+        
         if self.group_by_var.get() not in ["None"] + sweep_params:
             self.group_by_var.set("None")
+        self.on_group_by_change(self.group_by_var.get())
         
         if meas_cols:
             self.plot_param_dropdown.configure(values=meas_cols)
@@ -1203,18 +1209,28 @@ class SimifyGUI(ctk.CTk):
                         label_text += f" (loc={loc:.2g}, scale={scale:.2g})"
                     elif dist_type == "Chi-Squared":
                         df_stat, loc, scale = stats.chi2.fit(grp_data)
-                        fit_y = stats.chi2.pdf(x_fit, df_stat, loc, scale)
+                        fit_y = stats.chi2.pdf(x_fit, df_stat, loc=loc, scale=scale)
                         fit_x = x_fit
                         label_text += f" (df={df_stat:.2g}, loc={loc:.2g}, scale={scale:.2g})"
                 except Exception:
                     pass
 
-            self.ax.hist(grp_data, bins=b, density=True, color=c, alpha=0.5, edgecolor='white', linewidth=0.5, label=label_text)
+            # 1. Histogramm ZUERST zeichnen, um die echten Y-Werte (Density) zu bekommen
+            counts, bins_plot, patches = self.ax.hist(grp_data, bins=b, density=True, color=c, alpha=0.5, edgecolor='white', linewidth=0.5, label=label_text)
             
+            # 2. Den höchsten Punkt des Histogramms finden
+            max_hist_height = max(counts) if len(counts) > 0 else 1.0
+
+            # 3. Fit-Kurve zeichnen und RADIKAL clippen!
             if fit_x is not None and fit_y is not None:
-                self.ax.plot(fit_x, fit_y, color=c, linewidth=2)
+                # Macht aus NaN und Infinity -> 0.0
+                fit_y_safe = np.nan_to_num(fit_y, nan=0.0, posinf=0.0, neginf=0.0)
+                # Verhindert, dass scipy astronomisch hohe Werte (wie 1e100) ausspuckt
+                # Wir kappen die Linie bei der 1.5-fachen Höhe des höchsten Histogramm-Balkens!
+                fit_y_safe = np.clip(fit_y_safe, 0.0, max_hist_height * 1.5)
+                
+                self.ax.plot(fit_x, fit_y_safe, color=c, linewidth=2)
         
-        # --- A/B Comparison Overlay ---
         comp_run = self.compare_var.get()
         if comp_run != "None" and comp_run != "-" and group_col == "None": 
             try:
@@ -1235,7 +1251,6 @@ class SimifyGUI(ctk.CTk):
             except Exception as e:
                 print(f"Could not overlay comparison run: {e}")
 
-        # Specs Overlay
         spec_min, spec_max = None, None
         if self.current_stim:
             for t in self.current_stim.tests:
@@ -1249,7 +1264,6 @@ class SimifyGUI(ctk.CTk):
         if spec_max is not None:
             self.ax.axvline(spec_max, color='#e74c3c', linestyle='dashed', linewidth=2, label=f'Max Spec ({spec_max:.4g})')
 
-        # Zoom to fit logic
         if do_zoom and data_min != float('inf') and data_max != float('-inf'):
             padding = (data_max - data_min) * 0.05
             if padding == 0: padding = 0.1 
