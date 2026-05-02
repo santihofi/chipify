@@ -627,7 +627,6 @@ class SimifyGUI(ctk.CTk):
         self.tree_frame.grid_columnconfigure(0, weight=1)
         self.tree_frame.grid_rowconfigure(0, weight=1)
         
-        # --- NEU: Cpk und Sigma in der Tabelle! ---
         columns = ("param", "sim_min", "sim_typ", "sim_max", "spec_min", "spec_max", "cpk", "sigma", "status")
         self.tree = ttk.Treeview(self.tree_frame, columns=columns, show="headings")
         
@@ -693,6 +692,12 @@ class SimifyGUI(ctk.CTk):
             width=140
         )
         self.plot_dist_dropdown.pack(side=tk.LEFT)
+
+        # --- NEU: Info Label für Readiness Metriken ---
+        self.info_frame = ctk.CTkFrame(row1, fg_color="#34495e", corner_radius=5)
+        self.info_frame.pack(side=tk.RIGHT, padx=(20, 0))
+        self.lbl_hist_metrics = ctk.CTkLabel(self.info_frame, text="Cpk: - | Sigma: -", text_color="white", font=ctk.CTkFont(size=12, weight="bold"))
+        self.lbl_hist_metrics.pack(padx=10, pady=2)
 
         ctk.CTkLabel(row2, text="Compare (Ref):", text_color="#f1c40f").pack(side=tk.LEFT, padx=(0, 5))
         self.compare_var = ctk.StringVar(value="None")
@@ -788,7 +793,6 @@ class SimifyGUI(ctk.CTk):
         self.adv_canvas = FigureCanvasTkAgg(self.adv_fig, master=self.tab_adv)
         self.adv_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
-        # --- NEU: Interactive Hover Tooltip für Scatter Plots ---
         self.scatter_annot = self.adv_fig.add_subplot(111).annotate(
             "", xy=(0,0), xytext=(15,15), textcoords="offset points",
             bbox=dict(boxstyle="round,pad=0.5", fc="#1c1c1c", ec="#3484F0", lw=1, alpha=0.9),
@@ -805,7 +809,7 @@ class SimifyGUI(ctk.CTk):
         if event.inaxes == self.adv_ax:
             cont, ind = self.sc_plot.contains(event)
             if cont:
-                idx = ind["ind"][0] # Greife den ersten Punkt bei Überlappung
+                idx = ind["ind"][0] 
                 row = self.scatter_df.iloc[idx]
                 run_id = row.name 
                 
@@ -814,7 +818,6 @@ class SimifyGUI(ctk.CTk):
                 
                 text_lines = [f"Run #{run_id}", "-"*15, f"{self.scatter_x_col}: {x_val:.4g}", f"{self.scatter_y_col}: {y_val:.4g}", "-"*15]
                 
-                # Zeige alle aktiven Sweep Parameter für genau diesen Punkt an!
                 if self.current_stim:
                     for p in self.current_stim.params.keys():
                         if p in row and self.scatter_df[p].nunique() > 1:
@@ -866,13 +869,11 @@ class SimifyGUI(ctk.CTk):
             pass_mask = valid_df['global_pass'] == True
             colors = np.where(pass_mask, '#2ecc71', '#e74c3c')
             
-            # Scatter Plot zeichnen & für Hover-Event speichern
             self.sc_plot = self.adv_ax.scatter(valid_df[x_col], valid_df[y_col], c=colors, alpha=0.7, edgecolors='white', linewidths=0.5, picker=5)
             self.scatter_df = valid_df.copy()
             self.scatter_x_col = x_col
             self.scatter_y_col = y_col
             
-            # Hover-Annotation neu initialisieren (weil self.adv_fig.clf() sie oben löscht!)
             self.scatter_annot = self.adv_ax.annotate("", xy=(0,0), xytext=(15,15), textcoords="offset points",
                 bbox=dict(boxstyle="round,pad=0.4", fc="#1c1c1c", ec="#3484F0", lw=1, alpha=0.95),
                 color="white", arrowprops=dict(arrowstyle="-|>", color="#3484F0"))
@@ -885,7 +886,6 @@ class SimifyGUI(ctk.CTk):
             self.adv_ax.spines['top'].set_visible(False)
             self.adv_ax.spines['right'].set_visible(False)
             
-            # Fake Legend für die Farben
             legend_elements = [Line2D([0], [0], marker='o', color='w', markerfacecolor='#2ecc71', label='Pass', markersize=8),
                                Line2D([0], [0], marker='o', color='w', markerfacecolor='#e74c3c', label='Fail', markersize=8)]
             self.adv_ax.legend(handles=legend_elements, facecolor='#2b2b2b', edgecolor='gray')
@@ -1126,7 +1126,6 @@ class SimifyGUI(ctk.CTk):
                     spec_min = fmt(v_min)
                     spec_max = fmt(v_max)
                     
-                    # --- NEU: Cpk und Sigma Berechnung ---
                     cpk_vals = []
                     z_vals = []
                     
@@ -1147,7 +1146,6 @@ class SimifyGUI(ctk.CTk):
                         sigma_str = f"{sigma_lvl:.2f}σ"
                     else:
                         if sim_std == 0.0 and (v_min is not None or v_max is not None):
-                            # Konstante Werte ohne Abweichung = "Perfekter" Cpk, sofern innerhalb Spec
                             if (v_min is None or sim_typ >= v_min) and (v_max is None or sim_typ <= v_max):
                                 cpk_str, sigma_str = "INF", "INF"
                             else:
@@ -1266,6 +1264,43 @@ class SimifyGUI(ctk.CTk):
         data_min = float('inf')
         data_max = float('-inf')
         
+        # --- NEU: Update Readiness Metrics Label im Histogram Tab ---
+        data_col = valid_df[param].dropna()
+        if not data_col.empty and self.current_stim:
+            sim_typ = data_col.mean()
+            sim_std = data_col.std() if len(data_col) > 1 else 0.0
+            
+            v_min, v_max = None, None
+            for t in self.current_stim.tests:
+                for v in t.value_lst:
+                    if v.name == param:
+                        v_min = getattr(v, 'vmin', getattr(v, 'min', None))
+                        v_max = getattr(v, 'vmax', getattr(v, 'max', None))
+                        
+            cpk_vals = []
+            z_vals = []
+            if sim_std > 0:
+                if v_min is not None:
+                    z_l = (sim_typ - v_min) / sim_std
+                    cpk_vals.append(z_l / 3.0)
+                    z_vals.append(z_l)
+                if v_max is not None:
+                    z_u = (v_max - sim_typ) / sim_std
+                    cpk_vals.append(z_u / 3.0)
+                    z_vals.append(z_u)
+                    
+            if cpk_vals:
+                cpk = min(cpk_vals)
+                sigma_lvl = min(z_vals)
+                
+                color = "#2ecc71" if cpk >= 1.33 else ("#f1c40f" if cpk >= 1.0 else "#e74c3c")
+                self.lbl_hist_metrics.configure(text=f"Cpk: {cpk:.2f} | Sigma: {sigma_lvl:.2f}σ", text_color=color)
+            else:
+                self.lbl_hist_metrics.configure(text="Cpk: - | Sigma: -", text_color="white")
+        else:
+            self.lbl_hist_metrics.configure(text="Cpk: - | Sigma: -", text_color="white")
+        # -------------------------------------------------------------
+
         if group_col != "None" and group_col in valid_df.columns:
             unique_vals = valid_df[group_col].unique()
             groups = [(f"{group_col}={val}", valid_df[valid_df[group_col] == val][param].dropna()) for val in unique_vals]
