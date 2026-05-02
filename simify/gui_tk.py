@@ -45,7 +45,7 @@ class SimifyGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Simify EDA Dashboard")
-        self.geometry("1250x950")
+        self.geometry("1300x950")
         
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -163,10 +163,8 @@ class SimifyGUI(ctk.CTk):
     def refresh_history(self):
         history_dir = os.path.join(settings.OUT_DIR, "history")
         runs = []
-        
         if os.path.exists(os.path.join(settings.OUT_DIR, "simulation_results.csv")):
             runs.append("Latest (simulation_results)")
-            
         if os.path.exists(history_dir):
             hist_files = glob.glob(os.path.join(history_dir, "run_*.csv"))
             hist_files.sort(reverse=True) 
@@ -193,7 +191,6 @@ class SimifyGUI(ctk.CTk):
 
     def on_history_select(self, selection, switch_tab=True):
         if not selection or selection == "No runs found" or not self.current_yaml_path: return
-        
         if selection == "Latest (simulation_results)":
             csv_path = os.path.join(settings.OUT_DIR, "simulation_results.csv")
         else:
@@ -204,7 +201,6 @@ class SimifyGUI(ctk.CTk):
         try:
             df = pd.read_csv(csv_path)
             stim = util.Stimuli(self.current_yaml_path)
-            
             self.lbl_current_run.configure(text=f"Viewing: {selection}")
             self.update_ui_results(df, stim, switch_tab=switch_tab)
             self.lbl_status.configure(text=f"Status: Loaded {selection}", text_color="#2ecc71")
@@ -231,7 +227,6 @@ class SimifyGUI(ctk.CTk):
 
         try:
             with PdfPages(pdf_path) as pdf:
-                # Page 1: Summary Text
                 fig_text = plt.figure(figsize=(8.27, 11.69)) 
                 fig_text.patch.set_facecolor('white')
                 ax_text = fig_text.add_subplot(111)
@@ -260,7 +255,6 @@ class SimifyGUI(ctk.CTk):
                 pdf.savefig(fig_text)
                 plt.close(fig_text)
 
-                # Page 2+: Histograms 
                 plot_cols = []
                 for test in self.current_stim.tests:
                     for val_obj in test.value_lst:
@@ -281,20 +275,16 @@ class SimifyGUI(ctk.CTk):
                     
                     ax.hist(data, bins='auto', density=True, color='#3498db', alpha=0.7, edgecolor='black', linewidth=0.5)
                     
-                    if s_min is not None:
-                        ax.axvline(s_min, color='red', linestyle='dashed', linewidth=2, label=f'Min Spec ({s_min:.4g})')
-                    if s_max is not None:
-                        ax.axvline(s_max, color='red', linestyle='dashed', linewidth=2, label=f'Max Spec ({s_max:.4g})')
+                    if s_min is not None: ax.axvline(s_min, color='red', linestyle='dashed', linewidth=2, label=f'Min Spec ({s_min:.4g})')
+                    if s_max is not None: ax.axvline(s_max, color='red', linestyle='dashed', linewidth=2, label=f'Max Spec ({s_max:.4g})')
                         
                     ax.tick_params(colors='black')
-                    if len(ax.get_legend_handles_labels()[1]) > 0:
-                        ax.legend(loc='best', facecolor='white', edgecolor='gray')
+                    if len(ax.get_legend_handles_labels()[1]) > 0: ax.legend(loc='best', facecolor='white', edgecolor='gray')
                     
                     fig.tight_layout()
                     pdf.savefig(fig)
                     plt.close(fig)
 
-                # Page N: Tornado Plot
                 target = plot_cols[0][0] if plot_cols else None
                 if target:
                     correlations = []
@@ -328,7 +318,6 @@ class SimifyGUI(ctk.CTk):
 
             self.lbl_status.configure(text=f"Status: PDF saved to out/reports/", text_color="#2ecc71")
             messagebox.showinfo("Export Successful", f"Report saved as:\n{os.path.basename(pdf_path)}")
-            
         except Exception as e:
             self.lbl_status.configure(text="Status: PDF Export Failed", text_color="red")
             messagebox.showerror("Export Error", f"Failed to generate PDF:\n{e}")
@@ -339,24 +328,18 @@ class SimifyGUI(ctk.CTk):
     def setup_editor_tab(self):
         self.tab_editor.grid_columnconfigure(0, weight=1)
         self.tab_editor.grid_rowconfigure(1, weight=1)
-        
         top_bar = ctk.CTkFrame(self.tab_editor, fg_color="transparent")
         top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        
         self.lbl_editor_title = ctk.CTkLabel(top_bar, text="Loading...", font=ctk.CTkFont(size=16, weight="bold"))
         self.lbl_editor_title.pack(side="left", padx=5)
-        
         self.editor_mode = ctk.StringVar(value="Form View")
         self.mode_selector = ctk.CTkSegmentedButton(top_bar, values=["Form View", "Raw YAML"], variable=self.editor_mode, command=self.switch_editor_mode)
         self.mode_selector.pack(side="left", padx=30)
-        
         btn_save = ctk.CTkButton(top_bar, text="💾 Save Datasheet", command=self.save_yaml, fg_color="#2ecc71", hover_color="#27ae60")
         btn_save.pack(side="right", padx=5)
-
         self.editor_scroll = ctk.CTkScrollableFrame(self.tab_editor, fg_color="transparent")
         self.editor_scroll.grid(row=1, column=0, sticky="nsew")
         self.editor_scroll.grid_columnconfigure(0, weight=1)
-
         self.raw_editor = ctk.CTkTextbox(self.tab_editor, font=ctk.CTkFont(family="Courier", size=14))
 
     def switch_editor_mode(self, mode):
@@ -694,26 +677,33 @@ class SimifyGUI(ctk.CTk):
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         control_frame.pack_propagate(False)
         
-        ctk.CTkLabel(control_frame, text="Measurement:").pack(side=tk.LEFT, padx=(0, 10))
+        ctk.CTkLabel(control_frame, text="Meas:").pack(side=tk.LEFT, padx=(0, 5))
         self.plot_param_var = ctk.StringVar(value="-")
-        self.plot_param_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.plot_param_var, command=self.update_plot, dynamic_resizing=False)
-        self.plot_param_dropdown.pack(side=tk.LEFT, padx=(0, 20))
+        self.plot_param_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.plot_param_var, command=self.update_plot, dynamic_resizing=False, width=130)
+        self.plot_param_dropdown.pack(side=tk.LEFT, padx=(0, 10))
         
-        ctk.CTkLabel(control_frame, text="Fit Curve:").pack(side=tk.LEFT, padx=(0, 10))
+        # --- NEW: Group By Dropdown ---
+        ctk.CTkLabel(control_frame, text="Group by:").pack(side=tk.LEFT, padx=(5, 5))
+        self.group_by_var = ctk.StringVar(value="None")
+        self.group_by_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.group_by_var, command=self.update_plot, dynamic_resizing=False, width=110)
+        self.group_by_dropdown.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # --- NEW: More distributions ---
+        ctk.CTkLabel(control_frame, text="Fit:").pack(side=tk.LEFT, padx=(5, 5))
         self.plot_dist_var = ctk.StringVar(value="Gauss (Normal)")
         self.plot_dist_dropdown = ctk.CTkOptionMenu(
             control_frame, 
             variable=self.plot_dist_var, 
-            values=["Gauss (Normal)", "KDE (Smoothed)", "Uniform", "None"],
+            values=["Gauss (Normal)", "KDE (Smoothed)", "Uniform", "Log-Normal", "Exponential", "None"],
             command=self.update_plot,
-            dynamic_resizing=False
+            dynamic_resizing=False,
+            width=130
         )
-        self.plot_dist_dropdown.pack(side=tk.LEFT, padx=(0, 30))
+        self.plot_dist_dropdown.pack(side=tk.LEFT, padx=(0, 10))
 
-        # --- A/B Comparison Overlay ---
-        ctk.CTkLabel(control_frame, text="Compare to:", text_color="#f1c40f").pack(side=tk.LEFT, padx=(0, 10))
+        ctk.CTkLabel(control_frame, text="Ref:").pack(side=tk.LEFT, padx=(5, 5))
         self.compare_var = ctk.StringVar(value="None")
-        self.compare_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.compare_var, command=self.update_plot, dynamic_resizing=False, fg_color="#d35400", button_color="#8e44ad", button_hover_color="#9b59b6")
+        self.compare_dropdown = ctk.CTkOptionMenu(control_frame, variable=self.compare_var, command=self.update_plot, dynamic_resizing=False, fg_color="#d35400", button_color="#8e44ad", button_hover_color="#9b59b6", width=140)
         self.compare_dropdown.pack(side=tk.LEFT)
 
         plt.style.use('dark_background')
@@ -1002,7 +992,6 @@ class SimifyGUI(ctk.CTk):
         ctk.CTkLabel(self.wc_scroll, text=f"LOG:\n{error_msg}", text_color="red", justify="left").pack(anchor="w", padx=20, pady=20)
 
     def update_ui_results(self, df, stim, switch_tab=False):
-        # --- PANDAS NaN FIX ---
         if 'sim_error' not in df.columns:
             df['sim_error'] = 'None'
         df['sim_error'] = df['sim_error'].fillna('None').astype(str)
@@ -1057,25 +1046,35 @@ class SimifyGUI(ctk.CTk):
                         
                     self.tree.insert("", tk.END, values=(p_name, fmt(sim_min), fmt(sim_typ), fmt(sim_max), spec_min, spec_typ, spec_max, status), tags=tags)
                     
-        # Check if run matched YAML at all
         if not meas_cols and total > 0:
              self.tree.insert("", tk.END, values=("No matching params", "-", "-", "-", "-", "-", "-", "WARN"), tags=('warn',))
                     
         numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
         all_plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
         
+        # --- NEW: Group By Dropdown Logic ---
+        sweep_params = [p for p in list(stim.params.keys()) if p in valid_df.columns and valid_df[p].nunique() > 1]
+        self.group_by_dropdown.configure(values=["None"] + sweep_params)
+        if self.group_by_var.get() not in ["None"] + sweep_params:
+            self.group_by_var.set("None")
+        
         if meas_cols:
             self.plot_param_dropdown.configure(values=meas_cols)
-            if self.plot_param_var.get() not in meas_cols: self.plot_param_var.set(meas_cols[0])
+            if self.plot_param_var.get() not in meas_cols:
+                self.plot_param_var.set(meas_cols[0])
             self.update_plot()
+            
             self.tornado_target_dropdown.configure(values=meas_cols)
-            if self.tornado_target_var.get() not in meas_cols: self.tornado_target_var.set(meas_cols[0])
+            if self.tornado_target_var.get() not in meas_cols:
+                self.tornado_target_var.set(meas_cols[0])
             
         if all_plot_cols:
             self.scatter_x_dropdown.configure(values=all_plot_cols)
             self.scatter_y_dropdown.configure(values=all_plot_cols)
-            if self.scatter_x_var.get() not in all_plot_cols: self.scatter_x_var.set(all_plot_cols[0])
-            if self.scatter_y_var.get() not in all_plot_cols: self.scatter_y_var.set(all_plot_cols[1] if len(all_plot_cols) > 1 else all_plot_cols[0])
+            if self.scatter_x_var.get() not in all_plot_cols:
+                self.scatter_x_var.set(all_plot_cols[0])
+            if self.scatter_y_var.get() not in all_plot_cols:
+                self.scatter_y_var.set(all_plot_cols[1] if len(all_plot_cols) > 1 else all_plot_cols[0])
             
         self.update_adv_plots()
                     
@@ -1130,24 +1129,75 @@ class SimifyGUI(ctk.CTk):
             
         param = self.plot_param_var.get()
         dist_type = self.plot_dist_var.get()
+        group_col = self.group_by_var.get()
         
         valid_df = self.current_df[self.current_df['sim_error'] == 'None']
         if param not in valid_df.columns: return
-            
-        data = valid_df[param].dropna()
-        if len(data) == 0: return
 
         self.ax.clear()
         self.ax.grid(True, linestyle='--', alpha=0.3)
-        self.ax.set_title(f"Distribution of: {param}", color="white", pad=10)
+        title_suffix = f" grouped by {group_col}" if group_col != "None" else ""
+        self.ax.set_title(f"Distribution of: {param}{title_suffix}", color="white", pad=10)
         self.ax.set_xlabel("Simulated Value")
         self.ax.set_ylabel("Density")
         
-        self.ax.hist(data, bins='auto', density=True, color='#3484F0', alpha=0.7, edgecolor='white', linewidth=0.5, label="Current Run")
+        # --- NEW: Grouping Logic ---
+        if group_col != "None" and group_col in valid_df.columns:
+            unique_vals = valid_df[group_col].unique()
+            # Erzeuge Tupel (Gruppen-Name, Daten)
+            groups = [(f"{group_col}={val}", valid_df[valid_df[group_col] == val][param].dropna()) for val in unique_vals]
+        else:
+            groups = [("Current Run", valid_df[param].dropna())]
+            
+        colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(groups))))
+        
+        for i, (grp_name, grp_data) in enumerate(groups):
+            if grp_data.empty: continue
+            
+            c = '#3484F0' if group_col == "None" else colors[i % 10]
+            
+            # 1. Daten fitten und berechnen
+            label_text = grp_name
+            fit_x = None
+            fit_y = None
+            
+            if len(grp_data) > 1 and dist_type != "None":
+                x_fit = np.linspace(min(grp_data), max(grp_data), 100)
+                try:
+                    if dist_type == "Gauss (Normal)":
+                        mu, std = stats.norm.fit(grp_data)
+                        fit_y = stats.norm.pdf(x_fit, mu, std)
+                        fit_x = x_fit
+                        label_text += f" (μ={mu:.3g}, σ={std:.3g})"
+                    elif dist_type == "KDE (Smoothed)":
+                        kde = stats.gaussian_kde(grp_data)
+                        fit_y = kde(x_fit)
+                        fit_x = x_fit
+                    elif dist_type == "Uniform":
+                        loc, scale = stats.uniform.fit(grp_data)
+                        fit_y = stats.uniform.pdf(x_fit, loc, scale)
+                        fit_x = x_fit
+                    elif dist_type == "Log-Normal":
+                        shape, loc, scale = stats.lognorm.fit(grp_data)
+                        fit_y = stats.lognorm.pdf(x_fit, shape, loc, scale)
+                        fit_x = x_fit
+                    elif dist_type == "Exponential":
+                        loc, scale = stats.expon.fit(grp_data)
+                        fit_y = stats.expon.pdf(x_fit, loc, scale)
+                        fit_x = x_fit
+                except Exception:
+                    pass
+
+            # 2. Histogramm zeichnen (mit vollem Label)
+            self.ax.hist(grp_data, bins='auto', density=True, color=c, alpha=0.5, edgecolor='white', linewidth=0.5, label=label_text)
+            
+            # 3. Fit-Kurve zeichnen (ohne extra Label, damit die Legende clean bleibt)
+            if fit_x is not None and fit_y is not None:
+                self.ax.plot(fit_x, fit_y, color=c, linewidth=2)
         
         # --- A/B Comparison Overlay ---
         comp_run = self.compare_var.get()
-        if comp_run != "None" and comp_run != "-":
+        if comp_run != "None" and comp_run != "-" and group_col == "None": 
             try:
                 c_path = os.path.join(settings.OUT_DIR, "history", comp_run) if "run_" in comp_run else os.path.join(settings.OUT_DIR, "simulation_results.csv")
                 c_df = pd.read_csv(c_path)
@@ -1176,24 +1226,6 @@ class SimifyGUI(ctk.CTk):
             self.ax.axvline(spec_min, color='#e74c3c', linestyle='dashed', linewidth=2, label=f'Min Spec ({spec_min:.4g})')
         if spec_max is not None:
             self.ax.axvline(spec_max, color='#e74c3c', linestyle='dashed', linewidth=2, label=f'Max Spec ({spec_max:.4g})')
-
-        x = np.linspace(min(data), max(data), 100)
-        if dist_type == "Gauss (Normal)":
-            mu, std = stats.norm.fit(data)
-            p = stats.norm.pdf(x, mu, std)
-            self.ax.plot(x, p, '#2ecc71', linewidth=2, label=f'Gauss Fit ($\\mu={mu:.4g}, \\sigma={std:.4g}$)')
-            
-        elif dist_type == "KDE (Smoothed)":
-            try:
-                kde = stats.gaussian_kde(data)
-                self.ax.plot(x, kde(x), '#9b59b6', linewidth=2, label='Kernel Density')
-            except np.linalg.LinAlgError:
-                pass 
-                
-        elif dist_type == "Uniform":
-            loc, scale = stats.uniform.fit(data)
-            p = stats.uniform.pdf(x, loc, scale)
-            self.ax.plot(x, p, '#f1c40f', linewidth=2, label='Uniform Fit')
 
         if len(self.ax.get_legend_handles_labels()[1]) > 0:
             self.ax.legend(loc='best', facecolor='#2b2b2b', edgecolor='gray')
