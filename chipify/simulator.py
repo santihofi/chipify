@@ -12,6 +12,7 @@ from tqdm import tqdm
 from jinja2 import Template
 
 from chipify import settings
+from chipify import util
 
 def stage_files_to_ram():
     print(f"[*] Load library files to RAM({settings.FAST_TMP})...")
@@ -145,49 +146,43 @@ def generate_cases(stim):
     return [dict(zip(param_names, combo)) for combo in itertools.product(*param_values)]
 
 def run_sim(stim, progress_callback=None):
-    param_sets = generate_cases(stim)
-    generate_templates(stim)
-    stage_files_to_ram()
-    
-    worker_args = [(params, stim.tests) for params in param_sets]
-    results = []
-    
     try:
-        available_cores = len(os.sched_getaffinity(0))
-    except AttributeError:
-        available_cores = os.cpu_count()
+        param_sets = generate_cases(stim)
+        generate_templates(stim)
+        stage_files_to_ram()
         
-    num_cores = max(1, available_cores - 1)
-    print(f"[*] Starting Multiprocessing with {num_cores} cores {len(param_sets)} Iterationen...")
+        worker_args = [(params, stim.tests) for params in param_sets]
+        results = []
+        
+        num_cores = util.get_num_cores()
+        print(f"[*] Starting Multiprocessing with {num_cores} cores {len(param_sets)} Iterationen...")
 
-    try:
+    
         with ProcessPoolExecutor(max_workers=num_cores) as executor:
             futures = [executor.submit(simulate_single_case, arg) for arg in worker_args]
             
             total_tasks = len(futures)
             completed = 0
             
-            # WICHTIG: Das try-except nach innen verlagern!
-            try:
-                for future in tqdm(as_completed(futures), total=total_tasks):
-                    results.append(future.result())
-                    completed += 1
+            for future in tqdm(as_completed(futures), total=total_tasks):
+                results.append(future.result())
+                completed += 1
                     
-                    if progress_callback:
-                        progress_callback(completed, total_tasks)
+                if progress_callback:
+                    progress_callback(completed, total_tasks)
                         
-            except InterruptedError:
-                print("[-] Simulation interrupted by user! Breche Warteschlange ab...")
-                # 1. Alle noch nicht gestarteten Tasks stornieren
-                for future in futures:
-                    future.cancel()
-                # 2. Schleife verlassen, 'with'-Block wartet nur noch auf laufende Tasks
-                print("all tasks cancelled")
-                return None 
+            
                 
-        df = pd.DataFrame(results)
-        return df
-
+            df = pd.DataFrame(results)
+            return df
+    
+    except InterruptedError:
+        print("[-] Simulation interrupted by user! Breche Warteschlange ab...")
+        for future in futures:
+            future.cancel()
+        print("all tasks cancelled")
+        return None 
+    
     except Exception as e:
         print(f"[-] Error occurred during simulation: {e}")
         return None

@@ -1,4 +1,5 @@
 import yaml
+import os
 
 class Stimuli:
     def __init__(self, yaml_file=None):
@@ -56,3 +57,11 @@ class Value:
         if self.vmax is not None and val > self.vmax:
             return False
         return True
+    
+def get_num_cores():
+    try:
+        available_cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        available_cores = os.cpu_count()
+        
+    return max(1, available_cores - 1)
