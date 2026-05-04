@@ -854,7 +854,7 @@ class SimifyGUI(ctk.CTk):
     # SIMULATION CORE
     # ==========================================
     def progress_callback_wrapper(self, current, total):
-        if self.stop_event.is_set(): raise InterruptedError("Simulation abgebrochen durch Benutzer")
+        if self.stop_event.is_set(): raise InterruptedError("Simulation canceled!")
         self.after(0, self._set_progress_ui, current, total)
         
     def _set_progress_ui(self, current, total):
@@ -892,21 +892,27 @@ class SimifyGUI(ctk.CTk):
             stim = util.Stimuli(yaml_path)
             df = simulator.run_sim(stim, progress_callback=self.progress_callback_wrapper)
             
-            csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
-            df.to_csv(csv_out, index=False)
-            
-            try:
-                history_dir = os.path.join(settings.OUT_DIR, "history")
-                os.makedirs(history_dir, exist_ok=True)
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                history_file = os.path.join(history_dir, f"run_{timestamp}.csv")
-                df.to_csv(history_file, index=False)
-            except Exception as e: print(f"Konnte Run nicht in Historie speichern: {e}")
+            if df is not None:
+
+                csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
+                df.to_csv(csv_out, index=False)
                 
-            self.after(0, self.refresh_history)
-            self.after(0, self.update_ui_results, df, stim, True)
-        except InterruptedError as e: self.after(0, self.show_error, str(e))
-        except Exception as e: self.after(0, self.show_error, str(e))
+                try:
+                    history_dir = os.path.join(settings.OUT_DIR, "history")
+                    os.makedirs(history_dir, exist_ok=True)
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    history_file = os.path.join(history_dir, f"run_{timestamp}.csv")
+                    df.to_csv(history_file, index=False)
+                except Exception as e: print(f"Konnte Run nicht in Historie speichern: {e}")
+                self.after(0, self.refresh_history)
+                self.after(0, self.update_ui_results, df, stim, True)
+
+            set_btn_start_ready(self)
+
+        except Exception as e: 
+            self.after(0, self.show_error, str(e))
+            print(f"Simulation failed: {e}")
+            set_btn_start_ready(self)
 
     def show_error(self, error_msg):
         self.lbl_status.configure(text="Status: Error / Aborted!", text_color="red")
@@ -1056,10 +1062,11 @@ class SimifyGUI(ctk.CTk):
             self.lbl_current_run.configure(text=f"Viewing: Latest (simulation_results)")
             self.history_dropdown.set("Latest (simulation_results)")
             
-        self.lbl_status.configure(text=f"Status: Ready", text_color="#2ecc71")
-        self.btn_start.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
-        self.btn_refresh.configure(state="normal")
+def set_btn_start_ready(self):
+    self.lbl_status.configure(text=f"Status: Ready", text_color="#2ecc71")
+    self.btn_start.configure(state="normal")
+    self.btn_stop.configure(state="disabled")
+    self.btn_refresh.configure(state="normal")
 
 def main():
     app = SimifyGUI()

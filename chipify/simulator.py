@@ -144,7 +144,7 @@ def generate_cases(stim):
     param_values = stim.params.values()
     return [dict(zip(param_names, combo)) for combo in itertools.product(*param_values)]
 
-def run_sim(stim, progress_callback=None): # <--- HIER FEHLTE DAS ARGUMENT!
+def run_sim(stim, progress_callback=None):
     param_sets = generate_cases(stim)
     generate_templates(stim)
     stage_files_to_ram()
@@ -159,20 +159,35 @@ def run_sim(stim, progress_callback=None): # <--- HIER FEHLTE DAS ARGUMENT!
         
     num_cores = max(1, available_cores - 1)
     print(f"[*] Starting Multiprocessing with {num_cores} cores {len(param_sets)} Iterationen...")
-    
-    with ProcessPoolExecutor(max_workers=num_cores) as executor:
-        futures = [executor.submit(simulate_single_case, arg) for arg in worker_args]
-        
-        total_tasks = len(futures)
-        completed = 0
-        
-        for future in tqdm(as_completed(futures), total=total_tasks):
-            results.append(future.result())
-            completed += 1
+
+    try:
+        with ProcessPoolExecutor(max_workers=num_cores) as executor:
+            futures = [executor.submit(simulate_single_case, arg) for arg in worker_args]
             
-            # Der GUI Bescheid geben, dass ein weiterer Run fertig ist
-            if progress_callback:
-                progress_callback(completed, total_tasks)
+            total_tasks = len(futures)
+            completed = 0
             
-    df = pd.DataFrame(results)
-    return df
+            # WICHTIG: Das try-except nach innen verlagern!
+            try:
+                for future in tqdm(as_completed(futures), total=total_tasks):
+                    results.append(future.result())
+                    completed += 1
+                    
+                    if progress_callback:
+                        progress_callback(completed, total_tasks)
+                        
+            except InterruptedError:
+                print("[-] Simulation interrupted by user! Breche Warteschlange ab...")
+                # 1. Alle noch nicht gestarteten Tasks stornieren
+                for future in futures:
+                    future.cancel()
+                # 2. Schleife verlassen, 'with'-Block wartet nur noch auf laufende Tasks
+                print("all tasks cancelled")
+                return None 
+                
+        df = pd.DataFrame(results)
+        return df
+
+    except Exception as e:
+        print(f"[-] Error occurred during simulation: {e}")
+        return None
