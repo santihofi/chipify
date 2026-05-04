@@ -14,7 +14,7 @@ from jinja2 import Template
 from chipify import settings
 
 def stage_files_to_ram():
-    print(f"[*] Kopiere Bibliotheken in den Linux-RAM ({settings.FAST_TMP})...")
+    print(f"[*] Load library files to RAM({settings.FAST_TMP})...")
     search_patterns = ["*.lib", "*.mod", "*.inc"]
     
     for pattern in search_patterns:
@@ -26,10 +26,10 @@ def stage_files_to_ram():
                 try:
                     shutil.copy2(file_path, dest_path)
                 except Exception as e:
-                    print(f"[-] Warnung: Konnte {filename} nicht kopieren: {e}")
+                    print(f"[-] Warning: Could not copy {filename}: {e}")
 
 def run_xschem(xschem_file):
-    print(f"[*] Generiere SPICE-Netzliste aus {xschem_file}...")
+    print(f"[*] Generating SPICE netlist from {xschem_file}...")
     try:
         subprocess.run(
             ['xschem', '-n', '-s', '-q', '-x', '-o', settings.FAST_TMP, xschem_file],
@@ -40,16 +40,11 @@ def run_xschem(xschem_file):
             cwd=settings.WORK_DIR 
         )
     except subprocess.CalledProcessError as e:
-        print("[-] Fehler beim Ausführen von Xschem!")
-        print("Fehlermeldung:\n", e.stderr)
+        print("[-] Error occurred while running Xschem!")
+        print("Error message:\n", e.stderr)
         sys.exit(1)
 
 def run_ngspice(netlist, timeout_sec=10):
-    if ".control" in netlist:
-        netlist = netlist.replace(".control", ".control\nset num_threads=1\n")
-    else:
-        netlist += "\n.control\nset num_threads=1\n.endc\n"
-
     custom_env = os.environ.copy()
     custom_env["OMP_NUM_THREADS"] = "1"
     
@@ -137,7 +132,12 @@ def generate_templates(stim):
         
         spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
         with open(spice_file, "r") as f:
-            test.template_str = f.read()
+            netlist = f.read()
+            if ".control" in netlist:
+                netlist = netlist.replace(".control", ".control\nset num_threads=1\n")
+            else:
+                netlist += "\n.control\nset num_threads=1\n.endc\n"
+            test.template_str = netlist
 
 def generate_cases(stim):
     param_names = stim.params.keys()
@@ -158,7 +158,7 @@ def run_sim(stim, progress_callback=None): # <--- HIER FEHLTE DAS ARGUMENT!
         available_cores = os.cpu_count()
         
     num_cores = max(1, available_cores - 1)
-    print(f"[*] Starte Multiprocessing mit {num_cores} ECHTEN Kernen für {len(param_sets)} Iterationen...")
+    print(f"[*] Starting Multiprocessing with {num_cores} cores {len(param_sets)} Iterationen...")
     
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         futures = [executor.submit(simulate_single_case, arg) for arg in worker_args]
