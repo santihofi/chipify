@@ -110,15 +110,19 @@ def simulate_single_case(args):
             
             all_passed = True
             for i, val_str in enumerate(values):
-                val_float = float(val_str)
                 val_obj = test.value_lst[i]
-                
-                sample[val_obj.name] = val_float
-                sample[f"{val_obj.name}_pass"] = val_obj.isPass(val_float)
-                
-                if not val_obj.isPass(val_float):
+                # if values are not valid floats, we consider it a simulation error
+                try:
+                    val_float = float(val_str)
+                    sample[val_obj.name] = val_float
+                    sample[f"{val_obj.name}_pass"] = val_obj.isPass(val_float)
+                    if not val_obj.isPass(val_float):
+                        all_passed = False
+
+                except ValueError:  
+                    sample['sim_error'] = f"{test.tb_path}: INVALID_OUTPUT({val_str})"
                     all_passed = False
-                    
+
             sample[f"{test.tb_path}_overall_pass"] = all_passed
         else:
              sample['sim_error'] = f"{test.tb_path}: NO_MY_DATA_FOUND"
@@ -177,7 +181,7 @@ def run_sim(stim, progress_callback=None):
             return df
     
     except InterruptedError:
-        print("[-] Simulation interrupted by user! Breche Warteschlange ab...")
+        print("[-] Simulation interrupted by user!")
         for future in futures:
             future.cancel()
         print("all tasks cancelled")
