@@ -1,16 +1,16 @@
-# simify.py
+# chipify.py
 import argparse
 import os
 import sys
 
-from simify import util
-from simify import settings
-from simify import simulator
-from simify.analyzer import print_summary
+from chipify import util
+from chipify import settings
+from chipify import simulator
+from chipify.analyzer import print_summary
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Simify: High-Performance Mismatch Simulation Wrapper für Xschem und Ngspice.",
+        description="chipify: High-Performance Mismatch Simulation Wrapper for Xschem und Ngspice.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     
@@ -18,18 +18,18 @@ def main():
         "-c", "--config", 
         type=str, 
         default="datasheet.yaml", 
-        help="Name der YAML-Konfigurationsdatei.\n(Wird automatisch im Ordner '../in/' gesucht).\nStandard: datasheet.yaml"
+        help="Name of .yaml config file.\n(Wird automatisch im Ordner '../in/' gesucht).\nStandard: datasheet.yaml"
     )
     
     args = parser.parse_args()
     yaml_path = os.path.join(settings.IN_DIR, args.config)
     
     if not os.path.exists(yaml_path):
-        print(f"[-] Fatal Error: Die Konfigurationsdatei '{yaml_path}' wurde nicht gefunden!")
+        print(f"[-] Fatal Error: configuration file '{yaml_path}' not found!")
         sys.exit(1)
         
-    print(f"[*] Initialisiere Simify...")
-    print(f"[*] Lade Konfiguration: {args.config}")
+    print(f"[*] Initialising chipify...")
+    print(f"[*] Loading configuration: {args.config}")
     
     # 1. Datenmodell initialisieren
     stim = util.Stimuli(yaml_path)
@@ -40,16 +40,16 @@ def main():
     # 3. Rohdaten als CSV speichern
     csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
     df.to_csv(csv_out, index=False)
-    print(f"[+] Fertig! Ergebnisse in {csv_out} gespeichert.")
+    print(f"[+] Finished! Results saved to {csv_out}.")
     
     # 4. Daten analysieren und Konsolen-Dashboard ausgeben
     print_summary(df, stim)
     
 def run_gui():
-    """Startet die native Tkinter Desktop-App für Simify."""
+    """Startet die native Tkinter Desktop-App für chipify."""
     # Wir importieren hier erst, damit das CLI ohne X11-Server lauffähig bleibt
-    from simify import gui_tk
-    print("[*] Starte Simify Desktop GUI...")
+    from chipify import gui_tk
+    print("[*] Starting chipify Desktop GUI...")
     gui_tk.main()
 
 if __name__ == "__main__":

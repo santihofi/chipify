@@ -13,13 +13,13 @@ from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from simify import settings
-from simify import simulator
-from simify import util
+from chipify import settings
+from chipify import simulator
+from chipify import util
 
 # --- NEUE MODULE IMPORTE ---
-from simify.plot_manager import PlotManager
-from simify import debug_export
+from chipify.plot_manager import PlotManager
+from chipify import debug_export
 
 # ==========================================
 # --- YAML FORMATTING OVERRIDES ---
@@ -47,7 +47,7 @@ ctk.set_default_color_theme("blue")
 class SimifyGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Simify EDA Dashboard")
+        self.title("chipify EDA Dashboard")
         self.geometry("1300x950")
         
         self.grid_columnconfigure(1, weight=1)

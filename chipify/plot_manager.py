@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import scipy.stats as stats
-from simify import settings
+from chipify import settings
 
 class PlotManager:
     @staticmethod

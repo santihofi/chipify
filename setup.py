@@ -1,10 +1,10 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="simify",
+    name="chipify",
     version="0.1.0",
     description="High-Performance Mismatch Simulation Wrapper",
-    author="Dein Name",
+    author="Santiago Hofwimmer",
     packages=find_packages(), 
     install_requires=[
         "pandas",
@@ -18,8 +18,8 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "simify=simify.cli:main", 
-            "simify-gui=simify.cli:run_gui", 
+            "chipify-cli=chipify.cli:main", 
+            "chipify=chipify.cli:run_gui", 
         ]
     }
 )
