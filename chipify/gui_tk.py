@@ -44,10 +44,13 @@ yaml.Dumper.add_representer(QuotedString, represent_quoted_str)
 ctk.set_appearance_mode("dark")  
 ctk.set_default_color_theme("blue")  
 
+background_color = "#000000"
+panel_color = "#1a1a1a"
+
 class SimifyGUI(ctk.CTk):
     def __init__(self):
-        super().__init__()
-        self.title("chipify EDA Dashboard")
+        super().__init__(fg_color=background_color)
+        self.title("Chipify EDA Dashboard")
         self.geometry("1300x950")
         
         self.grid_columnconfigure(1, weight=1)
@@ -57,7 +60,6 @@ class SimifyGUI(ctk.CTk):
         self.current_stim = None
         self.stop_event = threading.Event()
         
-        # --- NEU: Zwischenspeicher für Dropdown-Logik ---
         self.all_plot_cols = []
         self.sweep_params = []
         
@@ -84,10 +86,10 @@ class SimifyGUI(ctk.CTk):
         self.after(500, self.auto_load_latest_run)
         
     def setup_left_panel(self):
-        self.left_frame = ctk.CTkFrame(self, width=260, corner_radius=0)
+        self.left_frame = ctk.CTkFrame(self, width=260, corner_radius=0, fg_color=panel_color)
         self.left_frame.grid(row=0, column=0, sticky="nsew")
         self.left_frame.grid_rowconfigure(10, weight=1) 
-        self.left_frame.pack_propagate(False)
+        self.left_frame.grid_propagate(False)
         
         ctk.CTkLabel(self.left_frame, text="Configuration", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=20, pady=(20, 5), sticky="w")
         ctk.CTkLabel(self.left_frame, text="Current Datasheet:").grid(row=1, column=0, padx=20, pady=(5, 0), sticky="w")
@@ -143,7 +145,7 @@ class SimifyGUI(ctk.CTk):
         self.lbl_yield = ctk.CTkLabel(self.metrics_frame, text="Global Yield: -", font=ctk.CTkFont(size=14, weight="bold"))
         self.lbl_yield.grid(row=0, column=2)
         
-        self.tabs = ctk.CTkTabview(self.right_frame)
+        self.tabs = ctk.CTkTabview(self.right_frame, fg_color=panel_color)
         self.tabs.grid(row=2, column=0, sticky="nsew")
         
         self.tab_editor = self.tabs.add("Datasheet Editor") 
@@ -333,9 +335,9 @@ class SimifyGUI(ctk.CTk):
         param_header = ctk.CTkFrame(self.editor_scroll, fg_color="transparent")
         param_header.pack(fill="x", pady=(10, 5))
         ctk.CTkLabel(param_header, text="Sweep Parameters", font=ctk.CTkFont(size=16, weight="bold"), text_color="#3484F0").pack(side="left", padx=5)
-        ctk.CTkButton(param_header, text="+ Add Parameter", width=120, height=24, command=self.action_add_param).pack(side="right", padx=5)
+        ctk.CTkButton(param_header, text="+ Add Parameter", width=120, height=24, command=self.action_add_param, border_width=1).pack(side="right", padx=5)
         
-        params_frame = ctk.CTkFrame(self.editor_scroll)
+        params_frame = ctk.CTkFrame(self.editor_scroll, fg_color=panel_color)
         params_frame.pack(fill="x", padx=5, pady=5)
         params_frame.grid_columnconfigure(1, weight=1)
         
@@ -645,8 +647,8 @@ class SimifyGUI(ctk.CTk):
 
         plt.style.use('dark_background')
         self.fig, self.ax = plt.subplots(figsize=(6, 4))
-        self.fig.patch.set_facecolor('#2b2b2b') 
-        self.ax.set_facecolor('#2b2b2b')
+        self.fig.patch.set_facecolor(panel_color) 
+        self.ax.set_facecolor(panel_color)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.tab_hist)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
@@ -747,7 +749,7 @@ class SimifyGUI(ctk.CTk):
         self.tornado_target_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.tornado_target_var, command=self.update_adv_plots, dynamic_resizing=False)
 
         self.adv_fig = plt.figure(figsize=(8, 5))
-        self.adv_fig.patch.set_facecolor('#2b2b2b')
+        self.adv_fig.patch.set_facecolor(panel_color)
         self.adv_canvas = FigureCanvasTkAgg(self.adv_fig, master=self.tab_adv)
         self.adv_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
@@ -832,7 +834,7 @@ class SimifyGUI(ctk.CTk):
         
         self.sc_plot, self.scatter_df = PlotManager.draw_adv_plot(
             self.adv_fig, self.adv_fig.axes[0] if self.adv_fig.axes else self.adv_fig.add_subplot(111), 
-            self.adv_canvas, valid_df, self.current_stim, mode, x_col, y_col, target
+            self.adv_canvas, valid_df, self.current_stim, mode, x_col, y_col, target, bg_color=panel_color
         )
         
         if mode == "Scatter Plot":
@@ -842,7 +844,7 @@ class SimifyGUI(ctk.CTk):
     def apply_treeview_dark_style(self):
         style = ttk.Style()
         style.theme_use("default")
-        style.configure("Treeview", background="#2b2b2b", foreground="white", rowheight=25, fieldbackground="#2b2b2b", borderwidth=0)
+        style.configure("Treeview", background=panel_color, foreground="white", rowheight=25, fieldbackground=panel_color, borderwidth=0)
         style.map('Treeview', background=[('selected', '#1f538d')])
         style.configure("Treeview.Heading", background="#565b5e", foreground="white", relief="flat")
         style.map("Treeview.Heading", background=[('active', '#3484F0')])

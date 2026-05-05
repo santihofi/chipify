@@ -106,11 +106,10 @@ class PlotManager:
         canvas.draw()
 
     @staticmethod
-    def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target):
-        # FIX: Die komplette Figur bereinigen, um alte Colorbars restlos zu löschen!
+    def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b"):
         fig.clf()
         ax = fig.add_subplot(111)
-        ax.set_facecolor('#2b2b2b')
+        ax.set_facecolor(bg_color)
         sc_plot, scatter_df = None, None
 
         if mode == "Scatter Plot":
@@ -130,7 +129,7 @@ class PlotManager:
             
             legend_elements = [Line2D([0], [0], marker='o', color='w', markerfacecolor='#2ecc71', label='Pass', markersize=8),
                                Line2D([0], [0], marker='o', color='w', markerfacecolor='#e74c3c', label='Fail', markersize=8)]
-            ax.legend(handles=legend_elements, facecolor='#2b2b2b', edgecolor='gray')
+            ax.legend(handles=legend_elements, facecolor="#2b2b2b", edgecolor='gray')
 
         elif mode == "Corner Yield Matrix":
             if x_col not in valid_df.columns or y_col not in valid_df.columns: return None, None

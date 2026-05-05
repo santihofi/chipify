@@ -149,7 +149,7 @@ def generate_cases(stim):
     param_values = stim.params.values()
     return [dict(zip(param_names, combo)) for combo in itertools.product(*param_values)]
 
-def run_sim(stim, progress_callback=None):
+def run_sim(stim, progress_callback=None, simulator="ngspice"):
     try:
         param_sets = generate_cases(stim)
         generate_templates(stim)
@@ -184,9 +184,8 @@ def run_sim(stim, progress_callback=None):
         print("[-] Simulation interrupted by user!")
         for future in futures:
             future.cancel()
-        print("all tasks cancelled")
         return None 
     
     except Exception as e:
-        print(f"[-] Error occurred during simulation: {e}")
+        print(f"[-] Error occurred during simulation: {e} - this should not happen")
         return None
