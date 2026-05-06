@@ -21,6 +21,7 @@ DEFAULTS: dict = {
     "process_start_method": "auto",   # auto|forkserver|spawn
     "chunk_size": "auto",             # auto|1|2|4|8|16|32|64|128|256
     "custom_equations": [],           # [{"name": "eff", "expr": "p_out / p_in * 100"}, ...]
+    "multiplot_config": [],           # persisted PlotCell configs for Multi-Plot Dashboard
 }
 
 _logging_ready = False

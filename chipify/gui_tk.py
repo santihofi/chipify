@@ -210,6 +210,7 @@ class SimifyGUI(ctk.CTk):
         self.current_df = None
         self.current_stim = None
         self.last_sim_duration_sec = None
+        self.multiplot_window = None
         self.stop_event = threading.Event()
         
         self.all_plot_cols = []
@@ -275,7 +276,15 @@ class SimifyGUI(ctk.CTk):
             fg_color="transparent", border_width=1,
             text_color=("gray10", "#DCE4EE")
         )
-        self.btn_settings.grid(row=9, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.btn_settings.grid(row=9, column=0, padx=20, pady=(0, 8), sticky="ew")
+
+        self.btn_multiplot = ctk.CTkButton(
+            self.left_frame, text="🗖  Multi-Plot Dashboard",
+            command=self.open_multiplot,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE"),
+        )
+        self.btn_multiplot.grid(row=10, column=0, padx=20, pady=(0, 20), sticky="ew")
 
         self.progress_bar = ctk.CTkProgressBar(self.left_frame)
         self.progress_bar.grid(row=11, column=0, padx=20, pady=(10, 0), sticky="ew")
@@ -539,6 +548,7 @@ class SimifyGUI(ctk.CTk):
                                ", ".join(self._derived_cols) or "—"))
         # Refresh dropdowns with new derived columns
         self._refresh_plot_dropdowns_with_derived()
+        self._notify_multiplot()
 
     def _apply_custom_equations(self, equations: list[dict] | None = None) -> list[str]:
         """
@@ -617,6 +627,29 @@ class SimifyGUI(ctk.CTk):
         new_tornado = current_tornado + [c for c in valid_derived if c not in current_tornado]
         if new_tornado != current_tornado:
             self.tornado_target_dropdown.configure(values=new_tornado)
+
+    def open_multiplot(self):
+        from chipify.multiplot_window import MultiPlotWindow
+        from chipify import app_config
+        if self.multiplot_window is not None:
+            try:
+                self.multiplot_window.deiconify()
+                self.multiplot_window.lift()
+                self.multiplot_window.focus_force()
+                return
+            except Exception:
+                self.multiplot_window = None
+
+        self.multiplot_window = MultiPlotWindow(parent=self)
+
+        # Restore persisted cell layout
+        try:
+            cfg = app_config.load_config()
+            saved = cfg.get("multiplot_config", [])
+            if saved:
+                self.multiplot_window.restore_from_config(saved)
+        except Exception:
+            pass
 
     def open_settings(self):
         win = SettingsWindow(self)
@@ -1511,7 +1544,18 @@ class SimifyGUI(ctk.CTk):
             self.tabs.set("Measurements") 
             self.lbl_current_run.configure(text=f"Viewing: Latest (simulation_results)")
             self.history_dropdown.set("Latest (simulation_results)")
-            
+
+        self._notify_multiplot()
+
+    def _notify_multiplot(self):
+        """Trigger a live refresh of the Multi-Plot Dashboard if it is open."""
+        if self.multiplot_window is None:
+            return
+        try:
+            self.multiplot_window.refresh_all()
+        except Exception:
+            self.multiplot_window = None
+
 def set_btn_start_ready(self):
     if not self.lbl_status.cget("text").startswith("Status: Completed in"):
         self.lbl_status.configure(text=f"Status: Ready", text_color="#2ecc71")
