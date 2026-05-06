@@ -143,8 +143,12 @@ class PlotManager:
 
     @staticmethod
     def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b"):
-        fig.clf()
-        ax = fig.add_subplot(111)
+        if ax_dummy is None:
+            fig.clf()
+            ax = fig.add_subplot(111)
+        else:
+            ax = ax_dummy
+            ax.clear()
         ax.set_facecolor(bg_color)
         sc_plot, scatter_df = None, None
 
@@ -268,6 +272,7 @@ class PlotManager:
                 ax.set_title("Fail Breakdown: Which constraints caused failures?", color=_fg, pad=20)
                 ax.axis('equal')
 
-        fig.tight_layout()
+        if ax_dummy is None:
+            fig.tight_layout()
         canvas.draw()
         return sc_plot, scatter_df

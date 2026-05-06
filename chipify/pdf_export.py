@@ -22,7 +22,6 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.backends.backend_agg import FigureCanvasAgg
 import scipy.stats as stats
 
 from chipify import app_config
@@ -167,33 +166,9 @@ def _sim_duration_sec(df: pd.DataFrame):
     return None
 
 
-# ── Fail-pie rendering helper ──────────────────────────────────────────────────
-
 class _DummyCanvas:
     def draw(self):
         pass
-
-
-def _render_fail_pie(valid_df: pd.DataFrame, stim, size=(4.2, 3.2)) -> np.ndarray:
-    """Render the Fail Breakdown pie as an RGBA numpy array (via Agg)."""
-    tmp = plt.figure(figsize=size, facecolor="white")
-    FigureCanvasAgg(tmp)
-    PlotManager.draw_adv_plot(
-        fig=tmp,
-        ax_dummy=None,
-        canvas=_DummyCanvas(),
-        valid_df=valid_df,
-        current_stim=stim,
-        mode="Fail Breakdown (Pie Chart)",
-        x_col="-",
-        y_col="-",
-        target="-",
-        bg_color="white",
-    )
-    tmp.canvas.draw()
-    buf = np.asarray(tmp.canvas.buffer_rgba()).copy()
-    plt.close(tmp)
-    return buf
 
 
 # ── Page header bar (shared across all pages) ─────────────────────────────────
@@ -209,7 +184,7 @@ def _page_header(fig, label: str):
 
 # ── Section 1: Cover page ─────────────────────────────────────────────────────
 
-def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim):
+def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim, sim_duration_sec=None):
     fig = plt.figure(figsize=A4, facecolor="white")
     _page_header(fig, "Chipify Statistical Report")
 
@@ -231,7 +206,7 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim):
     core_raw = cfg.get("num_cores")
     core_txt = str(core_raw) if core_raw else "auto"
 
-    dur = _sim_duration_sec(df)
+    dur = sim_duration_sec if sim_duration_sec is not None else _sim_duration_sec(df)
     dur_txt = f"{dur:.1f} s" if dur is not None else "n/a"
 
     swept = _swept_params(stim, df)
@@ -239,12 +214,8 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim):
     if len(swept_txt) > 72:
         swept_txt = swept_txt[:69] + "…"
 
-    yaml_full = str(yaml_path or "–")
-    if len(yaml_full) > 72:
-        yaml_full = "…" + yaml_full[-71:]
-
     meta = [
-        ("YAML Path",           yaml_full),
+        ("Datasheet File",      yaml_name),
         ("CPU Cores",           core_txt),
         ("Simulation Duration", dur_txt),
         ("Swept Parameters",    swept_txt),
@@ -302,10 +273,11 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim):
             ha="left", va="top", fontsize=11, weight="bold", color=BLUE)
     ax.text(0.0, 0.549, f"Measurements evaluated: {len(rows)}",
             ha="left", va="top", fontsize=9.5, color=DGRAY)
-    ax.text(0.0, 0.517,
-            f"PASS: {n_pass}    FAIL: {n_fail}",
+    ax.text(0.0, 0.517, f"PASS: {n_pass}",
+            ha="left", va="top", fontsize=9.5, weight="bold", color=GREEN)
+    ax.text(0.145, 0.517, f"FAIL: {n_fail}",
             ha="left", va="top", fontsize=9.5, weight="bold",
-            color=GREEN if n_fail == 0 else RED)
+            color=RED if n_fail > 0 else DGRAY)
 
     if n_fail > 0:
         failing  = [r["name"] for r in rows if not r["passed"]]
@@ -317,10 +289,19 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim):
     valid_df_local = df[df["sim_error"] == "None"]
     if valid > 0 and passed < valid:
         try:
-            buf = _render_fail_pie(valid_df_local, stim)
             pie_ax = fig.add_axes([0.50, MB, 0.47, 0.40])
-            pie_ax.axis("off")
-            pie_ax.imshow(buf)
+            PlotManager.draw_adv_plot(
+                fig=fig,
+                ax_dummy=pie_ax,
+                canvas=_DummyCanvas(),
+                valid_df=valid_df_local,
+                current_stim=stim,
+                mode="Fail Breakdown (Pie Chart)",
+                x_col="-",
+                y_col="-",
+                target="-",
+                bg_color="white",
+            )
         except Exception:
             pass
     else:
@@ -357,6 +338,8 @@ def _add_table(pdf: PdfPages, rows: list):
         ax.axis("off")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
+        ax.text(0.5, 0.995, "Measurement Results Summary",
+                ha="center", va="top", fontsize=11, weight="bold", color=DGRAY)
 
         hdr_y = 0.97
 
@@ -466,13 +449,21 @@ def _draw_hist_ax(ax, data, param, lo, hi, cpk, passed):
             zorder=5)
 
     ax.set_title(param, fontsize=11, weight="bold", pad=6)
-    ax.set_xlabel("Simulated Value", fontsize=9, color=DGRAY)
+    ax.set_xlabel(param, fontsize=9, color=DGRAY)
     ax.set_ylabel("Density",         fontsize=9, color=DGRAY)
     ax.tick_params(colors=DGRAY, labelsize=8)
     for sp in ax.spines.values():
         sp.set_edgecolor(MGRAY)
     if ax.get_legend_handles_labels()[1]:
         ax.legend(fontsize=7.5, framealpha=0.9, loc="upper left")
+    x_min = min(data) if len(data) else 0.0
+    x_max = max(data) if len(data) else 1.0
+    for spec_v in (lo, hi):
+        if spec_v is not None:
+            x_min = min(x_min, spec_v)
+            x_max = max(x_max, spec_v)
+    pad = max((x_max - x_min) * 0.07, 1e-9)
+    ax.set_xlim(x_min - pad, x_max + pad)
 
 
 def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list):
@@ -487,6 +478,8 @@ def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list
     for pi, pair in enumerate(pairs):
         fig = plt.figure(figsize=A4, facecolor="white")
         _page_header(fig, f"Histograms  ({pi + 1} / {total})")
+        fig.text(0.5, 0.925, "Measurement Distributions",
+                 ha="center", va="center", fontsize=11, color=DGRAY, weight="bold")
 
         for si, p in enumerate(pair):
             m = meta.get(p)
@@ -541,6 +534,8 @@ def _add_correlation(pdf: PdfPages, valid_df: pd.DataFrame):
     ax.set_yticklabels(cols, fontsize=8)
     ax.xaxis.set_ticks_position("bottom")
     ax.set_title("Parameter Correlation Matrix", fontsize=13, pad=14, weight="bold")
+    fig.text(0.5, 0.925, "Correlation Matrix",
+             ha="center", va="center", fontsize=11, color=DGRAY, weight="bold")
     for sp in ax.spines.values():
         sp.set_edgecolor(MGRAY)
 
@@ -551,7 +546,7 @@ def _add_correlation(pdf: PdfPages, valid_df: pd.DataFrame):
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def generate_pdf_report(df, stim, yaml_path, out_dir):
+def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
     os.makedirs(out_dir, exist_ok=True)
     ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     pdf_path = os.path.join(out_dir, f"report_{ts}.pdf")
@@ -561,7 +556,7 @@ def generate_pdf_report(df, stim, yaml_path, out_dir):
     rows     = _measurement_rows(valid_df, stim)
 
     with PdfPages(pdf_path) as pdf:
-        _add_cover(pdf, prepared, yaml_path, rows, stim)
+        _add_cover(pdf, prepared, yaml_path, rows, stim, sim_duration_sec=sim_duration_sec)
         _add_table(pdf, rows)
         _add_histograms(pdf, valid_df, stim, rows)
         _add_correlation(pdf, valid_df)

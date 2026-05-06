@@ -6,6 +6,7 @@ import glob
 import threading
 import datetime
 import logging
+import time
 import pandas as pd
 import numpy as np
 import yaml
@@ -208,6 +209,7 @@ class SimifyGUI(ctk.CTk):
         
         self.current_df = None
         self.current_stim = None
+        self.last_sim_duration_sec = None
         self.stop_event = threading.Event()
         
         self.all_plot_cols = []
@@ -389,7 +391,13 @@ class SimifyGUI(ctk.CTk):
 
         try:
             from chipify import pdf_export
-            pdf_path = pdf_export.generate_pdf_report(self.current_df, self.current_stim, self.current_yaml_path, report_dir)
+            pdf_path = pdf_export.generate_pdf_report(
+                self.current_df,
+                self.current_stim,
+                self.current_yaml_path,
+                report_dir,
+                sim_duration_sec=self.last_sim_duration_sec,
+            )
             self.lbl_status.configure(text=f"Status: PDF saved to out/reports/", text_color="#2ecc71")
             messagebox.showinfo("Export Successful", f"Report saved as:\n{os.path.basename(pdf_path)}")
         except Exception as e:
@@ -1275,6 +1283,7 @@ class SimifyGUI(ctk.CTk):
         self.btn_refresh.configure(state="disabled")
         self.btn_stop.configure(state="normal") 
         self.stop_event.clear() 
+        self.last_sim_duration_sec = None
         
         self.progress_bar.set(0)
         self.lbl_status.configure(text="Status: Initializing cores...", text_color="yellow")
@@ -1295,11 +1304,17 @@ class SimifyGUI(ctk.CTk):
 
     def run_sim_thread(self, yaml_path):
         log.info("run_sim_thread started. Thread: %s", threading.current_thread().name)
+        t0 = time.perf_counter()
         try:
             stim = util.Stimuli(yaml_path)
             df = simulator.run_sim(stim, progress_callback=self.progress_callback_wrapper)
             
             if df is not None:
+                elapsed = max(0.0, time.perf_counter() - t0)
+                self.last_sim_duration_sec = elapsed
+                if len(df) > 0:
+                    df["simulation_duration_s_total"] = np.nan
+                    df.at[df.index[0], "simulation_duration_s_total"] = elapsed
                 log.info("run_sim returned %d rows. Saving results...", len(df))
                 csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
                 df.to_csv(csv_out, index=False)
@@ -1314,6 +1329,7 @@ class SimifyGUI(ctk.CTk):
                     log.warning("Could not save history: %s", e)
                 self.after(0, self.refresh_history)
                 self.after(0, self.update_ui_results, df, stim, True)
+                self.after(0, lambda: self.lbl_status.configure(text=f"Status: Completed in {elapsed:.1f}s", text_color="#2ecc71"))
             else:
                 log.info("run_sim returned None (aborted or error).")
 
@@ -1497,7 +1513,8 @@ class SimifyGUI(ctk.CTk):
             self.history_dropdown.set("Latest (simulation_results)")
             
 def set_btn_start_ready(self):
-    self.lbl_status.configure(text=f"Status: Ready", text_color="#2ecc71")
+    if not self.lbl_status.cget("text").startswith("Status: Completed in"):
+        self.lbl_status.configure(text=f"Status: Ready", text_color="#2ecc71")
     self.btn_start.configure(state="normal")
     self.btn_stop.configure(state="disabled")
     self.btn_refresh.configure(state="normal")
