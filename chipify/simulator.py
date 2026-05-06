@@ -8,6 +8,7 @@ import subprocess
 import time
 import logging
 from multiprocessing import get_context
+from abc import ABC, abstractmethod
 
 try:
     from multiprocessing.pool import WorkerLostError
@@ -106,70 +107,108 @@ def run_xschem(xschem_file: str) -> None:
         sys.exit(1)
 
 
-def run_ngspice(netlist: str, timeout_sec: int = 10):
-    custom_env = os.environ.copy()
-    custom_env["OMP_NUM_THREADS"] = "1"
+class BaseSimulator(ABC):
+    """Abstract simulator engine interface for extensible backend support."""
 
-    pid = os.getpid()
-    temp_spice_file = os.path.join(settings.FAST_TMP, f"sim_{pid}.spice")
-    temp_log_file   = os.path.join(settings.FAST_TMP, f"sim_{pid}.log")
+    name = "base"
 
-    with open(temp_spice_file, 'w') as f:
-        f.write(netlist)
+    @abstractmethod
+    def generate_test_template(self, test) -> str:
+        """Return a rendered-ready test template string."""
+        raise NotImplementedError
 
-    process = None
-    try:
-        with open(temp_log_file, 'w') as log_file:
-            process = subprocess.Popen(
-                ["ngspice", "-b", "-r", os.devnull, temp_spice_file],
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=settings.FAST_TMP,
-                env=custom_env,
-            )
-
-            start_time = time.monotonic()
-            while process.poll() is None:
-                if _is_aborted():
-                    process.kill()
-                    return None, "ABORTED"
-                if (time.monotonic() - start_time) > timeout_sec:
-                    process.kill()
-                    return None, "TIMEOUT"
-                time.sleep(0.1)
-
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(process.returncode, process.args)
-
-        output_line = ""
-        with open(temp_log_file, 'r') as lf:
-            for line in lf:
-                if line.startswith("MY_DATA:"):
-                    output_line = line.strip()
-                    break
-
-        return output_line, None
-
-    except subprocess.CalledProcessError:
-        err_msg = "CRASH"
-        if os.path.exists(temp_log_file):
-            with open(temp_log_file, 'r') as f:
-                err_msg = "".join(f.readlines()[-5:]).strip()
-        return None, f"CRASH: {err_msg}"
-    finally:
-        if process is not None and process.poll() is None:
-            process.kill()
+    @abstractmethod
+    def run(self, netlist: str, timeout_sec: int = 10):
+        """Execute one netlist and return (output_line, error_message)."""
+        raise NotImplementedError
 
 
-def simulate_single_case(args):
-    params, tests = args
+class NgspiceSimulator(BaseSimulator):
+    name = "ngspice"
+
+    def generate_test_template(self, test) -> str:
+        tb_path = os.path.join(settings.TB_DIR, test.tb_path + ".sch")
+        run_xschem(tb_path)
+
+        spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
+        with open(spice_file, "r") as f:
+            netlist = f.read()
+            if ".control" in netlist:
+                netlist = netlist.replace(".control", ".control\nset num_threads=1\n")
+            else:
+                netlist += "\n.control\nset num_threads=1\n.endc\n"
+            return netlist
+
+    def run(self, netlist: str, timeout_sec: int = 10):
+        custom_env = os.environ.copy()
+        custom_env["OMP_NUM_THREADS"] = "1"
+
+        pid = os.getpid()
+        temp_spice_file = os.path.join(settings.FAST_TMP, f"sim_{pid}.spice")
+        temp_log_file = os.path.join(settings.FAST_TMP, f"sim_{pid}.log")
+
+        with open(temp_spice_file, "w") as f:
+            f.write(netlist)
+
+        process = None
+        try:
+            with open(temp_log_file, "w") as log_file:
+                process = subprocess.Popen(
+                    ["ngspice", "-b", "-r", os.devnull, temp_spice_file],
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=settings.FAST_TMP,
+                    env=custom_env,
+                )
+
+                start_time = time.monotonic()
+                while process.poll() is None:
+                    if _is_aborted():
+                        process.kill()
+                        return None, "ABORTED"
+                    if (time.monotonic() - start_time) > timeout_sec:
+                        process.kill()
+                        return None, "TIMEOUT"
+                    time.sleep(0.1)
+
+                if process.returncode != 0:
+                    raise subprocess.CalledProcessError(process.returncode, process.args)
+
+            output_line = ""
+            with open(temp_log_file, "r") as lf:
+                for line in lf:
+                    if line.startswith("MY_DATA:"):
+                        output_line = line.strip()
+                        break
+
+            return output_line, None
+
+        except subprocess.CalledProcessError:
+            err_msg = "CRASH"
+            if os.path.exists(temp_log_file):
+                with open(temp_log_file, "r") as f:
+                    err_msg = "".join(f.readlines()[-5:]).strip()
+            return None, f"CRASH: {err_msg}"
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+
+
+def get_simulator_engine(simulator_name: str) -> BaseSimulator:
+    key = (simulator_name or "ngspice").strip().lower()
+    engines = {"ngspice": NgspiceSimulator}
+    engine_cls = engines.get(key, NgspiceSimulator)
+    return engine_cls()
+
+
+def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator):
     sample = params.copy()
     sample['sim_error'] = "None"
 
     for test in tests:
         rendering = Template(test.template_str).render(**params)
-        ngspice_output, error_msg = run_ngspice(rendering)
+        sim_output, error_msg = engine.run(rendering)
 
         if error_msg:
             sample['sim_error'] = f"{test.tb_path}: {error_msg}"
@@ -179,8 +218,8 @@ def simulate_single_case(args):
                 sample[f"{val_obj.name}_pass"] = False
             continue
 
-        if ngspice_output and ngspice_output.startswith("MY_DATA:"):
-            clean_line = ngspice_output.replace("MY_DATA:", "").strip()
+        if sim_output and sim_output.startswith("MY_DATA:"):
+            clean_line = sim_output.replace("MY_DATA:", "").strip()
             values = clean_line.split(' ')
 
             all_passed = True
@@ -204,9 +243,17 @@ def simulate_single_case(args):
     return sample
 
 
+def simulate_single_case(args):
+    params, tests, simulator_name = args
+    engine = get_simulator_engine(simulator_name)
+    return _simulate_single_case_with_engine(params, tests, engine)
+
+
 def simulate_case_batch(batch_args):
     """Worker helper: process a batch of cases to reduce IPC overhead."""
-    return [simulate_single_case(arg) for arg in batch_args]
+    params_batch, tests, simulator_name = batch_args
+    engine = get_simulator_engine(simulator_name)
+    return [_simulate_single_case_with_engine(params, tests, engine) for params in params_batch]
 
 
 def _chunk_args(worker_args, chunk_size):
@@ -226,21 +273,11 @@ def _resolve_chunk_size(cfg, total_tasks, num_cores):
         return max(1, min(16, total_tasks // (num_cores * 8) if num_cores > 0 else 1))
 
 
-def generate_templates(stim) -> None:
+def generate_templates(stim, engine: BaseSimulator) -> None:
     for test in stim.tests:
         if _is_aborted():
             raise InterruptedError("Aborted before netlist generation.")
-        tb_path = os.path.join(settings.TB_DIR, test.tb_path + ".sch")
-        run_xschem(tb_path)
-
-        spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
-        with open(spice_file, "r") as f:
-            netlist = f.read()
-            if ".control" in netlist:
-                netlist = netlist.replace(".control", ".control\nset num_threads=1\n")
-            else:
-                netlist += "\n.control\nset num_threads=1\n.endc\n"
-            test.template_str = netlist
+        test.template_str = engine.generate_test_template(test)
 
 
 def generate_cases(stim) -> list:
@@ -267,11 +304,15 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
         log.info("Phase 1/3: generating parameter cases...")
         param_sets = generate_cases(stim)
         log.info("Total cases: %d", len(param_sets))
+        cfg = app_config.load_config()
+        simulator_name = (cfg.get("simulator_engine") or simulator or "ngspice").strip().lower()
+        engine = get_simulator_engine(simulator_name)
+        log.info("Selected simulator engine: %s", engine.name)
 
         if _is_aborted():
             raise InterruptedError("Aborted before template generation.")
         log.info("Phase 2/3: generating Xschem templates...")
-        generate_templates(stim)
+        generate_templates(stim, engine)
 
         if _is_aborted():
             raise InterruptedError("Aborted before RAM staging.")
@@ -281,10 +322,8 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
         if _is_aborted():
             raise InterruptedError("Aborted before pool start.")
 
-        worker_args = [(params, stim.tests) for params in param_sets]
+        worker_args = [(params, stim.tests, engine.name) for params in param_sets]
         results = []
-
-        cfg = app_config.load_config()
         num_cores = cfg.get("num_cores") or util.get_num_cores()
         log.info("Spawning pool: %d workers, %d tasks.", num_cores, len(worker_args))
 
@@ -307,8 +346,11 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
 
         # Batch tasks to reduce scheduler/IPC overhead while keeping polling.
         chunk_size = _resolve_chunk_size(cfg, total_tasks, num_cores)
-        batches = list(_chunk_args(worker_args, chunk_size))
-        pending = [pool.apply_async(simulate_case_batch, (batch,)) for batch in batches]
+        param_batches = list(_chunk_args(param_sets, chunk_size))
+        pending = [
+            pool.apply_async(simulate_case_batch, ((batch, stim.tests, engine.name),))
+            for batch in param_batches
+        ]
         log.debug("%d batch tasks submitted (chunk_size=%d).", len(pending), chunk_size)
 
         with tqdm(total=total_tasks) as pbar:

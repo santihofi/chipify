@@ -61,7 +61,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk):
         super().__init__(parent)
         self.title("Global Settings")
-        self.geometry("460x520")
+        self.geometry("460x590")
         self.resizable(False, False)
 
         # grab_set needs a small delay so the window is fully mapped first
@@ -70,8 +70,11 @@ class SettingsWindow(ctk.CTkToplevel):
         self._config = app_config.load_config()
         max_cores = os.cpu_count() or 1
         current_cores = int(self._config.get("num_cores") or util.get_num_cores())
+        simulator_engine = self._config.get("simulator_engine", "ngspice")
         process_mode = self._config.get("process_start_method", "auto")
         chunk_size_mode = str(self._config.get("chunk_size", "auto"))
+        if simulator_engine not in ["ngspice"]:
+            simulator_engine = "ngspice"
         if process_mode not in ["auto", "forkserver", "spawn"]:
             process_mode = "auto"
         if chunk_size_mode not in ["auto", "1", "2", "4", "8", "16", "32"]:
@@ -107,6 +110,25 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(
             cores_outer,
             text=f"Range: 1 – {max_cores} logical cores",
+            text_color="gray", font=ctk.CTkFont(size=11)
+        ).pack(anchor="w")
+
+        # ── simulator engine section ────────────────────────────────────────
+        sim_outer = ctk.CTkFrame(self, fg_color="transparent")
+        sim_outer.pack(fill="x", padx=36, pady=(18, 0))
+        ctk.CTkLabel(sim_outer, text="Simulation Engine:", anchor="w").pack(anchor="w")
+        self._sim_engine_var = ctk.StringVar(value=simulator_engine)
+        self._sim_engine_menu = ctk.CTkOptionMenu(
+            sim_outer,
+            variable=self._sim_engine_var,
+            values=["ngspice"],
+            dynamic_resizing=False,
+            width=180,
+        )
+        self._sim_engine_menu.pack(anchor="w", pady=(6, 2))
+        ctk.CTkLabel(
+            sim_outer,
+            text="Prepared for future engines (Xyce/Spectre)",
             text_color="gray", font=ctk.CTkFont(size=11)
         ).pack(anchor="w")
 
@@ -168,6 +190,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def _save(self) -> None:
         self._config["num_cores"] = int(self._cores_var.get())
+        self._config["simulator_engine"] = self._sim_engine_var.get()
         self._config["process_start_method"] = self._proc_mode_var.get()
         self._config["chunk_size"] = self._chunk_var.get()
         app_config.save_config(self._config)
