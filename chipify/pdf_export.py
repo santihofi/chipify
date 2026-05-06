@@ -1,12 +1,14 @@
 """
-pdf_export.py – Professional datasheet-style PDF report for Chipify.
+pdf_export.py – Professional IC-datasheet-style PDF report for Chipify.
 
-Layout (A4 portrait throughout):
-  1. Cover page      – title, yield badge, sim summary
-  2. Measurements    – styled table, PASS/FAIL colour-coded, Cpk column
-  3. Histograms      – 2 per page, white background, Gauss fit + spec lines
-                       + per-plot annotation box (μ, σ, Cpk, Status)
-  4. Correlation     – white-background heatmap
+Page structure (strict A4 portrait throughout):
+  1. Cover          – header bar, metadata block, yield badge, stats,
+                      fail-breakdown pie chart (only when yield < 100 %)
+  2. Measurements   – centred, IC-datasheet-styled table, alternating rows,
+                      colour-coded Cpk + Status cells
+  3. Histograms     – 2-up per page, white bg, Gauss fit + spec lines +
+                      per-plot annotation box (μ, σ, Cpk, Status)
+  4. Correlation    – white-background Pearson heatmap
 """
 
 import os
@@ -20,32 +22,37 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import scipy.stats as stats
 
-# ── Shared style constants ────────────────────────────────────────────────────
-BLUE    = "#1a5fa8"
-LBLUE   = "#d0e4f7"
-GREEN   = "#1e7d3a"
-LGREEN  = "#d6f0de"
-RED     = "#b71c1c"
-LRED    = "#fde8e8"
-AMBER   = "#c67c00"
-LGRAY   = "#f4f4f4"
-MGRAY   = "#d0d0d0"
-DGRAY   = "#555555"
+from chipify import app_config
+from chipify.plot_manager import PlotManager
 
-A4      = (8.27, 11.69)          # inches
+# ── Style constants ────────────────────────────────────────────────────────────
+BLUE   = "#1a5fa8"
+GREEN  = "#1e7d3a"
+LGREEN = "#d6f0de"
+RED    = "#b71c1c"
+LRED   = "#fde8e8"
+AMBER  = "#c67c00"
+LGRAY  = "#f0f0f0"
+MGRAY  = "#c8c8c8"
+DGRAY  = "#555555"
+
+A4     = (8.27, 11.69)   # inches
+ML     = 0.07            # left/right margin in figure-fraction units
+MB     = 0.05            # bottom margin
 
 mpl.rcParams.update({
-    "font.family":  "DejaVu Sans",
-    "font.size":    9,
-    "axes.spines.top":    False,
-    "axes.spines.right":  False,
-    "axes.linewidth":     0.8,
+    "font.family": "DejaVu Sans",
+    "font.size": 9,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.linewidth": 0.8,
 })
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Low-level helpers ──────────────────────────────────────────────────────────
 
 def _fmt(v):
     if v is None:
@@ -90,17 +97,17 @@ def _compute_cpk(data: pd.Series, lo, hi) -> float:
     return min(cpks) if cpks else float("nan")
 
 
-def _cpk_color(cpk):
+def _cpk_cell_bg(cpk):
     if math.isnan(cpk):
-        return DGRAY
+        return LGRAY
     if cpk >= 1.33:
-        return GREEN
+        return LGREEN
     if cpk >= 1.0:
-        return AMBER
-    return RED
+        return "#fff3cd"
+    return LRED
 
 
-def _measurement_rows(valid_df: pd.DataFrame, stim):
+def _measurement_rows(valid_df: pd.DataFrame, stim) -> list:
     rows = []
     for test in stim.tests:
         for val_obj in test.value_lst:
@@ -108,18 +115,15 @@ def _measurement_rows(valid_df: pd.DataFrame, stim):
             if p not in valid_df.columns:
                 continue
             data = valid_df[p].dropna()
-            sim_min = data.min() if not data.empty else float("nan")
-            sim_typ = data.mean() if not data.empty else float("nan")
-            sim_max = data.max() if not data.empty else float("nan")
-            lo, hi  = _get_spec(val_obj)
-            cpk     = _compute_cpk(data, lo, hi)
+            lo, hi = _get_spec(val_obj)
+            cpk = _compute_cpk(data, lo, hi)
             pass_col = f"{p}_pass"
-            passed  = pass_col in valid_df.columns and bool(valid_df[pass_col].all())
+            passed = pass_col in valid_df.columns and bool(valid_df[pass_col].all())
             rows.append({
                 "name":    p,
-                "sim_min": sim_min,
-                "sim_typ": sim_typ,
-                "sim_max": sim_max,
+                "sim_min": data.min()  if not data.empty else float("nan"),
+                "sim_typ": data.mean() if not data.empty else float("nan"),
+                "sim_max": data.max()  if not data.empty else float("nan"),
                 "spec_lo": lo,
                 "spec_hi": hi,
                 "cpk":     cpk,
@@ -128,338 +132,420 @@ def _measurement_rows(valid_df: pd.DataFrame, stim):
     return rows
 
 
-# ── Section: Cover page ───────────────────────────────────────────────────────
+# ── Metadata helpers (for cover page) ─────────────────────────────────────────
 
-def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows):
-    fig = plt.figure(figsize=A4)
-    fig.patch.set_facecolor("white")
+def _swept_params(stim, df: pd.DataFrame) -> list:
+    if stim is not None and hasattr(stim, "params"):
+        names = []
+        for pname, pvalues in stim.params.items():
+            try:
+                if hasattr(pvalues, "__len__") and not isinstance(pvalues, str) and len(pvalues) > 1:
+                    names.append(str(pname))
+            except Exception:
+                continue
+        return names
+    fallback = []
+    for c in df.columns:
+        if c.endswith("_pass") or c.endswith("_overall_pass") or c in ("global_pass", "sim_error"):
+            continue
+        try:
+            n = df[c].nunique(dropna=True)
+            if 1 < n <= 64:
+                fallback.append(c)
+        except Exception:
+            continue
+    return fallback
 
-    # Top colour bar
-    bar = fig.add_axes([0, 0.935, 1, 0.065])
-    bar.set_facecolor(BLUE)
-    bar.axis("off")
-    bar.text(0.5, 0.5, "Chipify Statistical Report",
-             color="white", fontsize=18, weight="bold",
-             ha="center", va="center", transform=bar.transAxes)
 
-    ax = fig.add_axes([0, 0, 1, 0.935])
+def _sim_duration_sec(df: pd.DataFrame):
+    for col in ("sim_duration_s", "simulation_duration_s", "duration_s", "elapsed_s", "sim_time_s"):
+        if col in df.columns:
+            try:
+                return float(pd.to_numeric(df[col], errors="coerce").sum())
+            except Exception:
+                continue
+    return None
+
+
+# ── Fail-pie rendering helper ──────────────────────────────────────────────────
+
+class _DummyCanvas:
+    def draw(self):
+        pass
+
+
+def _render_fail_pie(valid_df: pd.DataFrame, stim, size=(4.2, 3.2)) -> np.ndarray:
+    """Render the Fail Breakdown pie as an RGBA numpy array (via Agg)."""
+    tmp = plt.figure(figsize=size, facecolor="white")
+    FigureCanvasAgg(tmp)
+    PlotManager.draw_adv_plot(
+        fig=tmp,
+        ax_dummy=None,
+        canvas=_DummyCanvas(),
+        valid_df=valid_df,
+        current_stim=stim,
+        mode="Fail Breakdown (Pie Chart)",
+        x_col="-",
+        y_col="-",
+        target="-",
+        bg_color="white",
+    )
+    tmp.canvas.draw()
+    buf = np.asarray(tmp.canvas.buffer_rgba()).copy()
+    plt.close(tmp)
+    return buf
+
+
+# ── Page header bar (shared across all pages) ─────────────────────────────────
+
+def _page_header(fig, label: str):
+    ax = fig.add_axes([0, 0.935, 1, 0.065])
+    ax.set_facecolor(BLUE)
+    ax.axis("off")
+    ax.text(0.5, 0.5, label, color="white", fontsize=14, weight="bold",
+            ha="center", va="center", transform=ax.transAxes)
+    return ax
+
+
+# ── Section 1: Cover page ─────────────────────────────────────────────────────
+
+def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim):
+    fig = plt.figure(figsize=A4, facecolor="white")
+    _page_header(fig, "Chipify Statistical Report")
+
+    ax = fig.add_axes([ML, MB, 1 - 2 * ML, 0.935 - MB])
     ax.axis("off")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
 
-    # Sub-title
+    # ── Title block ──────────────────────────────────────────────────────────
     yaml_name = os.path.basename(yaml_path) if yaml_path else "Unknown"
-    ax.text(0.5, 0.89, f"Datasheet:  {yaml_name}",
-            ha="center", fontsize=11, color=DGRAY)
-    ax.text(0.5, 0.862,
-            f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            ha="center", fontsize=9, color=MGRAY)
+    ax.text(0.5, 0.955, yaml_name,
+            ha="center", va="top", fontsize=12, weight="bold", color=DGRAY)
+    ax.text(0.5, 0.925,
+            datetime.datetime.now().strftime("Generated  %Y-%m-%d  %H:%M:%S"),
+            ha="center", va="top", fontsize=9, color=MGRAY)
 
-    # Divider
-    ax.axhline(0.845, xmin=0.08, xmax=0.92, color=MGRAY, linewidth=0.8)
+    # ── Metadata grid ────────────────────────────────────────────────────────
+    cfg = app_config.load_config()
+    core_raw = cfg.get("num_cores")
+    core_txt = str(core_raw) if core_raw else "auto"
 
-    # Statistics
+    dur = _sim_duration_sec(df)
+    dur_txt = f"{dur:.1f} s" if dur is not None else "n/a"
+
+    swept = _swept_params(stim, df)
+    swept_txt = ", ".join(swept) if swept else "–"
+    if len(swept_txt) > 72:
+        swept_txt = swept_txt[:69] + "…"
+
+    yaml_full = str(yaml_path or "–")
+    if len(yaml_full) > 72:
+        yaml_full = "…" + yaml_full[-71:]
+
+    meta = [
+        ("YAML Path",           yaml_full),
+        ("CPU Cores",           core_txt),
+        ("Simulation Duration", dur_txt),
+        ("Swept Parameters",    swept_txt),
+    ]
+    lx, rx = 0.04, 0.38
+    for i, (lbl, val) in enumerate(meta):
+        y = 0.885 - i * 0.030
+        ax.text(lx, y, lbl + ":", ha="left", va="top", fontsize=8.5, color=DGRAY)
+        ax.text(rx, y, val,         ha="left", va="top", fontsize=8.5,
+                color="black", weight="bold")
+
+    ax.axhline(0.772, xmin=0.0, xmax=1.0, color=MGRAY, linewidth=0.7)
+
+    # ── Statistics ───────────────────────────────────────────────────────────
     total  = len(df)
     bad    = int((df["sim_error"] != "None").sum())
     valid  = total - bad
     passed = int(df["global_pass"].sum()) if total else 0
     yld    = passed / total * 100 if total else 0.0
-
     yld_color = GREEN if yld >= 99 else AMBER if yld >= 80 else RED
 
-    # Yield badge
-    badge = mpatches.FancyBboxPatch((0.30, 0.71), 0.40, 0.115,
-                                    boxstyle="round,pad=0.01",
-                                    linewidth=1.2, edgecolor=yld_color,
-                                    facecolor="white", transform=ax.transData, clip_on=False)
+    # Yield badge (left side)
+    badge = mpatches.FancyBboxPatch(
+        (0.01, 0.62), 0.44, 0.135,
+        boxstyle="round,pad=0.01", linewidth=1.4,
+        edgecolor=yld_color, facecolor="white",
+        transform=ax.transData, clip_on=False,
+    )
     ax.add_patch(badge)
-    ax.text(0.50, 0.782, f"{yld:.1f}%",
-            ha="center", va="center", fontsize=30, weight="bold", color=yld_color)
-    ax.text(0.50, 0.718, "Global Yield",
-            ha="center", va="bottom", fontsize=10, color=DGRAY)
+    ax.text(0.23, 0.710, f"{yld:.1f}%",
+            ha="center", va="center", fontsize=28, weight="bold", color=yld_color)
+    ax.text(0.23, 0.626, "Global Yield",
+            ha="center", va="bottom", fontsize=9.5, color=DGRAY)
 
-    # Summary list
-    col1_x, col2_x = 0.14, 0.56
-    ys = [0.665, 0.640, 0.615, 0.590]
-    labels = ["Total Iterations", "Simulator Crashes", "Valid Runs", "Passing Runs"]
-    vals   = [f"{total}", f"{bad}", f"{valid}", f"{passed}"]
-    for lab, val, y in zip(labels, vals, ys):
-        ax.text(col1_x, y, lab, fontsize=10, color=DGRAY)
-        ax.text(col1_x + 0.30, y, val, fontsize=10, weight="bold", color="black")
+    # Run counts (right side of badge row)
+    stats_items = [
+        ("Total Iterations",  f"{total}"),
+        ("Simulator Crashes", f"{bad}"),
+        ("Valid Runs",        f"{valid}"),
+        ("Passing Runs",      f"{passed}"),
+    ]
+    for i, (lbl, val) in enumerate(stats_items):
+        y = 0.748 - i * 0.034
+        ax.text(0.50, y, lbl + ":", ha="left", va="center", fontsize=9.5, color=DGRAY)
+        ax.text(0.88, y, val,         ha="right", va="center", fontsize=9.5,
+                weight="bold", color="black")
 
-    # Failing params summary
-    ax.axhline(0.568, xmin=0.08, xmax=0.92, color=MGRAY, linewidth=0.8)
-    ax.text(0.08, 0.548, "Measurement Results Summary", fontsize=11,
-            weight="bold", color=BLUE)
+    ax.axhline(0.606, xmin=0.0, xmax=1.0, color=MGRAY, linewidth=0.7)
 
-    n_pass  = sum(1 for r in rows if r["passed"])
-    n_fail  = len(rows) - n_pass
+    # ── Measurement summary text ──────────────────────────────────────────────
+    n_pass = sum(1 for r in rows if r["passed"])
+    n_fail = len(rows) - n_pass
 
-    ax.text(col1_x, 0.520, f"Measurements evaluated: {len(rows)}", fontsize=10, color=DGRAY)
-    ax.text(col1_x, 0.497, f"PASS: {n_pass}",
-            fontsize=10, weight="bold", color=GREEN)
-    ax.text(col1_x, 0.474, f"FAIL: {n_fail}",
-            fontsize=10, weight="bold", color=RED if n_fail else DGRAY)
+    ax.text(0.0, 0.588, "Measurement Results Summary",
+            ha="left", va="top", fontsize=11, weight="bold", color=BLUE)
+    ax.text(0.0, 0.549, f"Measurements evaluated: {len(rows)}",
+            ha="left", va="top", fontsize=9.5, color=DGRAY)
+    ax.text(0.0, 0.517,
+            f"PASS: {n_pass}    FAIL: {n_fail}",
+            ha="left", va="top", fontsize=9.5, weight="bold",
+            color=GREEN if n_fail == 0 else RED)
 
     if n_fail > 0:
-        failing = [r["name"] for r in rows if not r["passed"]]
-        fail_str = ", ".join(failing)
-        wrapped  = textwrap.fill(fail_str, width=70)
-        ax.text(col1_x, 0.449, f"Failing:  {wrapped}",
-                fontsize=9, color=RED, va="top")
+        failing  = [r["name"] for r in rows if not r["passed"]]
+        wrapped  = textwrap.fill("Failing: " + ", ".join(failing), width=78)
+        ax.text(0.0, 0.488, wrapped,
+                ha="left", va="top", fontsize=8.5, color=RED)
 
-    pdf.savefig(fig, bbox_inches="tight")
+    # ── Fail-breakdown pie or all-pass message ────────────────────────────────
+    valid_df_local = df[df["sim_error"] == "None"]
+    if valid > 0 and passed < valid:
+        try:
+            buf = _render_fail_pie(valid_df_local, stim)
+            pie_ax = fig.add_axes([0.50, MB, 0.47, 0.40])
+            pie_ax.axis("off")
+            pie_ax.imshow(buf)
+        except Exception:
+            pass
+    else:
+        ax.text(0.50, 0.35, "✓  All runs passed specifications.",
+                ha="left", va="center", fontsize=11,
+                weight="bold", color=GREEN)
+
+    pdf.savefig(fig)
     plt.close(fig)
 
 
-# ── Section: Measurements table ───────────────────────────────────────────────
+# ── Section 2: Measurements table ─────────────────────────────────────────────
 
-def _add_table(pdf: PdfPages, rows):
+def _add_table(pdf: PdfPages, rows: list):
     if not rows:
         return
 
-    headers = ["Parameter", "Sim Min", "Sim Typ", "Sim Max",
-                "Spec Min", "Spec Max", "Cpk", "Status"]
-    rows_per_page = 24
-    pages = math.ceil(len(rows) / rows_per_page)
-    col_widths = [0.22, 0.09, 0.09, 0.09, 0.09, 0.09, 0.08, 0.09]
+    HEADERS   = ["Parameter", "Sim Min", "Sim Typ", "Sim Max",
+                 "Spec Min", "Spec Max", "Cpk", "Status"]
+    # Fractional column widths (sum ≈ 0.84 → centred with margins)
+    COL_W     = [0.20, 0.09, 0.09, 0.09, 0.09, 0.09, 0.08, 0.09]
+    TABLE_W   = sum(COL_W)                       # ~0.83
+    X0        = (1.0 - TABLE_W) / 2.0            # left edge of table
+    ROWS_PP   = 25
+    ROW_H     = 0.82 / (ROWS_PP + 1.5)
+    pages     = math.ceil(len(rows) / ROWS_PP)
 
     for pg in range(pages):
-        chunk = rows[pg * rows_per_page: (pg + 1) * rows_per_page]
-        fig   = plt.figure(figsize=A4)
-        fig.patch.set_facecolor("white")
+        chunk = rows[pg * ROWS_PP: (pg + 1) * ROWS_PP]
+        fig = plt.figure(figsize=A4, facecolor="white")
+        _page_header(fig, f"Measurements  ({pg + 1} / {pages})")
 
-        # Header bar
-        hbar = fig.add_axes([0, 0.935, 1, 0.065])
-        hbar.set_facecolor(BLUE)
-        hbar.axis("off")
-        hbar.text(0.5, 0.5,
-                  f"Measurements  ({pg + 1} / {pages})",
-                  color="white", fontsize=13, weight="bold",
-                  ha="center", va="center", transform=hbar.transAxes)
-
-        ax = fig.add_axes([0.04, 0.04, 0.92, 0.88])
+        ax = fig.add_axes([ML, MB, 1 - 2 * ML, 0.885])
         ax.axis("off")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
 
-        row_h  = 0.870 / (rows_per_page + 1.5)
-        hdr_y  = 1.0 - row_h * 0.5
+        hdr_y = 0.97
 
-        # Draw header
-        x = 0.0
-        for txt, w in zip(headers, col_widths):
-            rect = mpatches.FancyBboxPatch((x, hdr_y - row_h * 0.5), w - 0.003, row_h,
-                                           boxstyle="square,pad=0",
-                                           facecolor=BLUE, edgecolor="white",
-                                           linewidth=0.5, clip_on=False,
-                                           transform=ax.transData)
-            ax.add_patch(rect)
+        # Header row
+        x = X0
+        for txt, w in zip(HEADERS, COL_W):
+            ax.add_patch(mpatches.FancyBboxPatch(
+                (x, hdr_y - ROW_H * 0.5), w - 0.002, ROW_H,
+                boxstyle="square,pad=0", facecolor=BLUE,
+                edgecolor="white", linewidth=0.6,
+                clip_on=False, transform=ax.transData,
+            ))
             ax.text(x + w / 2, hdr_y, txt,
                     ha="center", va="center", fontsize=8.5,
                     color="white", weight="bold")
             x += w
 
-        # Draw rows
+        # Data rows
         for ri, row in enumerate(chunk):
-            y     = hdr_y - row_h * (ri + 1)
-            bg    = LGREEN if row["passed"] else LRED if not row["passed"] else LGRAY
+            y     = hdr_y - ROW_H * (ri + 1)
             even  = ri % 2 == 0
-            rowbg = bg if (row["passed"] or not row["passed"]) else (LGRAY if even else "white")
-            rowbg = bg  # always show pass/fail colour
 
             cells = [
                 row["name"],
-                _fmt(row["sim_min"]),
-                _fmt(row["sim_typ"]),
-                _fmt(row["sim_max"]),
-                _fmt(row["spec_lo"]),
-                _fmt(row["spec_hi"]),
+                _fmt(row["sim_min"]), _fmt(row["sim_typ"]), _fmt(row["sim_max"]),
+                _fmt(row["spec_lo"]), _fmt(row["spec_hi"]),
                 _fmt(row["cpk"]),
                 "PASS" if row["passed"] else "FAIL",
             ]
-            cell_colors = ["white"] * 6 + [_cpk_cell_bg(row["cpk"])] + [LGREEN if row["passed"] else LRED]
+            row_bg = LGRAY if even else "white"
 
-            x = 0.0
-            for ci, (txt, w) in enumerate(zip(cells, col_widths)):
-                fc = rowbg if ci not in (6, 7) else cell_colors[ci]
-                rect = mpatches.FancyBboxPatch((x, y - row_h * 0.5), w - 0.003, row_h,
-                                               boxstyle="square,pad=0",
-                                               facecolor=fc,
-                                               edgecolor=MGRAY, linewidth=0.4,
-                                               clip_on=False, transform=ax.transData)
-                ax.add_patch(rect)
-                tc = DGRAY if ci != 7 else (GREEN if row["passed"] else RED)
-                weight = "bold" if ci in (0, 7) else "normal"
-                ha = "left" if ci == 0 else "center"
-                tx = x + 0.005 if ci == 0 else x + w / 2
-                ax.text(tx, y, txt, ha=ha, va="center",
+            x = X0
+            for ci, (txt, w) in enumerate(zip(cells, COL_W)):
+                if ci == 6:
+                    fc = _cpk_cell_bg(row["cpk"])
+                elif ci == 7:
+                    fc = LGREEN if row["passed"] else LRED
+                else:
+                    fc = row_bg
+
+                ax.add_patch(mpatches.FancyBboxPatch(
+                    (x, y - ROW_H * 0.5), w - 0.002, ROW_H,
+                    boxstyle="square,pad=0", facecolor=fc,
+                    edgecolor=MGRAY, linewidth=0.4,
+                    clip_on=False, transform=ax.transData,
+                ))
+
+                tc     = DGRAY
+                weight = "normal"
+                ha_txt = "center"
+                tx     = x + w / 2
+
+                if ci == 0:
+                    ha_txt = "left"
+                    tx     = x + 0.006
+                    weight = "bold"
+                elif ci == 7:
+                    tc     = GREEN if row["passed"] else RED
+                    weight = "bold"
+
+                ax.text(tx, y, txt, ha=ha_txt, va="center",
                         fontsize=8, color=tc, weight=weight)
                 x += w
 
-        pdf.savefig(fig, bbox_inches="tight")
+        pdf.savefig(fig)
         plt.close(fig)
 
 
-def _cpk_cell_bg(cpk):
-    if math.isnan(cpk):
-        return LGRAY
-    if cpk >= 1.33:
-        return LGREEN
-    if cpk >= 1.0:
-        return "#fff3cd"  # amber-light
-    return LRED
-
-
-# ── Section: Histograms (2-up per page) ───────────────────────────────────────
+# ── Section 3: Histograms (2-up) ──────────────────────────────────────────────
 
 def _draw_hist_ax(ax, data, param, lo, hi, cpk, passed):
-    """Render one print-quality histogram onto ax (white background)."""
     ax.set_facecolor("white")
-    ax.grid(True, linestyle="--", alpha=0.45, color=MGRAY, zorder=0)
+    ax.grid(True, linestyle="--", alpha=0.40, color=MGRAY, zorder=0)
 
-    # Histogram
-    bar_color = BLUE
-    counts, bins, _ = ax.hist(
+    counts, _, _ = ax.hist(
         data, bins="auto", density=True,
-        color=bar_color, alpha=0.55,
-        edgecolor="white", linewidth=0.4,
-        zorder=2, label=param,
+        color=BLUE, alpha=0.55, edgecolor="white", linewidth=0.4,
+        zorder=2,
     )
 
-    # Gauss fit
+    mu = sigma = float("nan")
     if len(data) > 2:
         try:
             mu, sigma = stats.norm.fit(data)
-            x_fit = np.linspace(min(data), max(data), 300)
-            y_fit = stats.norm.pdf(x_fit, mu, sigma)
-            max_h = max(counts) if len(counts) else 1
-            y_fit = np.clip(y_fit, 0, max_h * 1.6)
-            ax.plot(x_fit, y_fit, color=BLUE, linewidth=2.0, zorder=3,
+            xf = np.linspace(min(data), max(data), 300)
+            yf = np.clip(stats.norm.pdf(xf, mu, sigma), 0, max(counts, default=1) * 1.6)
+            ax.plot(xf, yf, color=BLUE, linewidth=2.0, zorder=3,
                     label=f"Gauss  (μ={mu:.4g}, σ={sigma:.4g})")
         except Exception:
             mu, sigma = data.mean(), data.std()
     else:
         mu, sigma = data.mean(), data.std()
 
-    # Spec lines
-    for val, label, clr in [(lo, "Min Spec", RED), (hi, "Max Spec", RED)]:
+    for val, lbl in [(lo, "Min Spec"), (hi, "Max Spec")]:
         if val is not None:
-            ax.axvline(val, color=clr, linestyle="--", linewidth=1.8,
-                       zorder=4, label=f"{label} ({_fmt(val)})")
+            ax.axvline(val, color=RED, linestyle="--", linewidth=1.8, zorder=4,
+                       label=f"{lbl} ({_fmt(val)})")
 
-    # Annotation box (top-right)
     status_clr = GREEN if passed else RED
-    cpk_str    = _fmt(cpk)
-    info = (
-        f"μ = {_fmt(mu)}\n"
-        f"σ = {_fmt(sigma)}\n"
-        f"Cpk = {cpk_str}\n"
-        f"{'PASS' if passed else 'FAIL'}"
-    )
+    info = (f"μ = {_fmt(mu)}\nσ = {_fmt(sigma)}\n"
+            f"Cpk = {_fmt(cpk)}\n{'PASS' if passed else 'FAIL'}")
     ax.text(0.975, 0.975, info,
             ha="right", va="top", transform=ax.transAxes,
-            fontsize=8, family="monospace",
-            color=status_clr, weight="bold",
+            fontsize=8, family="monospace", color=status_clr, weight="bold",
             bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
-                      edgecolor=status_clr, linewidth=1.2, alpha=0.92),
+                      edgecolor=status_clr, linewidth=1.2, alpha=0.93),
             zorder=5)
 
-    # Cosmetics
     ax.set_title(param, fontsize=11, weight="bold", pad=6)
     ax.set_xlabel("Simulated Value", fontsize=9, color=DGRAY)
     ax.set_ylabel("Density",         fontsize=9, color=DGRAY)
     ax.tick_params(colors=DGRAY, labelsize=8)
-    for spine in ax.spines.values():
-        spine.set_edgecolor(MGRAY)
-    ax.legend(fontsize=7.5, framealpha=0.9, loc="upper left")
+    for sp in ax.spines.values():
+        sp.set_edgecolor(MGRAY)
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(fontsize=7.5, framealpha=0.9, loc="upper left")
 
 
-def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta):
-    """2-up histogram pages."""
-    meta_by_name = {r["name"]: r for r in rows_meta}
+def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list):
+    meta = {r["name"]: r for r in rows_meta}
     params = [r["name"] for r in rows_meta if r["name"] in valid_df.columns]
     if not params:
         return
 
     pairs = [params[i:i + 2] for i in range(0, len(params), 2)]
-    total_pages = len(pairs)
+    total = len(pairs)
 
     for pi, pair in enumerate(pairs):
-        fig = plt.figure(figsize=A4)
-        fig.patch.set_facecolor("white")
+        fig = plt.figure(figsize=A4, facecolor="white")
+        _page_header(fig, f"Histograms  ({pi + 1} / {total})")
 
-        # Top bar
-        hbar = fig.add_axes([0, 0.935, 1, 0.065])
-        hbar.set_facecolor(BLUE)
-        hbar.axis("off")
-        hbar.text(0.5, 0.5,
-                  f"Histograms  ({pi + 1} / {total_pages})",
-                  color="white", fontsize=13, weight="bold",
-                  ha="center", va="center", transform=hbar.transAxes)
-
-        n = len(pair)
         for si, p in enumerate(pair):
-            meta = meta_by_name.get(p)
-            if meta is None:
+            m = meta.get(p)
+            if m is None:
                 continue
             data = valid_df[p].dropna()
             if data.empty:
                 continue
-
-            ax = fig.add_axes([0.10, 0.53 - si * 0.48, 0.84, 0.38])
+            # Two equal-height slots: top=[0.54..0.88], bottom=[0.07..0.41]
+            bottom = 0.54 - si * 0.47
+            ax = fig.add_axes([ML + 0.02, bottom, 1 - 2 * (ML + 0.02), 0.34])
             _draw_hist_ax(ax, data, p,
-                          meta["spec_lo"], meta["spec_hi"],
-                          meta["cpk"],     meta["passed"])
+                          m["spec_lo"], m["spec_hi"], m["cpk"], m["passed"])
 
-        fig.tight_layout(rect=[0, 0, 1, 0.93])
-        pdf.savefig(fig, bbox_inches="tight")
+        pdf.savefig(fig)
         plt.close(fig)
 
 
-# ── Section: Correlation heatmap ──────────────────────────────────────────────
+# ── Section 4: Correlation heatmap ────────────────────────────────────────────
 
 def _add_correlation(pdf: PdfPages, valid_df: pd.DataFrame):
     numeric = valid_df.select_dtypes(include=[np.number]).columns.tolist()
-    cols    = [c for c in numeric if not c.endswith("_pass") and c not in ("global_pass",)
-               and valid_df[c].nunique() > 1]
-
+    cols = [c for c in numeric
+            if not c.endswith("_pass") and c != "global_pass"
+            and valid_df[c].nunique() > 1]
     if len(cols) < 2:
         return
 
     corr = valid_df[cols].corr()
-    n    = len(cols)
-    sz   = max(6.0, min(10.0, n * 0.6))
+    n = len(cols)
 
-    fig, ax = plt.subplots(figsize=(sz, sz * 0.85 + 1))
+    fig, ax = plt.subplots(figsize=A4, facecolor="white")
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
-    cax = ax.matshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
+    cax  = ax.matshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
     cbar = fig.colorbar(cax, ax=ax, fraction=0.036, pad=0.04)
     cbar.ax.tick_params(labelsize=8)
     cbar.set_label("Pearson r", fontsize=9)
 
+    fs = max(6, 10 - n // 3)
     for i in range(n):
         for j in range(n):
-            v = corr.iloc[i, j]
+            v  = corr.iloc[i, j]
             fc = "black" if abs(v) < 0.6 else "white"
-            ax.text(j, i, f"{v:.2f}", ha="center", va="center",
-                    fontsize=max(6, 10 - n // 3), color=fc)
+            ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=fs, color=fc)
 
-    ticks = range(n)
-    ax.set_xticks(list(ticks))
-    ax.set_yticks(list(ticks))
+    ticks = list(range(n))
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
     ax.set_xticklabels(cols, rotation=45, ha="left", fontsize=8)
     ax.set_yticklabels(cols, fontsize=8)
     ax.xaxis.set_ticks_position("bottom")
     ax.set_title("Parameter Correlation Matrix", fontsize=13, pad=14, weight="bold")
+    for sp in ax.spines.values():
+        sp.set_edgecolor(MGRAY)
 
-    for spine in ax.spines.values():
-        spine.set_edgecolor(MGRAY)
-
-    fig.tight_layout()
-    pdf.savefig(fig, bbox_inches="tight")
+    fig.tight_layout(rect=[ML, MB, 1 - ML, 1 - MB])
+    pdf.savefig(fig)
     plt.close(fig)
 
 
@@ -475,7 +561,7 @@ def generate_pdf_report(df, stim, yaml_path, out_dir):
     rows     = _measurement_rows(valid_df, stim)
 
     with PdfPages(pdf_path) as pdf:
-        _add_cover(pdf, prepared, yaml_path, rows)
+        _add_cover(pdf, prepared, yaml_path, rows, stim)
         _add_table(pdf, rows)
         _add_histograms(pdf, valid_df, stim, rows)
         _add_correlation(pdf, valid_df)

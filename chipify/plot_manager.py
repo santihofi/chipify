@@ -243,20 +243,30 @@ class PlotManager:
                     ax.tick_params(colors='white')
             
         elif mode == "Fail Breakdown (Pie Chart)":
+            _light = isinstance(bg_color, str) and bg_color.strip().lower() in ("white", "#fff", "#ffffff")
+            _fg    = "#222222" if _light else "white"
             pass_cols = [c for c in valid_df.columns if c.endswith('_pass') and not c.endswith('_overall_pass') and c != 'global_pass']
             fail_counts = {c.replace('_pass', ''): (valid_df[c] == False).sum() for c in pass_cols if (valid_df[c] == False).sum() > 0}
-                    
+
             if not fail_counts:
                 ax.text(0.5, 0.5, "100% Yield! No failures to analyze.", color='#2ecc71', ha='center', va='center', fontsize=14, weight='bold')
                 ax.axis('off')
             else:
                 labels, sizes = list(fail_counts.keys()), list(fail_counts.values())
                 colors = plt.cm.Pastel1(np.linspace(0, 1, len(labels)))
-                explode = [0.1 if s == max(sizes) else 0 for s in sizes] 
-                patches, texts, autotexts = ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', startangle=140, textprops={'color': 'white', 'fontsize': 10}, wedgeprops={'edgecolor': 'gray', 'linewidth': 1})
-                for autotext in autotexts: autotext.set_color('black'); autotext.set_weight('bold')
-                ax.set_title("Fail Breakdown: Which constraints caused failures?", color='white', pad=20)
-                ax.axis('equal') 
+                explode = [0.1 if s == max(sizes) else 0 for s in sizes]
+                _edge   = "#aaaaaa" if _light else "gray"
+                patches, texts, autotexts = ax.pie(
+                    sizes, explode=explode, labels=labels, colors=colors,
+                    autopct='%1.1f%%', startangle=140,
+                    textprops={'color': _fg, 'fontsize': 10},
+                    wedgeprops={'edgecolor': _edge, 'linewidth': 1},
+                )
+                for autotext in autotexts:
+                    autotext.set_color('black')
+                    autotext.set_weight('bold')
+                ax.set_title("Fail Breakdown: Which constraints caused failures?", color=_fg, pad=20)
+                ax.axis('equal')
 
         fig.tight_layout()
         canvas.draw()
