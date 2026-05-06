@@ -1185,11 +1185,29 @@ class SimifyGUI(ctk.CTk):
             self.lbl_y.pack(side=tk.LEFT, padx=(0, 5))
             self.scatter_y_dropdown.pack(side=tk.LEFT, padx=(0, 15))
             
-            # Dropdowns einschränken!
+            # Dropdown options by mode:
+            # - Corner Yield Matrix: only truly swept YAML params
+            # - Scatter Plot: swept params + measurements + derived equations
             if mode == "Corner Yield Matrix":
                 options = self.sweep_params if self.sweep_params else ["-"]
             else:
-                options = self.all_plot_cols if self.all_plot_cols else ["-"]
+                meas_names = []
+                if self.current_stim is not None:
+                    for t in self.current_stim.tests:
+                        for v in t.value_lst:
+                            if v.name not in meas_names:
+                                meas_names.append(v.name)
+
+                derived_names = []
+                if self.current_df is not None:
+                    derived_names = [c for c in self._derived_cols if c in self.current_df.columns]
+
+                options = []
+                for name in self.sweep_params + meas_names + derived_names:
+                    if name not in options:
+                        options.append(name)
+                if not options:
+                    options = ["-"]
                 
             self.scatter_x_dropdown.configure(values=options)
             self.scatter_y_dropdown.configure(values=options)
@@ -1403,7 +1421,18 @@ class SimifyGUI(ctk.CTk):
         # --- ZWISCHENSPEICHERN DER SPALTEN ---
         numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
         self.all_plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
-        self.sweep_params = [p for p in list(stim.params.keys()) if p in valid_df.columns and valid_df[p].nunique() > 1]
+        # Only treat parameters as sweep params when they are explicitly enumerated
+        # in YAML with more than one value (fixed params like temp=27 are excluded).
+        self.sweep_params = []
+        for p_name, p_values in stim.params.items():
+            if p_name not in valid_df.columns:
+                continue
+            try:
+                is_enumerated = hasattr(p_values, "__len__") and not isinstance(p_values, str)
+                if is_enumerated and len(p_values) > 1:
+                    self.sweep_params.append(p_name)
+            except Exception:
+                continue
         
         self.group_by_dropdown.configure(values=["None"] + self.sweep_params)
         
