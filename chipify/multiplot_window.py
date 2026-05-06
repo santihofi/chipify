@@ -184,11 +184,11 @@ class PlotCell(ctk.CTkFrame):
         # Correlation Heatmap + Fail Breakdown have no extra controls — empty row
 
         elif mode == "Transient":
-            ctk.CTkLabel(self._ctrl, text="Signals:").grid(row=0, column=0, padx=(0, 4))
-            ctk.CTkEntry(
-                self._ctrl, textvariable=self._tran_signals,
-                placeholder_text="e.g.  v(out), v(in)",
-                width=180,
+            ctk.CTkLabel(self._ctrl, text="Signal:").grid(row=0, column=0, padx=(0, 4))
+            ctk.CTkOptionMenu(
+                self._ctrl, variable=self._tran_signals,
+                values=["All Signals"], width=170, dynamic_resizing=False,
+                command=lambda *_: self._request_redraw(),
             ).grid(row=0, column=1, padx=(0, 12))
 
             ctk.CTkLabel(self._ctrl, text="Runs:").grid(row=0, column=2, padx=(0, 4))
@@ -375,6 +375,19 @@ class PlotCell(ctk.CTkFrame):
             options = list(dict.fromkeys(all_meas + derived_cols)) or ["-"]
             self._set_optmenu(self._ctrl, 1, options, self._target)
 
+        elif mode == "Transient":
+            tran_sigs = ["All Signals"]
+            if stim is not None:
+                for t in stim.tests:
+                    for sig in getattr(t, "transient_signals", []):
+                        if sig not in tran_sigs:
+                            tran_sigs.append(sig)
+            for eq in _app_config.load_config().get("transient_equations", []):
+                name = eq.get("name", "").strip()
+                if name and name not in tran_sigs:
+                    tran_sigs.append(name)
+            self._set_optmenu(self._ctrl, 1, tran_sigs, self._tran_signals)
+
     @staticmethod
     def _set_optmenu(parent, grid_col, options, var, row=0):
         """Update the CTkOptionMenu at grid column grid_col inside parent."""
@@ -424,9 +437,22 @@ class PlotCell(ctk.CTkFrame):
                 return   # draw_histogram already calls canvas.draw()
 
             if mode == "Transient":
-                # Parse comma-separated signals from the entry field.
-                sigs_raw = self._tran_signals.get().strip()
-                signals = [s.strip() for s in sigs_raw.replace(",", " ").split() if s.strip()]
+                # Determine which signals to plot from the dropdown selection.
+                sig_sel = self._tran_signals.get().strip()
+                if sig_sel == "All Signals" or not sig_sel:
+                    # Collect all transient signals from stim
+                    signals = []
+                    if stim is not None:
+                        for t in stim.tests:
+                            for s in getattr(t, "transient_signals", []):
+                                if s not in signals:
+                                    signals.append(s)
+                    for eq in _app_config.load_config().get("transient_equations", []):
+                        name = eq.get("name", "").strip()
+                        if name and name not in signals:
+                            signals.append(name)
+                else:
+                    signals = [sig_sel]
 
                 # Build run_id list based on run-filter mode.
                 run_ids: list = []
@@ -458,7 +484,7 @@ class PlotCell(ctk.CTkFrame):
                     for _, row in parent_df[["run_id", "global_pass"]].dropna(subset=["run_id"]).iterrows():
                         pass_map[str(row["run_id"]).zfill(6)] = bool(row["global_pass"])
 
-                equations = _app_config.load_config().get("custom_equations", [])
+                equations = _app_config.load_config().get("transient_equations", [])
                 PlotManager.draw_transient_plot(
                     self._fig, self._mpl_canvas,
                     tran_dir, run_ids, signals,

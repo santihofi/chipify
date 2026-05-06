@@ -228,8 +228,14 @@ class SimifyGUI(ctk.CTk):
 
         # --- EQUATIONS STATE ---
         # Each entry: {"name_var": StringVar, "expr_var": StringVar}
-        self._eq_row_vars = []
+        self._eq_row_vars: list[dict] = []
+        self._tran_eq_row_vars: list[dict] = []
         self._derived_cols: list[str] = []
+
+        # --- TRANSIENT STATE ---
+        self._tran_df = None                  # combined waveform DataFrame (lazily built)
+        self._tran_line_orig: dict = {}       # {Line2D: (lw, alpha, zorder)} for hover restore
+        self._tran_hover_line = None          # currently highlighted line
 
         self.setup_left_panel()
         self.setup_right_panel()
@@ -327,7 +333,8 @@ class SimifyGUI(ctk.CTk):
         self.lbl_yield = ctk.CTkLabel(self.metrics_frame, text="Global Yield: -", font=ctk.CTkFont(size=14, weight="bold"))
         self.lbl_yield.grid(row=0, column=2)
         
-        self.tabs = ctk.CTkTabview(self.right_frame, fg_color=panel_color)
+        self.tabs = ctk.CTkTabview(self.right_frame, fg_color=panel_color,
+                                    command=self._on_tab_change)
         self.tabs.grid(row=2, column=0, sticky="nsew")
         
         self.tab_editor = self.tabs.add("Datasheet Editor") 
@@ -432,60 +439,71 @@ class SimifyGUI(ctk.CTk):
         self.tab_eq.grid_columnconfigure(0, weight=1)
         self.tab_eq.grid_rowconfigure(1, weight=1)
 
-        # ── Top bar ──────────────────────────────────────────────────────────
+        # ── Top bar with Scalar / Transient mode selector ─────────────────────
         top_bar = ctk.CTkFrame(self.tab_eq, fg_color="transparent")
         top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
 
         ctk.CTkLabel(
-            top_bar, text="λ  Custom Equations",
+            top_bar, text="Custom Equations",
             font=ctk.CTkFont(size=16, weight="bold"), text_color="#3484F0"
         ).pack(side=tk.LEFT, padx=5)
+
+        self._eq_mode_var = ctk.StringVar(value="Scalar")
+        ctk.CTkSegmentedButton(
+            top_bar, values=["Scalar", "Transient"],
+            variable=self._eq_mode_var,
+            command=self._on_eq_mode_change,
+            width=180,
+        ).pack(side=tk.LEFT, padx=(16, 0))
 
         self.btn_apply_eq = ctk.CTkButton(
             top_bar, text="▶  Apply to Data", width=150,
             command=self._action_apply_equations,
-            fg_color="#3484F0", hover_color="#1a6fc4"
+            fg_color="#3484F0", hover_color="#1a6fc4",
+        )
+        self.btn_apply_tran_eq = ctk.CTkButton(
+            top_bar, text="▶  Apply to Waveforms", width=175,
+            command=self._action_apply_tran_equations,
+            fg_color="#2ecc71", hover_color="#27ae60",
         )
         self.btn_apply_eq.pack(side=tk.RIGHT, padx=5)
+        # btn_apply_tran_eq is packed/forgotten by _on_eq_mode_change
 
-        # ── Main card ────────────────────────────────────────────────────────
-        card = ctk.CTkFrame(self.tab_eq, fg_color=panel_color, corner_radius=8)
-        card.grid(row=1, column=0, sticky="nsew")
-        card.grid_columnconfigure(0, weight=1)
-        card.grid_rowconfigure(1, weight=1)
+        # ── Scalar card ───────────────────────────────────────────────────────
+        self._scalar_eq_card = ctk.CTkFrame(self.tab_eq, fg_color=panel_color, corner_radius=8)
+        self._scalar_eq_card.grid(row=1, column=0, sticky="nsew")
+        self._scalar_eq_card.grid_columnconfigure(0, weight=1)
+        self._scalar_eq_card.grid_rowconfigure(1, weight=1)
 
-        # Column header
-        hdr = ctk.CTkFrame(card, fg_color="transparent")
-        hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
-        ctk.CTkLabel(hdr, text="Name", text_color="gray",
+        shdr = ctk.CTkFrame(self._scalar_eq_card, fg_color="transparent")
+        shdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
+        ctk.CTkLabel(shdr, text="Name", text_color="gray",
                      font=ctk.CTkFont(size=12), width=140, anchor="w").pack(side=tk.LEFT)
-        ctk.CTkLabel(hdr, text="Expression  (reference column names directly, e.g.  p_out / p_in * 100)",
-                     text_color="gray", font=ctk.CTkFont(size=12), anchor="w").pack(side=tk.LEFT, padx=(24, 0))
+        ctk.CTkLabel(shdr,
+                     text="Expression  (reference scalar column names, e.g.  p_out / p_in * 100)",
+                     text_color="gray", font=ctk.CTkFont(size=12), anchor="w").pack(
+            side=tk.LEFT, padx=(24, 0))
 
-        # Scrollable rows
-        self._eq_scroll = ctk.CTkScrollableFrame(card, fg_color="transparent")
+        self._eq_scroll = ctk.CTkScrollableFrame(self._scalar_eq_card, fg_color="transparent")
         self._eq_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
         self._eq_scroll.grid_columnconfigure(1, weight=1)
 
-        # Status log (mini-console)
         self._eq_log = ctk.CTkTextbox(
-            card, height=80, state="disabled",
+            self._scalar_eq_card, height=80, state="disabled",
             font=ctk.CTkFont(family="Courier", size=12),
-            fg_color="#0d0d0d", text_color="#b0b0b0"
+            fg_color="#0d0d0d", text_color="#b0b0b0",
         )
         self._eq_log.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 0))
 
-        # Add button row
-        add_bar = ctk.CTkFrame(card, fg_color="transparent")
-        add_bar.grid(row=3, column=0, sticky="ew", padx=16, pady=(6, 12))
+        sadd = ctk.CTkFrame(self._scalar_eq_card, fg_color="transparent")
+        sadd.grid(row=3, column=0, sticky="ew", padx=16, pady=(6, 12))
         ctk.CTkButton(
-            add_bar, text="+ Add Equation", width=140,
+            sadd, text="+ Add Equation", width=140,
             command=self._action_add_equation,
             fg_color="transparent", border_width=1,
-            text_color=("gray10", "#DCE4EE")
+            text_color=("gray10", "#DCE4EE"),
         ).pack(side=tk.LEFT)
 
-        # Load persisted equations from settings.json
         saved = app_config.load_config().get("custom_equations", [])
         for eq in saved:
             self._eq_row_vars.append({
@@ -493,6 +511,52 @@ class SimifyGUI(ctk.CTk):
                 "expr_var": ctk.StringVar(value=eq.get("expr", "")),
             })
         self._build_equations_ui()
+
+        # ── Transient card ────────────────────────────────────────────────────
+        self._tran_eq_card = ctk.CTkFrame(self.tab_eq, fg_color=panel_color, corner_radius=8)
+        self._tran_eq_card.grid(row=1, column=0, sticky="nsew")
+        self._tran_eq_card.grid_columnconfigure(0, weight=1)
+        self._tran_eq_card.grid_rowconfigure(1, weight=1)
+
+        thdr = ctk.CTkFrame(self._tran_eq_card, fg_color="transparent")
+        thdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
+        ctk.CTkLabel(thdr, text="Name", text_color="gray",
+                     font=ctk.CTkFont(size=12), width=140, anchor="w").pack(side=tk.LEFT)
+        ctk.CTkLabel(thdr,
+                     text="Expression  (reference waveform column names, e.g.  v(outp) - v(outn))",
+                     text_color="gray", font=ctk.CTkFont(size=12), anchor="w").pack(
+            side=tk.LEFT, padx=(24, 0))
+
+        self._tran_eq_scroll = ctk.CTkScrollableFrame(self._tran_eq_card, fg_color="transparent")
+        self._tran_eq_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
+        self._tran_eq_scroll.grid_columnconfigure(1, weight=1)
+
+        self._tran_eq_log = ctk.CTkTextbox(
+            self._tran_eq_card, height=80, state="disabled",
+            font=ctk.CTkFont(family="Courier", size=12),
+            fg_color="#0d0d0d", text_color="#b0b0b0",
+        )
+        self._tran_eq_log.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 0))
+
+        tadd = ctk.CTkFrame(self._tran_eq_card, fg_color="transparent")
+        tadd.grid(row=3, column=0, sticky="ew", padx=16, pady=(6, 12))
+        ctk.CTkButton(
+            tadd, text="+ Add Transient Equation", width=185,
+            command=self._action_add_tran_equation,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE"),
+        ).pack(side=tk.LEFT)
+
+        saved_tran = app_config.load_config().get("transient_equations", [])
+        for eq in saved_tran:
+            self._tran_eq_row_vars.append({
+                "name_var": ctk.StringVar(value=eq.get("name", "")),
+                "expr_var": ctk.StringVar(value=eq.get("expr", "")),
+            })
+        self._build_tran_equations_ui()
+
+        # Start in Scalar mode
+        self._on_eq_mode_change("Scalar")
 
     def _build_equations_ui(self):
         for widget in self._eq_scroll.winfo_children():
@@ -522,6 +586,88 @@ class SimifyGUI(ctk.CTk):
                 text="No equations defined yet.  Click  '+ Add Equation'  to start.",
                 text_color="gray"
             ).pack(pady=30)
+
+    def _on_eq_mode_change(self, mode: str):
+        """Show the active equation card and its Apply button."""
+        if mode == "Scalar":
+            self._tran_eq_card.grid_remove()
+            self._scalar_eq_card.grid(row=1, column=0, sticky="nsew")
+            self.btn_apply_tran_eq.pack_forget()
+            self.btn_apply_eq.pack(side=tk.RIGHT, padx=5)
+        else:
+            self._scalar_eq_card.grid_remove()
+            self._tran_eq_card.grid(row=1, column=0, sticky="nsew")
+            self.btn_apply_eq.pack_forget()
+            self.btn_apply_tran_eq.pack(side=tk.RIGHT, padx=5)
+
+    def _build_tran_equations_ui(self):
+        for widget in self._tran_eq_scroll.winfo_children():
+            widget.destroy()
+
+        for idx, row in enumerate(self._tran_eq_row_vars):
+            r = ctk.CTkFrame(self._tran_eq_scroll, fg_color="transparent")
+            r.pack(fill="x", pady=3)
+            r.grid_columnconfigure(1, weight=1)
+
+            ctk.CTkEntry(r, textvariable=row["name_var"], width=140,
+                         placeholder_text="signal_name").pack(side=tk.LEFT, padx=(0, 6))
+            ctk.CTkLabel(r, text="=", font=ctk.CTkFont(weight="bold"),
+                         width=14).pack(side=tk.LEFT)
+            ctk.CTkEntry(r, textvariable=row["expr_var"],
+                         placeholder_text="e.g.  v(outp) - v(outn)").pack(
+                side=tk.LEFT, padx=(6, 8), fill="x", expand=True)
+            ctk.CTkButton(
+                r, text="🗑️", width=30,
+                fg_color="#e74c3c", hover_color="#c0392b",
+                command=lambda i=idx: self._action_del_tran_equation(i)
+            ).pack(side=tk.LEFT)
+
+        if not self._tran_eq_row_vars:
+            ctk.CTkLabel(
+                self._tran_eq_scroll,
+                text="No transient equations defined.  Click  '+ Add Transient Equation'  to start.",
+                text_color="gray"
+            ).pack(pady=30)
+
+    def _action_add_tran_equation(self):
+        self._tran_eq_row_vars.append({
+            "name_var": ctk.StringVar(value=""),
+            "expr_var": ctk.StringVar(value=""),
+        })
+        self._build_tran_equations_ui()
+
+    def _action_del_tran_equation(self, idx: int):
+        if idx < len(self._tran_eq_row_vars):
+            self._tran_eq_row_vars.pop(idx)
+        self._build_tran_equations_ui()
+
+    def _collect_tran_equations(self) -> list[dict]:
+        return [
+            {"name": r["name_var"].get().strip(), "expr": r["expr_var"].get().strip()}
+            for r in self._tran_eq_row_vars
+            if r["name_var"].get().strip() and r["expr_var"].get().strip()
+        ]
+
+    def _action_apply_tran_equations(self):
+        """Save transient equations and refresh the transient signal list."""
+        equations = self._collect_tran_equations()
+        cfg = app_config.load_config()
+        cfg["transient_equations"] = equations
+        app_config.save_config(cfg)
+        self._tran_eq_log_write(
+            f"Saved {len(equations)} transient equation(s).\n"
+            "Click  '↺ Refresh'  in the Transient tab to apply to waveforms.\n"
+        )
+        self._refresh_transient_signal_list()
+
+    def _tran_eq_log_write(self, text: str):
+        try:
+            self._tran_eq_log.configure(state="normal")
+            self._tran_eq_log.delete("1.0", "end")
+            self._tran_eq_log.insert("end", text)
+            self._tran_eq_log.configure(state="disabled")
+        except Exception:
+            pass
 
     def _action_add_equation(self):
         self._eq_row_vars.append({
@@ -639,6 +785,42 @@ class SimifyGUI(ctk.CTk):
         new_tornado = current_tornado + [c for c in valid_derived if c not in current_tornado]
         if new_tornado != current_tornado:
             self.tornado_target_dropdown.configure(values=new_tornado)
+
+    def _on_tab_change(self, *_args):
+        """Auto-refresh the Transient tab whenever it becomes active."""
+        try:
+            if self.tabs.get() == "Transient":
+                self.update_transient_plot()
+        except Exception:
+            pass
+
+    def _load_tran_df(self, tran_dir: str, run_ids: list,
+                      equations: list | None = None) -> "pd.DataFrame":
+        """Load selected waveform CSVs into a combined (run_id, time, …) DataFrame."""
+        if not tran_dir or not run_ids:
+            return pd.DataFrame()
+        run_id_set = set(run_ids)
+        chunks = []
+        for fname in glob.glob(os.path.join(tran_dir, "run_*.csv")):
+            rid = os.path.basename(fname)[4:].split("__", 1)[0]
+            if rid not in run_id_set:
+                continue
+            try:
+                df_chunk = pd.read_csv(fname)
+                if equations:
+                    for eq in equations:
+                        eq_n = eq.get("name", "").strip()
+                        eq_e = eq.get("expr", "").strip()
+                        if eq_n and eq_e:
+                            try:
+                                df_chunk = df_chunk.eval(f"{eq_n} = {eq_e}", engine="python")
+                            except Exception:
+                                pass
+                df_chunk.insert(0, "run_id", rid)
+                chunks.append(df_chunk)
+            except Exception:
+                pass
+        return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
 
     def open_multiplot(self):
         from chipify.multiplot_window import MultiPlotWindow
@@ -1435,7 +1617,7 @@ class SimifyGUI(ctk.CTk):
         target = self.tornado_target_var.get()
         
         self.sc_plot, self.scatter_df = PlotManager.draw_adv_plot(
-            self.adv_fig, self.adv_fig.axes[0] if self.adv_fig.axes else self.adv_fig.add_subplot(111), 
+            self.adv_fig, None,  # always clf + tight_layout; prevents axis-shrink ghosting
             self.adv_canvas, valid_df, self.current_stim, mode, x_col, y_col, target, bg_color=panel_color
         )
         
@@ -1603,8 +1785,8 @@ class SimifyGUI(ctk.CTk):
                     if sig not in seen:
                         seen.append(sig)
 
-        # Also expose active custom equations so derived waveforms can be selected.
-        for eq in app_config.load_config().get("custom_equations", []):
+        # Also expose active transient equations as derived waveform signals.
+        for eq in app_config.load_config().get("transient_equations", []):
             name = eq.get("name", "").strip()
             if name and name not in seen:
                 seen.append(name)
@@ -1676,7 +1858,7 @@ class SimifyGUI(ctk.CTk):
             for _, row in df[['run_id', 'global_pass']].dropna(subset=['run_id']).iterrows():
                 pass_map[str(row['run_id']).zfill(6)] = bool(row['global_pass'])
 
-        equations = app_config.load_config().get("custom_equations", [])
+        equations = app_config.load_config().get("transient_equations", [])
         self._tran_line_map = PlotManager.draw_transient_plot(
             self.tran_fig, self.tran_canvas, tran_dir,
             run_ids, selected_signals,
@@ -1684,6 +1866,13 @@ class SimifyGUI(ctk.CTk):
             bg_color=panel_color,
             equations=equations,
         )
+        # Store original line properties for hover highlight/restore.
+        self._tran_line_orig = {
+            line: (line.get_linewidth(), line.get_alpha() or 1.0, line.get_zorder())
+            for line in self._tran_line_map
+        }
+        self._tran_hover_line = None
+
         # Rebuild hover annotation on the fresh axis (fig.clf() destroyed the old one).
         if self.tran_fig.axes:
             self._tran_annot = self.tran_fig.axes[0].annotate(
@@ -1696,6 +1885,13 @@ class SimifyGUI(ctk.CTk):
             self._tran_annot.set_visible(False)
         else:
             self._tran_annot = None
+
+        # Build combined DataFrame for further processing / export.
+        try:
+            self._tran_df = self._load_tran_df(tran_dir, run_ids, equations)
+        except Exception as _e:
+            log.warning("Could not build _tran_df: %s", _e)
+            self._tran_df = pd.DataFrame()
 
     def _on_tran_hover(self, event):
         """Show a tooltip when the mouse is near a transient curve."""
@@ -1719,10 +1915,31 @@ class SimifyGUI(ctk.CTk):
                 continue
 
         if hit_run_id is None:
+            # Restore previously highlighted line.
+            if self._tran_hover_line is not None:
+                orig = self._tran_line_orig.get(self._tran_hover_line)
+                if orig:
+                    self._tran_hover_line.set_linewidth(orig[0])
+                    self._tran_hover_line.set_alpha(orig[1])
+                    self._tran_hover_line.set_zorder(orig[2])
+                self._tran_hover_line = None
             if annot.get_visible():
                 annot.set_visible(False)
                 self.tran_canvas.draw_idle()
             return
+
+        # Highlight the hit line; restore the previous one.
+        if hit_line != self._tran_hover_line:
+            if self._tran_hover_line is not None:
+                orig = self._tran_line_orig.get(self._tran_hover_line)
+                if orig:
+                    self._tran_hover_line.set_linewidth(orig[0])
+                    self._tran_hover_line.set_alpha(orig[1])
+                    self._tran_hover_line.set_zorder(orig[2])
+            hit_line.set_linewidth(2.2)
+            hit_line.set_alpha(0.95)
+            hit_line.set_zorder(5)
+            self._tran_hover_line = hit_line
 
         # Build tooltip text
         lines = [f"Run ID: {hit_run_id}", f"Signal: {hit_sig}"]
