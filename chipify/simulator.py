@@ -214,6 +214,18 @@ def _chunk_args(worker_args, chunk_size):
         yield worker_args[i:i + chunk_size]
 
 
+def _resolve_chunk_size(cfg, total_tasks, num_cores):
+    configured = str(cfg.get("chunk_size", "auto"))
+    if configured == "auto":
+        return max(1, min(16, total_tasks // (num_cores * 8) if num_cores > 0 else 1))
+    try:
+        parsed = int(configured)
+        return max(1, parsed)
+    except (TypeError, ValueError):
+        log.warning("Unknown chunk_size=%r, falling back to auto.", configured)
+        return max(1, min(16, total_tasks // (num_cores * 8) if num_cores > 0 else 1))
+
+
 def generate_templates(stim) -> None:
     for test in stim.tests:
         if _is_aborted():
@@ -281,13 +293,20 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
 
         # ── Pool execution ────────────────────────────────────────────────────
         # Avoid plain 'fork' in GUI/threaded parents; use forkserver/spawn.
-        start_method = "forkserver" if sys.platform.startswith("linux") else "spawn"
+        configured_method = cfg.get("process_start_method", "auto")
+        if configured_method == "auto":
+            start_method = "forkserver" if sys.platform.startswith("linux") else "spawn"
+        elif configured_method in {"forkserver", "spawn"}:
+            start_method = configured_method
+        else:
+            log.warning("Unknown process_start_method=%r, falling back to auto.", configured_method)
+            start_method = "forkserver" if sys.platform.startswith("linux") else "spawn"
         ctx = get_context(start_method)
         pool = ctx.Pool(processes=num_cores)
         log.debug("Pool created (%s, %d workers).", start_method, num_cores)
 
         # Batch tasks to reduce scheduler/IPC overhead while keeping polling.
-        chunk_size = max(1, min(16, total_tasks // (num_cores * 8) if num_cores > 0 else 1))
+        chunk_size = _resolve_chunk_size(cfg, total_tasks, num_cores)
         batches = list(_chunk_args(worker_args, chunk_size))
         pending = [pool.apply_async(simulate_case_batch, (batch,)) for batch in batches]
         log.debug("%d batch tasks submitted (chunk_size=%d).", len(pending), chunk_size)

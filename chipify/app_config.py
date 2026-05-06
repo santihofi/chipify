@@ -17,6 +17,8 @@ LOG_PATH    = os.path.join(settings.OUT_DIR, "chipify.log")
 
 DEFAULTS: dict = {
     "num_cores": None,  # None → auto-detect via util.get_num_cores()
+    "process_start_method": "auto",  # auto|forkserver|spawn
+    "chunk_size": "auto",  # auto|1|2|4|8|16|32|64|128|256
 }
 
 _logging_ready = False

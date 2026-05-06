@@ -61,7 +61,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk):
         super().__init__(parent)
         self.title("Global Settings")
-        self.geometry("420x300")
+        self.geometry("460x520")
         self.resizable(False, False)
 
         # grab_set needs a small delay so the window is fully mapped first
@@ -70,6 +70,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self._config = app_config.load_config()
         max_cores = os.cpu_count() or 1
         current_cores = int(self._config.get("num_cores") or util.get_num_cores())
+        process_mode = self._config.get("process_start_method", "auto")
+        chunk_size_mode = str(self._config.get("chunk_size", "auto"))
+        if process_mode not in ["auto", "forkserver", "spawn"]:
+            process_mode = "auto"
+        if chunk_size_mode not in ["auto", "1", "2", "4", "8", "16", "32"]:
+            chunk_size_mode = "auto"
 
         # ── Header ──────────────────────────────────────────────────────────
         ctk.CTkLabel(
@@ -104,6 +110,44 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color="gray", font=ctk.CTkFont(size=11)
         ).pack(anchor="w")
 
+        # ── process start method section ────────────────────────────────────
+        proc_outer = ctk.CTkFrame(self, fg_color="transparent")
+        proc_outer.pack(fill="x", padx=36, pady=(18, 0))
+        ctk.CTkLabel(proc_outer, text="Multiprocessing Start Method:", anchor="w").pack(anchor="w")
+        self._proc_mode_var = ctk.StringVar(value=process_mode)
+        self._proc_mode_menu = ctk.CTkOptionMenu(
+            proc_outer,
+            variable=self._proc_mode_var,
+            values=["auto", "forkserver", "spawn"],
+            dynamic_resizing=False,
+            width=180,
+        )
+        self._proc_mode_menu.pack(anchor="w", pady=(6, 2))
+        ctk.CTkLabel(
+            proc_outer,
+            text="auto = forkserver on Linux, spawn elsewhere",
+            text_color="gray", font=ctk.CTkFont(size=11)
+        ).pack(anchor="w")
+
+        # ── chunk size section ───────────────────────────────────────────────
+        chunk_outer = ctk.CTkFrame(self, fg_color="transparent")
+        chunk_outer.pack(fill="x", padx=36, pady=(18, 0))
+        ctk.CTkLabel(chunk_outer, text="Batch Chunk Size:", anchor="w").pack(anchor="w")
+        self._chunk_var = ctk.StringVar(value=chunk_size_mode)
+        self._chunk_menu = ctk.CTkOptionMenu(
+            chunk_outer,
+            variable=self._chunk_var,
+            values=["auto", "1", "2", "4", "8", "16", "32", "64", "128", "256"],
+            dynamic_resizing=False,
+            width=180,
+        )
+        self._chunk_menu.pack(anchor="w", pady=(6, 2))
+        ctk.CTkLabel(
+            chunk_outer,
+            text="Higher values can improve throughput, lower values improve responsiveness",
+            text_color="gray", font=ctk.CTkFont(size=11)
+        ).pack(anchor="w")
+
         # ── Buttons ─────────────────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=36, pady=(28, 0))
@@ -124,6 +168,8 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def _save(self) -> None:
         self._config["num_cores"] = int(self._cores_var.get())
+        self._config["process_start_method"] = self._proc_mode_var.get()
+        self._config["chunk_size"] = self._chunk_var.get()
         app_config.save_config(self._config)
         self.destroy()
 
