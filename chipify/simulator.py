@@ -13,6 +13,7 @@ from jinja2 import Template
 
 from chipify import settings
 from chipify import util
+from chipify import app_config
 
 def stage_files_to_ram():
     print(f"[*] Load library files to RAM({settings.FAST_TMP})...")
@@ -158,7 +159,8 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
         worker_args = [(params, stim.tests) for params in param_sets]
         results = []
         
-        num_cores = util.get_num_cores()
+        cfg = app_config.load_config()
+        num_cores = cfg.get("num_cores") or util.get_num_cores()
         print(f"[*] Starting Multiprocessing with {num_cores} cores {len(param_sets)} Iterationen...")
 
     

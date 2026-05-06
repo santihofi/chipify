@@ -16,6 +16,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from chipify import settings
 from chipify import simulator
 from chipify import util
+from chipify import app_config
 
 # --- NEUE MODULE IMPORTE ---
 from chipify.plot_manager import PlotManager
@@ -46,6 +47,83 @@ ctk.set_default_color_theme("blue")
 
 background_color = "#000000"
 panel_color = "#1a1a1a"
+
+
+# ==========================================
+# GLOBAL SETTINGS MODAL
+# ==========================================
+class SettingsWindow(ctk.CTkToplevel):
+    """Modal settings dialog for persistent user preferences."""
+
+    def __init__(self, parent: ctk.CTk):
+        super().__init__(parent)
+        self.title("Global Settings")
+        self.geometry("420x300")
+        self.resizable(False, False)
+
+        # grab_set needs a small delay so the window is fully mapped first
+        self.after(50, self.grab_set)
+
+        self._config = app_config.load_config()
+        max_cores = os.cpu_count() or 1
+        current_cores = int(self._config.get("num_cores") or util.get_num_cores())
+
+        # ── Header ──────────────────────────────────────────────────────────
+        ctk.CTkLabel(
+            self, text="⚙️  Global Settings",
+            font=ctk.CTkFont(size=17, weight="bold")
+        ).pack(pady=(22, 18))
+
+        # ── num_cores section ───────────────────────────────────────────────
+        cores_outer = ctk.CTkFrame(self, fg_color="transparent")
+        cores_outer.pack(fill="x", padx=36)
+
+        row = ctk.CTkFrame(cores_outer, fg_color="transparent")
+        row.pack(fill="x")
+        ctk.CTkLabel(row, text="CPU Cores for Simulation:", anchor="w").pack(side="left")
+        self._cores_lbl = ctk.CTkLabel(row, text=str(current_cores),
+                                       font=ctk.CTkFont(weight="bold"), width=28)
+        self._cores_lbl.pack(side="right")
+
+        self._cores_var = ctk.IntVar(value=current_cores)
+        self._slider = ctk.CTkSlider(
+            cores_outer,
+            from_=1, to=max_cores,
+            number_of_steps=max(1, max_cores - 1),
+            variable=self._cores_var,
+            command=self._on_cores_change,
+        )
+        self._slider.pack(fill="x", pady=(6, 2))
+
+        ctk.CTkLabel(
+            cores_outer,
+            text=f"Range: 1 – {max_cores} logical cores",
+            text_color="gray", font=ctk.CTkFont(size=11)
+        ).pack(anchor="w")
+
+        # ── Buttons ─────────────────────────────────────────────────────────
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(fill="x", padx=36, pady=(28, 0))
+
+        ctk.CTkButton(
+            btn_row, text="Cancel", command=self.destroy,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE")
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btn_row, text="💾  Save", command=self._save,
+            fg_color="#2ecc71", hover_color="#27ae60"
+        ).pack(side="right")
+
+    def _on_cores_change(self, value: float) -> None:
+        self._cores_lbl.configure(text=str(int(value)))
+
+    def _save(self) -> None:
+        self._config["num_cores"] = int(self._cores_var.get())
+        app_config.save_config(self._config)
+        self.destroy()
+
 
 class SimifyGUI(ctk.CTk):
     def __init__(self):
@@ -110,7 +188,15 @@ class SimifyGUI(ctk.CTk):
         self.history_dropdown.grid(row=7, column=0, padx=20, pady=(5, 10), sticky="ew")
         
         self.btn_pdf = ctk.CTkButton(self.left_frame, text="📄 Export PDF Report", command=self.export_pdf, fg_color="#8e44ad", hover_color="#9b59b6")
-        self.btn_pdf.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.btn_pdf.grid(row=8, column=0, padx=20, pady=(0, 8), sticky="ew")
+
+        self.btn_settings = ctk.CTkButton(
+            self.left_frame, text="⚙️  Settings",
+            command=self.open_settings,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE")
+        )
+        self.btn_settings.grid(row=9, column=0, padx=20, pady=(0, 20), sticky="ew")
 
         self.progress_bar = ctk.CTkProgressBar(self.left_frame)
         self.progress_bar.grid(row=11, column=0, padx=20, pady=(10, 0), sticky="ew")
@@ -230,6 +316,10 @@ class SimifyGUI(ctk.CTk):
         except Exception as e:
             self.lbl_status.configure(text="Status: PDF Export Failed", text_color="red")
             messagebox.showerror("Export Error", f"Failed to generate PDF:\n{e}")
+
+    def open_settings(self):
+        win = SettingsWindow(self)
+        self.wait_window(win)
 
     # ==========================================
     # DATASHEET EDITOR
