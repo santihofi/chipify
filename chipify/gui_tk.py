@@ -1204,6 +1204,14 @@ class SimifyGUI(ctk.CTk):
                             
                 self.scatter_annot.xy = (x_val, y_val)
                 self.scatter_annot.set_text("\n".join(text_lines))
+                # Mirror tooltip near edges so it does not get clipped.
+                ax_bbox = self.adv_fig.axes[0].get_window_extent()
+                x_off = -15 if event.x > (ax_bbox.x0 + ax_bbox.width * 0.70) else 15
+                y_off = -15 if event.y > (ax_bbox.y0 + ax_bbox.height * 0.70) else 15
+                self.scatter_annot.set_position((x_off, y_off))
+                self.scatter_annot.set_ha("right" if x_off < 0 else "left")
+                self.scatter_annot.set_va("top" if y_off < 0 else "bottom")
+                self.scatter_annot.set_annotation_clip(False)
                 self.scatter_annot.set_visible(True)
                 self.adv_canvas.draw_idle()
             else:

@@ -292,6 +292,14 @@ class PlotCell(ctk.CTkFrame):
 
         self._scatter_annot.xy = (row[x_col], row[y_col])
         self._scatter_annot.set_text("\n".join(text_lines))
+        # Mirror tooltip near axes borders to avoid clipping.
+        ax_bbox = self._fig.axes[0].get_window_extent()
+        x_off = -14 if event.x > (ax_bbox.x0 + ax_bbox.width * 0.70) else 14
+        y_off = -14 if event.y > (ax_bbox.y0 + ax_bbox.height * 0.70) else 14
+        self._scatter_annot.set_position((x_off, y_off))
+        self._scatter_annot.set_ha("right" if x_off < 0 else "left")
+        self._scatter_annot.set_va("top" if y_off < 0 else "bottom")
+        self._scatter_annot.set_annotation_clip(False)
         self._scatter_annot.set_visible(True)
         self._mpl_canvas.draw_idle()
 
