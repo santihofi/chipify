@@ -222,7 +222,12 @@ class SimifyGUI(ctk.CTk):
         self.test_vars = []  
         self.param_key = 'params'
         self.test_key = 'tests'
-        
+
+        # --- EQUATIONS STATE ---
+        # Each entry: {"name_var": StringVar, "expr_var": StringVar}
+        self._eq_row_vars = []
+        self._derived_cols: list[str] = []
+
         self.setup_left_panel()
         self.setup_right_panel()
         self.apply_treeview_dark_style()
@@ -310,13 +315,15 @@ class SimifyGUI(ctk.CTk):
         self.tab_table = self.tabs.add("Measurements")
         self.tab_worst = self.tabs.add("Worst-Case Analysis")
         self.tab_hist = self.tabs.add("Histograms")
-        self.tab_adv = self.tabs.add("Advanced Analytics") 
-        
+        self.tab_adv = self.tabs.add("Advanced Analytics")
+        self.tab_eq = self.tabs.add("Custom Equations")
+
         self.setup_editor_tab()
         self.setup_table_tab()
         self.setup_worst_case_tab()
         self.setup_histogram_tab()
-        self.setup_adv_analytics_tab() 
+        self.setup_adv_analytics_tab()
+        self.setup_equations_tab()
 
     # ==========================================
     # HISTORY & DATA LOADING
@@ -388,6 +395,220 @@ class SimifyGUI(ctk.CTk):
         except Exception as e:
             self.lbl_status.configure(text="Status: PDF Export Failed", text_color="red")
             messagebox.showerror("Export Error", f"Failed to generate PDF:\n{e}")
+
+    # ==========================================
+    # CUSTOM EQUATIONS TAB  (Epic 2)
+    # ==========================================
+    def setup_equations_tab(self):
+        self.tab_eq.grid_columnconfigure(0, weight=1)
+        self.tab_eq.grid_rowconfigure(1, weight=1)
+
+        # ── Top bar ──────────────────────────────────────────────────────────
+        top_bar = ctk.CTkFrame(self.tab_eq, fg_color="transparent")
+        top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        ctk.CTkLabel(
+            top_bar, text="λ  Custom Equations",
+            font=ctk.CTkFont(size=16, weight="bold"), text_color="#3484F0"
+        ).pack(side=tk.LEFT, padx=5)
+
+        self.btn_apply_eq = ctk.CTkButton(
+            top_bar, text="▶  Apply to Data", width=150,
+            command=self._action_apply_equations,
+            fg_color="#3484F0", hover_color="#1a6fc4"
+        )
+        self.btn_apply_eq.pack(side=tk.RIGHT, padx=5)
+
+        # ── Main card ────────────────────────────────────────────────────────
+        card = ctk.CTkFrame(self.tab_eq, fg_color=panel_color, corner_radius=8)
+        card.grid(row=1, column=0, sticky="nsew")
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_rowconfigure(1, weight=1)
+
+        # Column header
+        hdr = ctk.CTkFrame(card, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
+        ctk.CTkLabel(hdr, text="Name", text_color="gray",
+                     font=ctk.CTkFont(size=12), width=140, anchor="w").pack(side=tk.LEFT)
+        ctk.CTkLabel(hdr, text="Expression  (reference column names directly, e.g.  p_out / p_in * 100)",
+                     text_color="gray", font=ctk.CTkFont(size=12), anchor="w").pack(side=tk.LEFT, padx=(24, 0))
+
+        # Scrollable rows
+        self._eq_scroll = ctk.CTkScrollableFrame(card, fg_color="transparent")
+        self._eq_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
+        self._eq_scroll.grid_columnconfigure(1, weight=1)
+
+        # Status log (mini-console)
+        self._eq_log = ctk.CTkTextbox(
+            card, height=80, state="disabled",
+            font=ctk.CTkFont(family="Courier", size=12),
+            fg_color="#0d0d0d", text_color="#b0b0b0"
+        )
+        self._eq_log.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 0))
+
+        # Add button row
+        add_bar = ctk.CTkFrame(card, fg_color="transparent")
+        add_bar.grid(row=3, column=0, sticky="ew", padx=16, pady=(6, 12))
+        ctk.CTkButton(
+            add_bar, text="+ Add Equation", width=140,
+            command=self._action_add_equation,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE")
+        ).pack(side=tk.LEFT)
+
+        # Load persisted equations from settings.json
+        saved = app_config.load_config().get("custom_equations", [])
+        for eq in saved:
+            self._eq_row_vars.append({
+                "name_var": ctk.StringVar(value=eq.get("name", "")),
+                "expr_var": ctk.StringVar(value=eq.get("expr", "")),
+            })
+        self._build_equations_ui()
+
+    def _build_equations_ui(self):
+        for widget in self._eq_scroll.winfo_children():
+            widget.destroy()
+
+        for idx, row in enumerate(self._eq_row_vars):
+            r = ctk.CTkFrame(self._eq_scroll, fg_color="transparent")
+            r.pack(fill="x", pady=3)
+            r.grid_columnconfigure(1, weight=1)
+
+            ctk.CTkEntry(r, textvariable=row["name_var"], width=140,
+                         placeholder_text="signal_name").pack(side=tk.LEFT, padx=(0, 6))
+            ctk.CTkLabel(r, text="=", font=ctk.CTkFont(weight="bold"),
+                         width=14).pack(side=tk.LEFT)
+            ctk.CTkEntry(r, textvariable=row["expr_var"],
+                         placeholder_text="e.g.  p_out / p_in * 100").pack(
+                side=tk.LEFT, padx=(6, 8), fill="x", expand=True)
+            ctk.CTkButton(
+                r, text="🗑️", width=30,
+                fg_color="#e74c3c", hover_color="#c0392b",
+                command=lambda i=idx: self._action_del_equation(i)
+            ).pack(side=tk.LEFT)
+
+        if not self._eq_row_vars:
+            ctk.CTkLabel(
+                self._eq_scroll,
+                text="No equations defined yet.  Click  '+ Add Equation'  to start.",
+                text_color="gray"
+            ).pack(pady=30)
+
+    def _action_add_equation(self):
+        self._eq_row_vars.append({
+            "name_var": ctk.StringVar(value=""),
+            "expr_var": ctk.StringVar(value=""),
+        })
+        self._build_equations_ui()
+
+    def _action_del_equation(self, idx: int):
+        if idx < len(self._eq_row_vars):
+            self._eq_row_vars.pop(idx)
+        self._build_equations_ui()
+
+    def _collect_equations(self) -> list[dict]:
+        return [
+            {"name": r["name_var"].get().strip(), "expr": r["expr_var"].get().strip()}
+            for r in self._eq_row_vars
+            if r["name_var"].get().strip() and r["expr_var"].get().strip()
+        ]
+
+    def _action_apply_equations(self):
+        """Save equations to settings.json then apply to current DataFrame."""
+        equations = self._collect_equations()
+        cfg = app_config.load_config()
+        cfg["custom_equations"] = equations
+        app_config.save_config(cfg)
+
+        if self.current_df is None:
+            self._eq_log_write("[!] No data loaded — equations saved but not applied yet.\n")
+            return
+
+        self._derived_cols = self._apply_custom_equations(equations)
+        self._eq_log_write("Applied  {}/{} equations.  "
+                           "Derived columns: {}\n".format(
+                               len(self._derived_cols), len(equations),
+                               ", ".join(self._derived_cols) or "—"))
+        # Refresh dropdowns with new derived columns
+        self._refresh_plot_dropdowns_with_derived()
+
+    def _apply_custom_equations(self, equations: list[dict] | None = None) -> list[str]:
+        """
+        Evaluate each equation via DataFrame.eval(engine='python') and append
+        the result as a new column to self.current_df.
+        Returns the list of column names that were successfully computed.
+        """
+        if self.current_df is None:
+            return []
+        if equations is None:
+            equations = app_config.load_config().get("custom_equations", [])
+
+        derived = []
+        log_lines = []
+        import re
+        valid_ident = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+        for eq in equations:
+            name = eq.get("name", "").strip()
+            expr = eq.get("expr", "").strip()
+            if not name or not expr:
+                continue
+            if not valid_ident.match(name):
+                log_lines.append(f"[✗] {name}  →  Name must be a valid Python identifier")
+                log.warning("Equation '%s' skipped: invalid name.", name)
+                continue
+            try:
+                self.current_df = self.current_df.eval(
+                    f"{name} = {expr}", engine='python'
+                )
+                n_valid = int((self.current_df['sim_error'] == 'None').sum())
+                log_lines.append(f"[✓] {name} = {expr}  →  ok  ({n_valid} rows)")
+                log.debug("Applied equation: %s = %s", name, expr)
+                derived.append(name)
+            except Exception as exc:
+                log_lines.append(f"[✗] {name} = {expr}  →  {exc}")
+                log.warning("Equation '%s' failed: %s", name, exc)
+
+        if log_lines:
+            self._eq_log_write("\n".join(log_lines) + "\n")
+        return derived
+
+    def _eq_log_write(self, text: str):
+        try:
+            self._eq_log.configure(state="normal")
+            self._eq_log.delete("1.0", "end")
+            self._eq_log.insert("end", text)
+            self._eq_log.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _refresh_plot_dropdowns_with_derived(self):
+        """Add derived columns to histogram and scatter dropdowns."""
+        if not self._derived_cols or self.current_df is None:
+            return
+        valid_derived = [
+            c for c in self._derived_cols
+            if c in self.current_df.columns
+        ]
+        if not valid_derived:
+            return
+
+        # Histogram meas dropdown
+        current_hist_vals = list(self.plot_param_dropdown.cget("values") or [])
+        new_hist_vals = current_hist_vals + [c for c in valid_derived if c not in current_hist_vals]
+        if new_hist_vals != current_hist_vals:
+            self.plot_param_dropdown.configure(values=new_hist_vals)
+
+        # all_plot_cols (used by scatter / corner matrix)
+        for c in valid_derived:
+            if c not in self.all_plot_cols:
+                self.all_plot_cols.append(c)
+
+        # Tornado target dropdown
+        current_tornado = list(self.tornado_target_dropdown.cget("values") or [])
+        new_tornado = current_tornado + [c for c in valid_derived if c not in current_tornado]
+        if new_tornado != current_tornado:
+            self.tornado_target_dropdown.configure(values=new_tornado)
 
     def open_settings(self):
         win = SettingsWindow(self)
@@ -1104,16 +1325,20 @@ class SimifyGUI(ctk.CTk):
         
         self.current_df = df
         self.current_stim = stim
+
+        # Apply saved custom equations so derived columns are available everywhere
+        self._derived_cols = self._apply_custom_equations()
+
+        total = len(self.current_df)
+        crashes = len(self.current_df[self.current_df['sim_error'] != 'None'])
+        valid_df = self.current_df[self.current_df['sim_error'] == 'None']
         
-        total = len(df)
-        crashes = len(df[df['sim_error'] != 'None'])
-        valid_df = df[df['sim_error'] == 'None']
-        
-        tb_pass_cols = [c for c in df.columns if c.endswith('_overall_pass')]
-        df['global_pass'] = True 
-        for col in tb_pass_cols: df['global_pass'] = df['global_pass'] & df[col]
+        tb_pass_cols = [c for c in self.current_df.columns if c.endswith('_overall_pass')]
+        self.current_df['global_pass'] = True
+        for col in tb_pass_cols:
+            self.current_df['global_pass'] = self.current_df['global_pass'] & self.current_df[col]
             
-        global_passed = int(df['global_pass'].sum())
+        global_passed = int(self.current_df['global_pass'].sum())
         global_yield = (global_passed / total) * 100 if total > 0 else 0
         
         self.lbl_total.configure(text=f"Iterations: {total}")
@@ -1186,12 +1411,18 @@ class SimifyGUI(ctk.CTk):
             self.group_by_var.set("None")
         self.on_group_by_change(self.group_by_var.get())
         
-        if meas_cols:
-            self.plot_param_dropdown.configure(values=meas_cols)
-            if self.plot_param_var.get() not in meas_cols: self.plot_param_var.set(meas_cols[0])
+        # Merge measurement columns with any successfully derived columns
+        valid_derived = [c for c in self._derived_cols if c in valid_df.columns]
+        all_plot_meas = meas_cols + [c for c in valid_derived if c not in meas_cols]
+
+        if all_plot_meas:
+            self.plot_param_dropdown.configure(values=all_plot_meas)
+            if self.plot_param_var.get() not in all_plot_meas:
+                self.plot_param_var.set(all_plot_meas[0])
             self.update_plot()
-            self.tornado_target_dropdown.configure(values=meas_cols)
-            if self.tornado_target_var.get() not in meas_cols: self.tornado_target_var.set(meas_cols[0])
+            self.tornado_target_dropdown.configure(values=all_plot_meas)
+            if self.tornado_target_var.get() not in all_plot_meas:
+                self.tornado_target_var.set(all_plot_meas[0])
             
         # UI-Update für Dropdowns triggern
         self.on_adv_mode_change(self.adv_mode_var.get())
