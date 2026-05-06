@@ -5,6 +5,7 @@ import os
 import glob
 import threading
 import datetime
+import logging
 import pandas as pd
 import numpy as np
 import yaml
@@ -17,6 +18,8 @@ from chipify import settings
 from chipify import simulator
 from chipify import util
 from chipify import app_config
+
+log = logging.getLogger("chipify.gui")
 
 # --- NEUE MODULE IMPORTE ---
 from chipify.plot_manager import PlotManager
@@ -958,6 +961,7 @@ class SimifyGUI(ctk.CTk):
         if not selected or selected == "No files found": return
             
         yaml_path = os.path.join(settings.IN_DIR, selected)
+        log.info("start_simulation: %s", selected)
         
         self.btn_start.configure(state="disabled")
         self.btn_refresh.configure(state="disabled")
@@ -975,17 +979,20 @@ class SimifyGUI(ctk.CTk):
         threading.Thread(target=self.run_sim_thread, args=(yaml_path,), daemon=True).start()
 
     def stop_simulation(self):
+        log.info("stop_simulation: user requested abort.")
         self.stop_event.set()
+        simulator.abort_simulation()
         self.lbl_status.configure(text="Status: Canceling simulation...", text_color="orange")
         self.btn_stop.configure(state="disabled")
 
     def run_sim_thread(self, yaml_path):
+        log.info("run_sim_thread started. Thread: %s", threading.current_thread().name)
         try:
             stim = util.Stimuli(yaml_path)
             df = simulator.run_sim(stim, progress_callback=self.progress_callback_wrapper)
             
             if df is not None:
-
+                log.info("run_sim returned %d rows. Saving results...", len(df))
                 csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
                 df.to_csv(csv_out, index=False)
                 
@@ -995,16 +1002,22 @@ class SimifyGUI(ctk.CTk):
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     history_file = os.path.join(history_dir, f"run_{timestamp}.csv")
                     df.to_csv(history_file, index=False)
-                except Exception as e: print(f"Konnte Run nicht in Historie speichern: {e}")
+                except Exception as e:
+                    log.warning("Could not save history: %s", e)
                 self.after(0, self.refresh_history)
                 self.after(0, self.update_ui_results, df, stim, True)
+            else:
+                log.info("run_sim returned None (aborted or error).")
 
-            set_btn_start_ready(self)
-
-        except Exception as e: 
+        except Exception as e:
+            log.exception("run_sim_thread raised an exception: %s", e)
             self.after(0, self.show_error, str(e))
-            print(f"Simulation failed: {e}")
-            set_btn_start_ready(self)
+
+        finally:
+            # Always re-enable the UI – even if the thread was interrupted,
+            # hung in init, or raised an unexpected exception.
+            log.info("run_sim_thread finished. Re-enabling UI.")
+            self.after(0, set_btn_start_ready, self)
 
     def show_error(self, error_msg):
         self.lbl_status.configure(text="Status: Error / Aborted!", text_color="red")
@@ -1161,8 +1174,11 @@ def set_btn_start_ready(self):
     self.btn_refresh.configure(state="normal")
 
 def main():
+    app_config.setup_logging()
+    log.info("Silicrunch GUI starting up.")
     app = SimifyGUI()
     app.mainloop()
+    log.info("Silicrunch GUI shut down.")
 
 if __name__ == "__main__":
     main()
