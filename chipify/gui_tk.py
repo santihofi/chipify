@@ -388,7 +388,7 @@ class SimifyGUI(ctk.CTk):
         self.update() 
 
         try:
-            from simify import pdf_export
+            from chipify import pdf_export
             pdf_path = pdf_export.generate_pdf_report(self.current_df, self.current_stim, self.current_yaml_path, report_dir)
             self.lbl_status.configure(text=f"Status: PDF saved to out/reports/", text_color="#2ecc71")
             messagebox.showinfo("Export Successful", f"Report saved as:\n{os.path.basename(pdf_path)}")
