@@ -80,6 +80,7 @@ def write_meta(
     total_runs: int | None = None,
     valid_runs: int | None = None,
     global_yield: float | None = None,
+    tran_dir: str = "",
 ) -> str:
     """
     Write a sidecar .meta.json next to *csv_path*.
@@ -98,6 +99,7 @@ def write_meta(
         "total_runs": total_runs,
         "valid_runs": valid_runs,
         "global_yield": global_yield,
+        "tran_dir": tran_dir,
         "notes": "",
         "tags": [],
     }

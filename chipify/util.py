@@ -23,17 +23,25 @@ class Stimuli:
         
         # 2. Tests generieren
         for tb_path, measurements in data.get('tests', {}).items():
+            transient_signals = []
             value_lst = []
             for val_name, bounds in measurements.items():
+                if val_name == 'transient_signals':
+                    # bounds is a list of signal names, e.g. ["v(out)", "v(in)"]
+                    if isinstance(bounds, list):
+                        transient_signals = [str(s) for s in bounds]
+                    continue
                 value_lst.append(
                     Value(
-                        name=val_name, 
-                        vmin=bounds.get('min'), 
-                        vmax=bounds.get('max'), 
+                        name=val_name,
+                        vmin=bounds.get('min'),
+                        vmax=bounds.get('max'),
                         vtyp=bounds.get('typ')
                     )
                 )
-            self.addTest(Test(tb_path, value_lst))
+            t = Test(tb_path, value_lst)
+            t.transient_signals = transient_signals
+            self.addTest(t)
 
     def addTest(self, test):
         self.tests.append(test)
@@ -43,6 +51,7 @@ class Test:
         self.tb_path = tb_path
         self.value_lst = value_lst
         self.template = ""
+        self.transient_signals: list = []  # populated by Stimuli._load_from_yaml
         
 class Value:
     def __init__(self, name, vmin, vmax, vtyp):

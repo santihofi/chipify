@@ -336,6 +336,7 @@ class SimifyGUI(ctk.CTk):
         self.tab_hist = self.tabs.add("Histograms")
         self.tab_adv = self.tabs.add("Advanced Analytics")
         self.tab_eq = self.tabs.add("Custom Equations")
+        self.tab_tran = self.tabs.add("Transient")
 
         self.setup_editor_tab()
         self.setup_table_tab()
@@ -343,6 +344,7 @@ class SimifyGUI(ctk.CTk):
         self.setup_histogram_tab()
         self.setup_adv_analytics_tab()
         self.setup_equations_tab()
+        self.setup_transient_tab()
 
     # ==========================================
     # HISTORY & DATA LOADING
@@ -391,6 +393,8 @@ class SimifyGUI(ctk.CTk):
             self.lbl_current_run.configure(text=f"Viewing: {selection}")
             self.update_ui_results(df, stim, switch_tab=switch_tab)
             self.lbl_status.configure(text=f"Status: Loaded {selection}", text_color="#2ecc71")
+            # Transient tab refreshes via update_ui_results hook above;
+            # signal list and plot update are called there automatically.
         except Exception as e:
             messagebox.showwarning("Load Error", f"Could not parse run data. Ensure the current Datasheet fits the old run.\n\n{e}")
 
@@ -1418,6 +1422,221 @@ class SimifyGUI(ctk.CTk):
             self.scatter_annot = self.adv_fig.axes[0].annotate("", xy=(0,0), xytext=(15,15), textcoords="offset points", bbox=dict(boxstyle="round,pad=0.4", fc="#1c1c1c", ec="#3484F0", lw=1, alpha=0.95), color="white", arrowprops=dict(arrowstyle="-|>", color="#3484F0"))
             self.scatter_annot.set_visible(False)
 
+    # ==========================================
+    # TRANSIENT TAB
+    # ==========================================
+    def setup_transient_tab(self):
+        self.tab_tran.grid_columnconfigure(0, weight=1)
+        self.tab_tran.grid_rowconfigure(1, weight=1)
+
+        # ── Control row ──────────────────────────────────────────────────────
+        ctrl = ctk.CTkFrame(self.tab_tran, fg_color="transparent")
+        ctrl.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+
+        # Run-selection mode
+        ctk.CTkLabel(ctrl, text="Runs:").pack(side=tk.LEFT, padx=(0, 4))
+        self._tran_mode_var = ctk.StringVar(value="All Valid")
+        self._tran_mode_btn = ctk.CTkSegmentedButton(
+            ctrl,
+            values=["All Valid", "Failing Only", "First N", "Custom IDs"],
+            variable=self._tran_mode_var,
+            command=self._on_tran_mode_change,
+            width=320,
+        )
+        self._tran_mode_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        # N / custom-id entry (visible for "First N" and "Custom IDs")
+        self._tran_n_var = ctk.StringVar(value="50")
+        self._tran_n_entry = ctk.CTkEntry(
+            ctrl, textvariable=self._tran_n_var, width=90,
+            placeholder_text="N or ids…"
+        )
+
+        # Refresh button
+        ctk.CTkButton(
+            ctrl, text="↺  Refresh", width=100,
+            command=self.update_transient_plot,
+            fg_color="#3484F0", hover_color="#1a6fc4",
+        ).pack(side=tk.RIGHT, padx=(8, 0))
+
+        # ── Body: signals selector (left) + plot (right) ─────────────────────
+        body = ctk.CTkFrame(self.tab_tran, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="nsew")
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        # Signal selector panel
+        sig_panel = ctk.CTkFrame(body, fg_color=panel_color, width=160, corner_radius=6)
+        sig_panel.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        sig_panel.grid_propagate(False)
+        sig_panel.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            sig_panel, text="Signals",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color="#3484F0"
+        ).grid(row=0, column=0, padx=8, pady=(8, 4), sticky="w")
+
+        # Native tk.Listbox – supports extended multi-select without extra deps
+        list_frame = ctk.CTkFrame(sig_panel, fg_color="transparent")
+        list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+
+        self._tran_sig_lb = tk.Listbox(
+            list_frame,
+            selectmode=tk.EXTENDED,
+            bg="#1a1a1a", fg="white",
+            selectbackground="#3484F0", selectforeground="white",
+            activestyle="none",
+            highlightthickness=0, borderwidth=0,
+            font=("Courier", 11),
+        )
+        self._tran_sig_lb.grid(row=0, column=0, sticky="nsew")
+
+        lb_scroll = tk.Scrollbar(list_frame, orient="vertical",
+                                 command=self._tran_sig_lb.yview)
+        lb_scroll.grid(row=0, column=1, sticky="ns")
+        self._tran_sig_lb.configure(yscrollcommand=lb_scroll.set)
+
+        ctk.CTkButton(
+            sig_panel, text="Select All", height=26,
+            command=lambda: self._tran_sig_lb.select_set(0, tk.END),
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE"),
+        ).grid(row=2, column=0, padx=6, pady=(0, 6), sticky="ew")
+
+        # Matplotlib canvas
+        plt.style.use('dark_background')
+        self.tran_fig = plt.figure(figsize=(8, 5))
+        self.tran_fig.patch.set_facecolor(panel_color)
+        self.tran_canvas = FigureCanvasTkAgg(self.tran_fig, master=body)
+        self.tran_canvas.get_tk_widget().grid(row=0, column=1, sticky="nsew")
+
+    def _on_tran_mode_change(self, mode):
+        if mode in ("First N", "Custom IDs"):
+            self._tran_n_entry.pack(side=tk.LEFT, padx=(0, 10))
+        else:
+            self._tran_n_entry.pack_forget()
+
+    def _resolve_tran_dir(self) -> str:
+        """
+        Map the currently loaded run → its tran_data directory.
+
+        Priority:
+        1. df.attrs['tran_dir']     — freshly simulated run (in-process)
+        2. run_meta sidecar         — history run with .meta.json
+        3. Newest out/tran_data/*/  — fallback glob
+        """
+        # 1. In-memory attr (set by run_sim on a fresh result)
+        if self.current_df is not None:
+            td = self.current_df.attrs.get("tran_dir", "")
+            if td and os.path.isdir(td):
+                return td
+
+        # 2. History meta sidecar
+        selection = self.history_dropdown.get() if hasattr(self, "history_dropdown") else ""
+        if selection and selection not in ("No runs found", "Latest (simulation_results)"):
+            csv_path = os.path.join(settings.OUT_DIR, "history", selection)
+            from chipify import run_meta as _rm
+            meta = _rm.read_meta(csv_path)
+            td = meta.get("tran_dir", "")
+            if td and os.path.isdir(td):
+                return td
+
+        # 3. Newest tran_data sub-directory
+        tran_base = os.path.join(settings.OUT_DIR, "tran_data")
+        if os.path.isdir(tran_base):
+            subdirs = sorted(
+                (d for d in glob.glob(os.path.join(tran_base, "*")) if os.path.isdir(d)),
+                reverse=True,
+            )
+            if subdirs:
+                return subdirs[0]
+
+        return ""
+
+    def _refresh_transient_signal_list(self):
+        """Re-populate the signals listbox from the current Stimuli."""
+        self._tran_sig_lb.delete(0, tk.END)
+        if self.current_stim is None:
+            return
+        seen: list = []
+        for test in self.current_stim.tests:
+            for sig in getattr(test, "transient_signals", []):
+                if sig not in seen:
+                    seen.append(sig)
+                    self._tran_sig_lb.insert(tk.END, sig)
+        # Select all by default
+        if seen:
+            self._tran_sig_lb.select_set(0, tk.END)
+
+    def update_transient_plot(self, *_args):
+        """Build run_ids list, resolve signals, delegate to PlotManager."""
+        if self.current_df is None:
+            return
+
+        tran_dir = self._resolve_tran_dir()
+        if not tran_dir:
+            PlotManager.draw_transient_plot(
+                self.tran_fig, self.tran_canvas, "", [], [],
+                bg_color=panel_color,
+            )
+            return
+
+        # Collect selected signals from listbox
+        selected_signals = [
+            self._tran_sig_lb.get(i)
+            for i in self._tran_sig_lb.curselection()
+        ]
+        if not selected_signals:
+            PlotManager.draw_transient_plot(
+                self.tran_fig, self.tran_canvas, tran_dir, [], [],
+                bg_color=panel_color,
+            )
+            return
+
+        # Derive run_id pool from selection mode
+        df = self.current_df
+        if 'run_id' not in df.columns:
+            return
+        mode = self._tran_mode_var.get()
+
+        if mode == "All Valid":
+            run_ids = list(df[df['sim_error'] == 'None']['run_id'].astype(str))
+        elif mode == "Failing Only":
+            if 'global_pass' in df.columns:
+                run_ids = list(df[df['global_pass'] == False]['run_id'].astype(str))
+            else:
+                run_ids = []
+        elif mode == "First N":
+            try:
+                n = int(self._tran_n_var.get())
+            except ValueError:
+                n = 50
+            run_ids = list(df[df['sim_error'] == 'None']['run_id'].astype(str).head(n))
+        else:  # Custom IDs
+            raw = self._tran_n_var.get()
+            run_ids = [r.strip().zfill(6) for r in raw.replace(",", " ").split() if r.strip()]
+
+        # Hard cap
+        _CAP = 500
+        if len(run_ids) > _CAP:
+            log.warning("Transient plot: capping %d run_ids to %d.", len(run_ids), _CAP)
+            run_ids = run_ids[:_CAP]
+
+        # Build pass_map for per-curve coloring
+        pass_map: dict = {}
+        if 'global_pass' in df.columns:
+            for _, row in df[['run_id', 'global_pass']].dropna(subset=['run_id']).iterrows():
+                pass_map[str(row['run_id']).zfill(6)] = bool(row['global_pass'])
+
+        PlotManager.draw_transient_plot(
+            self.tran_fig, self.tran_canvas, tran_dir,
+            run_ids, selected_signals,
+            pass_map=pass_map,
+            bg_color=panel_color,
+        )
+
     def apply_treeview_dark_style(self):
         style = ttk.Style()
         style.theme_use("default")
@@ -1506,6 +1725,7 @@ class SimifyGUI(ctk.CTk):
                         total_runs=total,
                         valid_runs=valid,
                         global_yield=gyield,
+                        tran_dir=df.attrs.get("tran_dir", ""),
                     )
                 except Exception as e:
                     log.warning("Could not save history: %s", e)
@@ -1693,6 +1913,11 @@ class SimifyGUI(ctk.CTk):
             self.tabs.set("Measurements") 
             self.lbl_current_run.configure(text=f"Viewing: Latest (simulation_results)")
             self.history_dropdown.set("Latest (simulation_results)")
+
+        # Refresh transient tab when new data is loaded
+        self._refresh_transient_signal_list()
+        if self._resolve_tran_dir():
+            self.update_transient_plot()
 
         self._notify_multiplot()
 

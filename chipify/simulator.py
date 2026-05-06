@@ -7,6 +7,7 @@ import itertools
 import subprocess
 import time
 import logging
+import datetime
 from multiprocessing import get_context
 from abc import ABC, abstractmethod
 
@@ -137,6 +138,14 @@ class NgspiceSimulator(BaseSimulator):
                 netlist = netlist.replace(".control", ".control\nset num_threads=1\n")
             else:
                 netlist += "\n.control\nset num_threads=1\n.endc\n"
+
+            # Inject wrdata command for transient signal capture.
+            # {{ tran_out_path }} is a Jinja2 placeholder filled per worker call.
+            if getattr(test, "transient_signals", []):
+                signals_str = " ".join(test.transient_signals)
+                wrdata_line = f"wrdata {{{{ tran_out_path }}}} {signals_str}"
+                netlist = netlist.replace(".endc", f"{wrdata_line}\n.endc", 1)
+
             return netlist
 
     def run(self, netlist: str, timeout_sec: int = 10):
@@ -202,12 +211,68 @@ def get_simulator_engine(simulator_name: str) -> BaseSimulator:
     return engine_cls()
 
 
-def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator):
+def _persist_transient(tab_path: str, signals: list, dest_csv: str) -> None:
+    """
+    Convert an ngspice wrdata .tab file into a clean time-indexed CSV.
+
+    ngspice wrdata writes 2*N columns for N signals:
+      time_0 sig0_0  time_1 sig1_0  ...   (paired columns)
+
+    If the file has N+1 columns instead (single time column), that layout
+    is handled as the fallback.
+    """
+    try:
+        df = pd.read_csv(tab_path, sep=r"\s+", header=None, comment="*")
+        if df.empty:
+            return
+        ncols = len(df.columns)
+        n_sigs = len(signals)
+        result = pd.DataFrame()
+        if ncols >= 2 * n_sigs and n_sigs > 0:
+            # Paired layout: col 0=time, col 1=sig0, col 2=time(dup), col 3=sig1 …
+            result["time"] = df.iloc[:, 0]
+            for i, sig in enumerate(signals):
+                col_idx = 2 * i + 1
+                if col_idx < ncols:
+                    result[sig] = df.iloc[:, col_idx]
+        else:
+            # Single time column layout
+            cols = min(ncols - 1, n_sigs)
+            result["time"] = df.iloc[:, 0]
+            for i in range(cols):
+                result[signals[i]] = df.iloc[:, i + 1]
+        os.makedirs(os.path.dirname(dest_csv), exist_ok=True)
+        result.to_csv(dest_csv, index=False)
+    except Exception as exc:
+        log.warning("Could not persist transient data %s → %s: %s", tab_path, dest_csv, exc)
+    finally:
+        try:
+            os.remove(tab_path)
+        except OSError:
+            pass
+
+
+def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
+                                      run_id: str = "", tran_dir: str = ""):
     sample = params.copy()
     sample['sim_error'] = "None"
+    sample['run_id'] = run_id
 
     for test in tests:
-        rendering = Template(test.template_str).render(**params)
+        tran_signals = getattr(test, "transient_signals", [])
+        pid = os.getpid()
+        tb_safe = test.tb_path.replace("/", "__").replace("\\", "__")
+
+        render_kwargs = dict(params)
+        if tran_signals and tran_dir:
+            tran_out_path = os.path.join(
+                settings.FAST_TMP, f"sim_{pid}_{run_id}_{tb_safe}.tab"
+            )
+            render_kwargs["tran_out_path"] = tran_out_path
+        else:
+            tran_out_path = ""
+
+        rendering = Template(test.template_str).render(**render_kwargs)
         sim_output, error_msg = engine.run(rendering)
 
         if error_msg:
@@ -217,6 +282,11 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator):
                 sample[val_obj.name] = float('nan')
                 sample[f"{val_obj.name}_pass"] = False
             continue
+
+        # Persist transient waveform data when available.
+        if tran_signals and tran_dir and tran_out_path and os.path.exists(tran_out_path):
+            dest_csv = os.path.join(tran_dir, f"run_{run_id}__{tb_safe}.csv")
+            _persist_transient(tran_out_path, tran_signals, dest_csv)
 
         if sim_output and sim_output.startswith("MY_DATA:"):
             clean_line = sim_output.replace("MY_DATA:", "").strip()
@@ -244,16 +314,19 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator):
 
 
 def simulate_single_case(args):
-    params, tests, simulator_name = args
+    params, tests, simulator_name, run_id, tran_dir = args
     engine = get_simulator_engine(simulator_name)
-    return _simulate_single_case_with_engine(params, tests, engine)
+    return _simulate_single_case_with_engine(params, tests, engine, run_id, tran_dir)
 
 
 def simulate_case_batch(batch_args):
     """Worker helper: process a batch of cases to reduce IPC overhead."""
-    params_batch, tests, simulator_name = batch_args
+    param_id_batch, tests, simulator_name, tran_dir = batch_args
     engine = get_simulator_engine(simulator_name)
-    return [_simulate_single_case_with_engine(params, tests, engine) for params in params_batch]
+    return [
+        _simulate_single_case_with_engine(params, tests, engine, run_id, tran_dir)
+        for params, run_id in param_id_batch
+    ]
 
 
 def _chunk_args(worker_args, chunk_size):
@@ -322,12 +395,24 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
         if _is_aborted():
             raise InterruptedError("Aborted before pool start.")
 
-        worker_args = [(params, stim.tests, engine.name) for params in param_sets]
+        # Assign a stable zero-padded run_id to every parameter case.
+        run_ids = [f"{i:06d}" for i in range(len(param_sets))]
+
+        # Create the per-simulation transient store directory.
+        sim_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        has_tran = any(getattr(t, "transient_signals", []) for t in stim.tests)
+        if has_tran:
+            tran_dir = os.path.join(settings.OUT_DIR, "tran_data", sim_timestamp)
+            os.makedirs(tran_dir, exist_ok=True)
+            log.info("Transient store: %s", tran_dir)
+        else:
+            tran_dir = ""
+
         results = []
         num_cores = cfg.get("num_cores") or util.get_num_cores()
-        log.info("Spawning pool: %d workers, %d tasks.", num_cores, len(worker_args))
+        log.info("Spawning pool: %d workers, %d tasks.", num_cores, len(param_sets))
 
-        total_tasks = len(worker_args)
+        total_tasks = len(param_sets)
         completed = 0
 
         # ── Pool execution ────────────────────────────────────────────────────
@@ -345,11 +430,14 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
         log.debug("Pool created (%s, %d workers).", start_method, num_cores)
 
         # Batch tasks to reduce scheduler/IPC overhead while keeping polling.
+        # Each batch item is a (params, run_id) pair so workers can persist
+        # transient files to tran_dir with the correct run_id in the filename.
         chunk_size = _resolve_chunk_size(cfg, total_tasks, num_cores)
-        param_batches = list(_chunk_args(param_sets, chunk_size))
+        param_id_pairs = list(zip(param_sets, run_ids))
+        param_id_batches = list(_chunk_args(param_id_pairs, chunk_size))
         pending = [
-            pool.apply_async(simulate_case_batch, ((batch, stim.tests, engine.name),))
-            for batch in param_batches
+            pool.apply_async(simulate_case_batch, ((batch, stim.tests, engine.name, tran_dir),))
+            for batch in param_id_batches
         ]
         log.debug("%d batch tasks submitted (chunk_size=%d).", len(pending), chunk_size)
 
@@ -384,7 +472,10 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
         pool.join()
         log.info("Pool finished cleanly. %d results collected.", len(results))
 
-        return pd.DataFrame(results)
+        result_df = pd.DataFrame(results)
+        if tran_dir:
+            result_df.attrs["tran_dir"] = tran_dir
+        return result_df
 
     except InterruptedError:
         log.info("Simulation interrupted by user.")

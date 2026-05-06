@@ -306,7 +306,7 @@ class PlotManager:
                 ax.set_title("Fail Breakdown: Which constraints caused failures?", color=_fg, pad=20)
                 ax.axis('equal')
 
-        # ── Plugin plot modes ────────────────────────────────────────────────
+        # ── Plugin plot modes ─────────────────────────────────────────────────
         else:
             try:
                 from chipify.plugin_loader import get_plot_plugins
@@ -323,3 +323,167 @@ class PlotManager:
             fig.tight_layout()
         canvas.draw()
         return sc_plot, scatter_df
+
+    @staticmethod
+    def draw_transient_plot(
+        fig,
+        canvas,
+        tran_dir: str,
+        run_ids: list,
+        signals: list,
+        *,
+        pass_map: dict | None = None,
+        bg_color: str = "#1a1a1a",
+    ) -> None:
+        """
+        Overlay time-domain waveforms from per-run CSV files.
+
+        Files are loaded lazily (one open() per run per testbench) to avoid
+        loading the full sweep into RAM.  Alpha is auto-faded when more than
+        50 curves would be drawn to prevent a solid painted rectangle.
+
+        Parameters
+        ----------
+        tran_dir   : directory containing `run_<id>__<tb>.csv` files.
+        run_ids    : list of zero-padded run_id strings (e.g. ['000001', …]).
+        signals    : list of signal names to overlay (must match CSV columns).
+        pass_map   : optional {run_id: bool} — failing runs use #e74c3c tint.
+        bg_color   : axes face colour (matches the parent tab panel).
+        """
+        # ── Mandatory ghost-fix (Project Brief §3) ────────────────────────────
+        fig.clf()
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(bg_color)
+        fig.patch.set_facecolor(bg_color)
+
+        # ── Guard: nothing to plot ────────────────────────────────────────────
+        if not tran_dir or not run_ids or not signals:
+            ax.text(
+                0.5, 0.5,
+                "No transient data.\nRun a simulation with transient_signals defined,\n"
+                "then select signals and click Refresh.",
+                ha="center", va="center", color="gray",
+                transform=ax.transAxes, fontsize=11,
+            )
+            ax.axis("off")
+            canvas.draw()
+            return
+
+        # ── Discover matching files ───────────────────────────────────────────
+        run_id_set = set(run_ids)
+        matched: list[tuple[str, str]] = []  # (run_id, filepath)
+        for fname in os.listdir(tran_dir):
+            if not fname.endswith(".csv"):
+                continue
+            # filename pattern: run_<id>__<tb_safe>.csv
+            if not fname.startswith("run_"):
+                continue
+            parts = fname[4:].split("__", 1)  # strip "run_" prefix
+            rid = parts[0]
+            if rid in run_id_set:
+                matched.append((rid, os.path.join(tran_dir, fname)))
+
+        if not matched:
+            ax.text(
+                0.5, 0.5,
+                "No transient CSV files found for the selected runs.\n"
+                "The simulation may not have used transient_signals, "
+                "or the files have been removed.",
+                ha="center", va="center", color="gray",
+                transform=ax.transAxes, fontsize=11, wrap=True,
+            )
+            ax.axis("off")
+            canvas.draw()
+            return
+
+        # ── Time-axis auto-scaling: probe first file ──────────────────────────
+        time_scale, time_unit = 1.0, "s"
+        try:
+            probe_df = pd.read_csv(matched[0][1], nrows=1)
+            if "time" in probe_df.columns:
+                # Read the last time value to determine magnitude
+                probe_full = pd.read_csv(matched[0][1], usecols=["time"])
+                t_max = probe_full["time"].abs().max()
+                if t_max >= 1e-3:
+                    time_scale, time_unit = 1e3, "ms"
+                if t_max >= 1.0:
+                    time_scale, time_unit = 1.0, "s"
+                if t_max < 1e-3:
+                    time_scale, time_unit = 1e6, "µs"
+                if t_max < 1e-6:
+                    time_scale, time_unit = 1e9, "ns"
+        except Exception:
+            pass
+
+        # ── Alpha auto-fade ───────────────────────────────────────────────────
+        n_curves = len(matched) * len(signals)
+        alpha = 1.0 if n_curves <= 50 else max(0.05, 50.0 / n_curves)
+
+        # ── Color palette: one base colour per signal (tab10) ─────────────────
+        base_colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(signals))))
+        sig_color = {sig: base_colors[i % 10] for i, sig in enumerate(signals)}
+        fail_color = "#e74c3c"
+
+        # ── Draw curves ───────────────────────────────────────────────────────
+        first_error: str = ""
+        drawn_any = False
+        for run_id, fpath in matched:
+            is_fail = pass_map.get(run_id, True) is False if pass_map else False
+            try:
+                df = pd.read_csv(fpath)
+            except Exception as exc:
+                if not first_error:
+                    first_error = str(exc)
+                continue
+
+            if "time" not in df.columns:
+                continue
+
+            t = df["time"] * time_scale
+            for sig in signals:
+                if sig not in df.columns:
+                    continue
+                color = fail_color if is_fail else sig_color[sig]
+                ax.plot(t, df[sig], color=color, alpha=alpha,
+                        linewidth=0.8, rasterized=(n_curves > 200))
+                drawn_any = True
+
+        if not drawn_any:
+            msg = f"Could not read any waveform data.\n({first_error})" if first_error \
+                else "Waveform files exist but contain no matching signal columns."
+            ax.text(0.5, 0.5, msg, ha="center", va="center", color="gray",
+                    transform=ax.transAxes, fontsize=11)
+            ax.axis("off")
+            canvas.draw()
+            return
+
+        # ── Axes labels ───────────────────────────────────────────────────────
+        ax.set_xlabel(f"Time ({time_unit})", color="white")
+        ax.set_ylabel("Signal Value", color="white")
+        n_runs_drawn = len({rid for rid, _ in matched})
+        ax.set_title(
+            f"Transient Overlay — {n_runs_drawn} run(s) × {len(signals)} signal(s)"
+            + (f"  [α={alpha:.2f}]" if n_curves > 50 else ""),
+            color="white", pad=10,
+        )
+        ax.tick_params(colors="white")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("gray")
+        ax.grid(True, linestyle="--", alpha=0.2)
+
+        # ── Legend: one proxy entry per signal (not per curve) ────────────────
+        proxy_handles = []
+        for sig in signals:
+            proxy_handles.append(
+                Line2D([0], [0], color=sig_color[sig], linewidth=1.5, label=sig)
+            )
+        if pass_map and any(v is False for v in pass_map.values()):
+            proxy_handles.append(
+                Line2D([0], [0], color=fail_color, linewidth=1.5, label="Failing run")
+            )
+        ax.legend(handles=proxy_handles, loc="best",
+                  facecolor="#2b2b2b", edgecolor="gray",
+                  labelcolor="white", fontsize=9)
+
+        fig.tight_layout()
+        canvas.draw()
