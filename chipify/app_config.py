@@ -71,19 +71,38 @@ def setup_logging(level: int = logging.DEBUG) -> None:
 # ── Config persistence ────────────────────────────────────────────────────────
 
 def load_config() -> dict:
-    """Return the merged config (file values on top of DEFAULTS)."""
+    """
+    Return the merged config.
+
+    Priority (highest wins): settings.json  >  project.yaml defaults  >  DEFAULTS.
+    """
+    # Start from DEFAULTS, overlay project.yaml defaults, then user settings.json
+    merged = DEFAULTS.copy()
+
+    try:
+        from chipify import project_config
+        proj = project_config.load()
+        _key_map = {
+            "default_num_cores":      "num_cores",
+            "default_report_profile": "pdf_profile",
+        }
+        for proj_key, cfg_key in _key_map.items():
+            if proj_key in proj and merged.get(cfg_key) is None:
+                merged[cfg_key] = proj[proj_key]
+    except Exception:
+        pass
+
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            merged = DEFAULTS.copy()
             merged.update(data)
             return merged
         except Exception as exc:
             logging.getLogger("chipify.config").warning(
                 "Could not read %s: %s – using defaults.", CONFIG_PATH, exc
             )
-    return DEFAULTS.copy()
+    return merged
 
 
 def save_config(config: dict) -> None:

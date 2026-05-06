@@ -246,7 +246,7 @@ class SimifyGUI(ctk.CTk):
     def setup_left_panel(self):
         self.left_frame = ctk.CTkFrame(self, width=260, corner_radius=0, fg_color=panel_color)
         self.left_frame.grid(row=0, column=0, sticky="nsew")
-        self.left_frame.grid_rowconfigure(10, weight=1) 
+        self.left_frame.grid_rowconfigure(11, weight=1) 
         self.left_frame.grid_propagate(False)
         
         ctk.CTkLabel(self.left_frame, text="Configuration", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=20, pady=(20, 5), sticky="w")
@@ -268,7 +268,15 @@ class SimifyGUI(ctk.CTk):
         self.history_dropdown.grid(row=7, column=0, padx=20, pady=(5, 10), sticky="ew")
         
         self.btn_pdf = ctk.CTkButton(self.left_frame, text="📄 Export PDF Report", command=self.export_pdf, fg_color="#8e44ad", hover_color="#9b59b6")
-        self.btn_pdf.grid(row=8, column=0, padx=20, pady=(0, 8), sticky="ew")
+        self.btn_pdf.grid(row=8, column=0, padx=20, pady=(0, 4), sticky="ew")
+
+        self.btn_open_folder = ctk.CTkButton(
+            self.left_frame, text="📂  Open Output Folder",
+            command=self.open_output_folder,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE"),
+        )
+        self.btn_open_folder.grid(row=9, column=0, padx=20, pady=(0, 8), sticky="ew")
 
         self.btn_settings = ctk.CTkButton(
             self.left_frame, text="⚙️  Settings",
@@ -276,7 +284,7 @@ class SimifyGUI(ctk.CTk):
             fg_color="transparent", border_width=1,
             text_color=("gray10", "#DCE4EE")
         )
-        self.btn_settings.grid(row=9, column=0, padx=20, pady=(0, 8), sticky="ew")
+        self.btn_settings.grid(row=10, column=0, padx=20, pady=(0, 8), sticky="ew")
 
         self.btn_multiplot = ctk.CTkButton(
             self.left_frame, text="🗖  Multi-Plot Dashboard",
@@ -284,14 +292,14 @@ class SimifyGUI(ctk.CTk):
             fg_color="transparent", border_width=1,
             text_color=("gray10", "#DCE4EE"),
         )
-        self.btn_multiplot.grid(row=10, column=0, padx=20, pady=(0, 20), sticky="ew")
+        self.btn_multiplot.grid(row=11, column=0, padx=20, pady=(0, 10), sticky="ew")
 
         self.progress_bar = ctk.CTkProgressBar(self.left_frame)
-        self.progress_bar.grid(row=11, column=0, padx=20, pady=(10, 0), sticky="ew")
+        self.progress_bar.grid(row=12, column=0, padx=20, pady=(10, 0), sticky="ew")
         self.progress_bar.set(0)
         
         self.lbl_status = ctk.CTkLabel(self.left_frame, text="Status: Ready", text_color="gray")
-        self.lbl_status.grid(row=12, column=0, padx=20, pady=(5, 20), sticky="w")
+        self.lbl_status.grid(row=13, column=0, padx=20, pady=(5, 20), sticky="w")
         
     def setup_right_panel(self):
         self.right_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -651,6 +659,21 @@ class SimifyGUI(ctk.CTk):
         except Exception:
             pass
 
+    def open_output_folder(self):
+        """Open the simulation output directory in the OS file manager."""
+        import subprocess, sys as _sys
+        path = settings.OUT_DIR
+        os.makedirs(path, exist_ok=True)
+        try:
+            if _sys.platform.startswith("win"):
+                os.startfile(path)
+            elif _sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            messagebox.showerror("Open Folder", f"Could not open folder:\n{exc}")
+
     def open_settings(self):
         win = SettingsWindow(self)
         self.wait_window(win)
@@ -987,6 +1010,17 @@ class SimifyGUI(ctk.CTk):
         self.tree.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         scrollbar.grid(row=0, column=1, sticky="ns")
 
+        # Right-click context menu for tree rows
+        self._tree_menu = tk.Menu(self.tree_frame, tearoff=0, bg="#1a1a1a",
+                                  fg="white", activebackground="#3484F0",
+                                  activeforeground="white", relief="flat")
+        self._tree_menu.add_command(label="Plot Histogram", command=self._ctx_plot_histogram)
+        self._tree_menu.add_command(label="Copy Value (Typ)", command=self._ctx_copy_value)
+        self._tree_menu.add_separator()
+        self._tree_menu.add_command(label="Add to Equations", command=self._ctx_add_to_equations)
+        self.tree.bind("<Button-3>", self._on_tree_right_click)  # Windows/Linux
+        self.tree.bind("<Button-2>", self._on_tree_right_click)  # macOS
+
     def setup_worst_case_tab(self):
         self.tab_worst.grid_columnconfigure(0, weight=1)
         self.tab_worst.grid_rowconfigure(1, weight=1)
@@ -1013,6 +1047,55 @@ class SimifyGUI(ctk.CTk):
             messagebox.showinfo("Export Debug", f"Erfolgreich {count} fehlgeschlagene Runs exportiert nach:\n{out_dir}")
         else:
             messagebox.showinfo("Export Debug", "Keine fehlgeschlagenen Runs zum Exportieren vorhanden (100% Yield!).")
+
+    # ── Tree context menu ────────────────────────────────────────────────────
+
+    def _on_tree_right_click(self, event):
+        row_id = self.tree.identify_row(event.y)
+        if not row_id:
+            return
+        self.tree.selection_set(row_id)
+        try:
+            self._tree_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._tree_menu.grab_release()
+
+    def _selected_tree_param(self):
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        return self.tree.item(sel[0], "values")[0]  # first column = param name
+
+    def _ctx_plot_histogram(self):
+        param = self._selected_tree_param()
+        if not param or self.current_df is None:
+            return
+        opts = list(self.plot_param_dropdown.cget("values") or [])
+        if param in opts:
+            self.plot_param_var.set(param)
+            self.update_plot()
+            self.tabs.set("Histograms")
+
+    def _ctx_copy_value(self):
+        param = self._selected_tree_param()
+        if not param:
+            return
+        sel = self.tree.selection()
+        if sel:
+            typ_val = self.tree.item(sel[0], "values")[2]  # sim_typ column
+            self.clipboard_clear()
+            self.clipboard_append(str(typ_val))
+
+    def _ctx_add_to_equations(self):
+        param = self._selected_tree_param()
+        if not param:
+            return
+        self._eq_row_vars.append({
+            "name_var": ctk.StringVar(value=f"new_{param}"),
+            "expr_var": ctk.StringVar(value=param),
+        })
+        self._build_equations_ui()
+        self.tabs.set("Custom Equations")
 
     # ==========================================
     # HISTOGRAM & ADVANCED PLOTS TAB
@@ -1047,10 +1130,21 @@ class SimifyGUI(ctk.CTk):
         )
         self.plot_dist_dropdown.pack(side=tk.LEFT)
 
-        self.info_frame = ctk.CTkFrame(row1, fg_color="#34495e", corner_radius=5)
-        self.info_frame.pack(side=tk.RIGHT, padx=(20, 0))
-        self.lbl_hist_metrics = ctk.CTkLabel(self.info_frame, text="Cpk: - | Sigma: -", text_color="white", font=ctk.CTkFont(size=12, weight="bold"))
-        self.lbl_hist_metrics.pack(padx=10, pady=2)
+        self.kpi_frame = ctk.CTkFrame(row1, fg_color="#1e2d3d", corner_radius=5)
+        self.kpi_frame.pack(side=tk.RIGHT, padx=(20, 0))
+        # Individual KPI labels — updated together in update_plot()
+        self.lbl_kpi_cpk   = ctk.CTkLabel(self.kpi_frame, text="Cpk: —", text_color="white",  font=ctk.CTkFont(size=11, weight="bold"), width=70)
+        self.lbl_kpi_sigma = ctk.CTkLabel(self.kpi_frame, text="σ: —",   text_color="white",  font=ctk.CTkFont(size=11))
+        self.lbl_kpi_mean  = ctk.CTkLabel(self.kpi_frame, text="μ: —",   text_color="#aaaaaa", font=ctk.CTkFont(size=11))
+        self.lbl_kpi_std   = ctk.CTkLabel(self.kpi_frame, text="std: —", text_color="#aaaaaa", font=ctk.CTkFont(size=11))
+        self.lbl_kpi_fail  = ctk.CTkLabel(self.kpi_frame, text="Fail: —",text_color="#e74c3c", font=ctk.CTkFont(size=11))
+        for lbl in (self.lbl_kpi_cpk, self.lbl_kpi_sigma,
+                    self.lbl_kpi_mean, self.lbl_kpi_std, self.lbl_kpi_fail):
+            lbl.pack(side=tk.LEFT, padx=(8, 0), pady=2)
+        ctk.CTkLabel(self.kpi_frame, text="", width=6).pack(side=tk.LEFT)  # right margin
+
+        # keep legacy alias so existing call sites that still use lbl_hist_metrics don't break
+        self.lbl_hist_metrics = self.lbl_kpi_cpk
 
         ctk.CTkLabel(row2, text="Compare (Ref):", text_color="#f1c40f").pack(side=tk.LEFT, padx=(0, 5))
         self.compare_var = ctk.StringVar(value="None")
@@ -1119,6 +1213,7 @@ class SimifyGUI(ctk.CTk):
             sim_typ = data_col.mean()
             sim_std = data_col.std() if len(data_col) > 1 else 0.0
             v_min, v_max = None, None
+            pass_col = f"{param}_pass"
             for t in self.current_stim.tests:
                 for v in t.value_lst:
                     if v.name == param:
@@ -1132,12 +1227,38 @@ class SimifyGUI(ctk.CTk):
                 if v_max is not None:
                     cpk_vals.append(((v_max - sim_typ) / sim_std) / 3.0)
                     z_vals.append((v_max - sim_typ) / sim_std)
+
+            # fail-rate
+            if pass_col in valid_df.columns:
+                n_fail = int((valid_df[pass_col] == False).sum())
+                n_tot  = len(valid_df[pass_col])
+                fail_pct = n_fail / n_tot * 100 if n_tot else 0
+                fail_txt  = f"Fail: {fail_pct:.1f}%"
+                fail_color = "#2ecc71" if n_fail == 0 else "#e74c3c"
+            else:
+                fail_txt, fail_color = "Fail: —", "#888888"
+
+            # mean / std
+            def _eng(v):
+                """Very small engineering formatter – avoids sci notation for typical EDA values."""
+                if abs(v) >= 1e3:  return f"{v/1e3:.3g}k"
+                if abs(v) >= 1:    return f"{v:.4g}"
+                if abs(v) >= 1e-3: return f"{v*1e3:.3g}m"
+                if abs(v) >= 1e-6: return f"{v*1e6:.3g}µ"
+                return f"{v:.3g}"
+
+            self.lbl_kpi_mean.configure(text=f"μ: {_eng(sim_typ)}")
+            self.lbl_kpi_std.configure(text=f"std: {_eng(sim_std)}")
+            self.lbl_kpi_fail.configure(text=fail_txt, text_color=fail_color)
+
             if cpk_vals:
                 cpk, sigma_lvl = min(cpk_vals), min(z_vals)
                 color = "#2ecc71" if cpk >= 1.33 else ("#f1c40f" if cpk >= 1.0 else "#e74c3c")
-                self.lbl_hist_metrics.configure(text=f"Cpk: {cpk:.2f} | Sigma: {sigma_lvl:.2f}σ", text_color=color)
+                self.lbl_kpi_cpk.configure(text=f"Cpk: {cpk:.2f}", text_color=color)
+                self.lbl_kpi_sigma.configure(text=f"σ: {sigma_lvl:.2f}", text_color=color)
             else:
-                self.lbl_hist_metrics.configure(text="Cpk: - | Sigma: -", text_color="white")
+                self.lbl_kpi_cpk.configure(text="Cpk: —", text_color="white")
+                self.lbl_kpi_sigma.configure(text="σ: —", text_color="white")
         
         PlotManager.draw_histogram(self.fig, self.ax, self.canvas, valid_df, self.current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run)
 
@@ -1149,10 +1270,16 @@ class SimifyGUI(ctk.CTk):
         control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         control_frame.pack_propagate(False)
         
+        _adv_base_modes = ["Scatter Plot", "Corner Yield Matrix", "Correlation Heatmap", "Sensitivity (Tornado)", "Fail Breakdown (Pie Chart)"]
+        try:
+            from chipify.plugin_loader import get_plot_plugins
+            _adv_base_modes += [cls.name for cls in get_plot_plugins()]
+        except Exception:
+            pass
         self.adv_mode_var = ctk.StringVar(value="Fail Breakdown (Pie Chart)")
         self.adv_mode_selector = ctk.CTkSegmentedButton(
-            control_frame, 
-            values=["Scatter Plot", "Corner Yield Matrix", "Correlation Heatmap", "Sensitivity (Tornado)", "Fail Breakdown (Pie Chart)"], 
+            control_frame,
+            values=_adv_base_modes,
             variable=self.adv_mode_var, command=self.on_adv_mode_change
         )
         self.adv_mode_selector.pack(side=tk.LEFT, padx=(0, 30))
@@ -1361,11 +1488,25 @@ class SimifyGUI(ctk.CTk):
                 df.to_csv(csv_out, index=False)
                 
                 try:
+                    from chipify import run_meta
                     history_dir = os.path.join(settings.OUT_DIR, "history")
                     os.makedirs(history_dir, exist_ok=True)
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     history_file = os.path.join(history_dir, f"run_{timestamp}.csv")
                     df.to_csv(history_file, index=False)
+                    # write companion metadata sidecar
+                    total = len(df)
+                    valid = int((df.get('sim_error', 'None') == 'None').sum()) if 'sim_error' in df.columns else total
+                    gpass = int(df['global_pass'].sum()) if 'global_pass' in df.columns else None
+                    gyield = (gpass / total * 100) if (gpass is not None and total > 0) else None
+                    run_meta.write_meta(
+                        history_file,
+                        yaml_name=os.path.basename(yaml_path),
+                        duration_s=elapsed,
+                        total_runs=total,
+                        valid_runs=valid,
+                        global_yield=gyield,
+                    )
                 except Exception as e:
                     log.warning("Could not save history: %s", e)
                 self.after(0, self.refresh_history)

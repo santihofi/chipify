@@ -169,11 +169,19 @@ class PlotManager:
 
     @staticmethod
     def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b"):
-        if ax_dummy is None:
+        if ax_dummy is None or ax_dummy not in fig.axes:
             fig.clf()
             ax = fig.add_subplot(111)
         else:
             ax = ax_dummy
+            # Remove stale secondary axes (e.g. old colorbars) that survive ax.clear().
+            # Otherwise corner/correlation axes accumulate when switching modes/tabs.
+            for extra_ax in list(fig.axes):
+                if extra_ax is not ax:
+                    try:
+                        fig.delaxes(extra_ax)
+                    except Exception:
+                        pass
             ax.clear()
         ax.set_facecolor(bg_color)
         sc_plot, scatter_df = None, None
@@ -297,6 +305,19 @@ class PlotManager:
                     autotext.set_weight('bold')
                 ax.set_title("Fail Breakdown: Which constraints caused failures?", color=_fg, pad=20)
                 ax.axis('equal')
+
+        # ── Plugin plot modes ────────────────────────────────────────────────
+        else:
+            try:
+                from chipify.plugin_loader import get_plot_plugins
+                for cls in get_plot_plugins():
+                    if cls.name == mode:
+                        cls().draw(fig, ax, valid_df, current_stim)
+                        break
+            except Exception as exc:
+                ax.text(0.5, 0.5, f"Plugin error:\n{exc}",
+                        ha="center", va="center", color="#e74c3c",
+                        transform=ax.transAxes)
 
         if ax_dummy is None:
             fig.tight_layout()
