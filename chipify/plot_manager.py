@@ -71,18 +71,54 @@ class PlotManager:
                 fit_y_safe = np.clip(fit_y_safe, 0.0, max_hist_height * 1.5)
                 ax.plot(fit_x, fit_y_safe, color=c, linewidth=2)
         
-        if comp_run != "None" and comp_run != "-" and group_col == "None": 
+        if comp_run != "None" and comp_run != "-" and group_col == "None":
             try:
-                c_path = os.path.join(settings.OUT_DIR, "history", comp_run) if "run_" in comp_run else os.path.join(settings.OUT_DIR, "simulation_results.csv")
+                if comp_run == "Latest (simulation_results)":
+                    c_path = os.path.join(settings.OUT_DIR, "simulation_results.csv")
+                else:
+                    c_path = os.path.join(settings.OUT_DIR, "history", comp_run)
+
                 c_df = pd.read_csv(c_path)
-                c_valid = c_df[c_df['sim_error'] == 'None'] if 'sim_error' in c_df.columns else c_df
+                if 'sim_error' in c_df.columns:
+                    c_df['sim_error'] = c_df['sim_error'].fillna('None').astype(str)
+                    c_df.loc[c_df['sim_error'].str.lower() == 'nan', 'sim_error'] = 'None'
+                    c_valid = c_df[c_df['sim_error'] == 'None']
+                else:
+                    c_valid = c_df
+
                 if param in c_valid.columns:
                     c_data = c_valid[param].dropna()
                     if not c_data.empty:
                         if min(c_data) < data_min: data_min = min(c_data)
                         if max(c_data) > data_max: data_max = max(c_data)
-                        ax.hist(c_data, bins=b, density=True, color='#e67e22', alpha=0.5, edgecolor='#d35400', linewidth=0.5, label=f"Ref: {comp_run.replace('.csv', '')}")
-            except Exception as e: print(f"Could not overlay comparison run: {e}")
+                        # Reference histogram overlay
+                        ref_label = f"Ref: {comp_run.replace('.csv', '')}"
+                        ref_counts, _, _ = ax.hist(
+                            c_data, bins=b, density=True,
+                            color='#e67e22', alpha=0.32,
+                            edgecolor='#d35400', linewidth=0.8,
+                            label=ref_label
+                        )
+
+                        # Optional reference KDE overlay for better visual comparison
+                        if len(c_data) > 1:
+                            try:
+                                x_ref = np.linspace(min(c_data), max(c_data), 120)
+                                kde_ref = stats.gaussian_kde(c_data)
+                                y_ref = kde_ref(x_ref)
+                                max_ref_h = max(ref_counts) if len(ref_counts) > 0 else 1.0
+                                y_ref = np.nan_to_num(y_ref, nan=0.0, posinf=0.0, neginf=0.0)
+                                y_ref = np.clip(y_ref, 0.0, max_ref_h * 1.8)
+                                ax.plot(
+                                    x_ref, y_ref,
+                                    color='#f39c12', linewidth=2.0,
+                                    linestyle='--', alpha=0.9,
+                                    label=f"Ref KDE: {comp_run.replace('.csv', '')}"
+                                )
+                            except Exception:
+                                pass
+            except Exception as e:
+                print(f"Could not overlay comparison run: {e}")
 
         spec_min, spec_max = None, None
         if current_stim:
