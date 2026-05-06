@@ -44,15 +44,22 @@ class PlotCell(ctk.CTkFrame):
                          fg_color=_PANEL, corner_radius=8, **kwargs)
         self._win      = parent_window   # back-reference to MultiPlotWindow
         self._remove_cb = remove_cb
+        self._show_hist_opts = ctk.BooleanVar(value=False)
 
         # ── Plot state ───────────────────────────────────────────────────────
         self._mode    = ctk.StringVar(value="Histogram")
         self._param   = ctk.StringVar(value="-")
         self._dist    = ctk.StringVar(value="KDE (Smoothed)")
         self._bins    = ctk.StringVar(value="Auto")
+        self._group   = ctk.StringVar(value="None")
+        self._compare = ctk.StringVar(value="None")
+        self._do_zoom = ctk.BooleanVar(value=False)
         self._x_col   = ctk.StringVar(value="-")
         self._y_col   = ctk.StringVar(value="-")
         self._target  = ctk.StringVar(value="-")
+        self._sc_plot = None
+        self._scatter_df = None
+        self._scatter_annot = None
 
         self._build_header()
         self._build_controls()
@@ -72,12 +79,13 @@ class PlotCell(ctk.CTkFrame):
         )
         self._mode_menu.grid(row=0, column=0, sticky="w")
 
-        ctk.CTkButton(
+        self._btn_close = ctk.CTkButton(
             hdr, text="✕", width=28, height=28,
             fg_color="transparent", border_width=1,
             text_color="gray", hover_color="#3a0000",
             command=self._remove_cb,
-        ).grid(row=0, column=1, padx=(6, 0))
+        )
+        self._btn_close.grid(row=0, column=1, padx=(6, 0))
 
     def _build_controls(self):
         self._ctrl = ctk.CTkFrame(self, fg_color="transparent")
@@ -96,23 +104,52 @@ class PlotCell(ctk.CTkFrame):
                 row=0, column=0, padx=(0, 4))
             ctk.CTkOptionMenu(
                 self._ctrl, variable=self._param,
-                values=["-"], width=130, dynamic_resizing=False,
+                values=["-"], width=150, dynamic_resizing=False,
                 command=lambda *_: self._request_redraw(),
             ).grid(row=0, column=1, padx=(0, 10))
 
-            ctk.CTkLabel(self._ctrl, text="Fit:").grid(row=0, column=2, padx=(0, 4))
-            ctk.CTkOptionMenu(
-                self._ctrl, variable=self._dist,
-                values=_DIST_TYPES, width=130, dynamic_resizing=False,
-                command=lambda *_: self._request_redraw(),
-            ).grid(row=0, column=3, padx=(0, 10))
+            ctk.CTkCheckBox(
+                self._ctrl,
+                text="Histogram options",
+                variable=self._show_hist_opts,
+                command=self._on_mode_change,
+            ).grid(row=0, column=2, padx=(0, 8))
 
-            ctk.CTkLabel(self._ctrl, text="Bins:").grid(row=0, column=4, padx=(0, 4))
-            ctk.CTkOptionMenu(
-                self._ctrl, variable=self._bins,
-                values=_BINS_OPTS, width=70, dynamic_resizing=False,
-                command=lambda *_: self._request_redraw(),
-            ).grid(row=0, column=5)
+            if self._show_hist_opts.get():
+                ctk.CTkLabel(self._ctrl, text="Fit:").grid(row=1, column=0, padx=(0, 4), pady=(4, 0))
+                ctk.CTkOptionMenu(
+                    self._ctrl, variable=self._dist,
+                    values=_DIST_TYPES, width=150, dynamic_resizing=False,
+                    command=lambda *_: self._request_redraw(),
+                ).grid(row=1, column=1, padx=(0, 10), pady=(4, 0))
+
+                ctk.CTkLabel(self._ctrl, text="Bins:").grid(row=1, column=2, padx=(0, 4), pady=(4, 0))
+                ctk.CTkOptionMenu(
+                    self._ctrl, variable=self._bins,
+                    values=_BINS_OPTS, width=80, dynamic_resizing=False,
+                    command=lambda *_: self._request_redraw(),
+                ).grid(row=1, column=3, pady=(4, 0))
+
+                ctk.CTkLabel(self._ctrl, text="Group by:").grid(row=2, column=0, padx=(0, 4), pady=(4, 0))
+                ctk.CTkOptionMenu(
+                    self._ctrl, variable=self._group,
+                    values=["None"], width=150, dynamic_resizing=False,
+                    command=lambda *_: self._request_redraw(),
+                ).grid(row=2, column=1, padx=(0, 10), pady=(4, 0))
+
+                ctk.CTkLabel(self._ctrl, text="Compare:").grid(row=2, column=2, padx=(0, 4), pady=(4, 0))
+                ctk.CTkOptionMenu(
+                    self._ctrl, variable=self._compare,
+                    values=["None"], width=170, dynamic_resizing=False,
+                    command=lambda *_: self._request_redraw(),
+                ).grid(row=2, column=3, pady=(4, 0))
+
+                ctk.CTkCheckBox(
+                    self._ctrl,
+                    text="Fit to plot",
+                    variable=self._do_zoom,
+                    command=self._request_redraw,
+                ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         elif mode in ("Scatter Plot", "Corner Yield Matrix"):
             ctk.CTkLabel(self._ctrl, text="X:").grid(row=0, column=0, padx=(0, 4))
@@ -146,11 +183,37 @@ class PlotCell(ctk.CTkFrame):
         # ax created fresh each redraw via fig.clf()
         self._ax  = self._fig.add_subplot(111)
         self._ax.set_facecolor(_PANEL)
-        self._canvas = FigureCanvasTkAgg(self._fig, master=self)
-        self._canvas.get_tk_widget().grid(
+        self._mpl_canvas = FigureCanvasTkAgg(self._fig, master=self)
+        self._mpl_canvas.get_tk_widget().grid(
             row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        self._mpl_canvas.mpl_connect("motion_notify_event", self._on_hover_scatter)
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
+
+        self._scatter_annot = self._ax.annotate(
+            "", xy=(0, 0), xytext=(14, 14), textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.4", fc="#1c1c1c", ec=_ACCENT, lw=1, alpha=0.95),
+            color="white",
+            arrowprops=dict(arrowstyle="-|>", color=_ACCENT),
+        )
+        self._scatter_annot.set_visible(False)
+
+    def _create_scatter_annot(self):
+        """Create tooltip annotation on the current active axis."""
+        self._scatter_annot = self._ax.annotate(
+            "", xy=(0, 0), xytext=(14, 14), textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.5", fc="#1c1c1c", ec=_ACCENT, lw=1, alpha=0.95),
+            color="white",
+            arrowprops=dict(arrowstyle="-|>", color=_ACCENT),
+        )
+        self._scatter_annot.set_visible(False)
+
+    @staticmethod
+    def _fmt_hover_value(v):
+        try:
+            return f"{float(v):.4g}"
+        except Exception:
+            return str(v)
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -167,6 +230,70 @@ class PlotCell(ctk.CTkFrame):
         if snap is None:
             return
         self.redraw(*snap)
+
+    def set_remove_callback(self, cb):
+        """Attach/replace close callback for this plot cell."""
+        self._remove_cb = cb
+        self._btn_close.configure(command=self._remove_cb)
+
+    def _on_hover_scatter(self, event):
+        """Enable scatter hover tooltip similar to the main Advanced Analytics tab."""
+        if self._mode.get() != "Scatter Plot":
+            if self._scatter_annot is not None and self._scatter_annot.get_visible():
+                self._scatter_annot.set_visible(False)
+                self._mpl_canvas.draw_idle()
+            return
+        if self._sc_plot is None or self._scatter_df is None:
+            return
+        if not self._fig.axes:
+            return
+        if event.inaxes != self._fig.axes[0]:
+            if self._scatter_annot is not None and self._scatter_annot.get_visible():
+                self._scatter_annot.set_visible(False)
+                self._mpl_canvas.draw_idle()
+            return
+
+        cont, ind = self._sc_plot.contains(event)
+        hit_indices = ind.get("ind", []) if isinstance(ind, dict) else []
+        if not cont or len(hit_indices) == 0:
+            if self._scatter_annot is not None and self._scatter_annot.get_visible():
+                self._scatter_annot.set_visible(False)
+                self._mpl_canvas.draw_idle()
+            return
+
+        if self._scatter_annot is None:
+            self._create_scatter_annot()
+
+        i = int(hit_indices[0])
+        row = self._scatter_df.iloc[i]
+        x_col = self._x_col.get()
+        y_col = self._y_col.get()
+        x_val = row.get(x_col, "-")
+        y_val = row.get(y_col, "-")
+        status = "PASS" if bool(row.get("global_pass", False)) else "FAIL"
+
+        text_lines = [
+            f"Run #{row.name}",
+            "-" * 15,
+            f"{x_col}: {self._fmt_hover_value(x_val)}",
+            f"{y_col}: {self._fmt_hover_value(y_val)}",
+            "-" * 15,
+            status,
+        ]
+        stim = getattr(self._win, "_parent", None)
+        stim = getattr(stim, "current_stim", None)
+        if stim is not None:
+            for p in stim.params.keys():
+                try:
+                    if p in row and self._scatter_df[p].nunique() > 1:
+                        text_lines.append(f"{p}: {row[p]}")
+                except Exception:
+                    continue
+
+        self._scatter_annot.xy = (row[x_col], row[y_col])
+        self._scatter_annot.set_text("\n".join(text_lines))
+        self._scatter_annot.set_visible(True)
+        self._mpl_canvas.draw_idle()
 
     def _populate_dropdowns(self, valid_df, stim, sweep_params, derived_cols):
         """Fill option-menu values without triggering a redraw."""
@@ -190,8 +317,12 @@ class PlotCell(ctk.CTkFrame):
 
         if mode == "Histogram":
             options = list(dict.fromkeys(all_meas + derived_cols)) or ["-"]
-            self._ctrl.winfo_children()  # ensure built
             self._set_optmenu(self._ctrl, 1, options, self._param)
+            if self._show_hist_opts.get():
+                group_options = ["None"] + all_cols
+                self._set_optmenu(self._ctrl, 1, group_options, self._group, row=2)
+                compare_options = self._win._get_compare_run_options()
+                self._set_optmenu(self._ctrl, 3, compare_options, self._compare, row=2)
 
         elif mode == "Scatter Plot":
             options = list(dict.fromkeys(sweep_params + all_meas + derived_cols)) or ["-"]
@@ -208,9 +339,9 @@ class PlotCell(ctk.CTkFrame):
             self._set_optmenu(self._ctrl, 1, options, self._target)
 
     @staticmethod
-    def _set_optmenu(parent, grid_col, options, var):
+    def _set_optmenu(parent, grid_col, options, var, row=0):
         """Update the CTkOptionMenu at grid column grid_col inside parent."""
-        for w in parent.grid_slaves(row=0, column=grid_col):
+        for w in parent.grid_slaves(row=row, column=grid_col):
             w.configure(values=options)
             if var.get() not in options:
                 var.set(options[0])
@@ -227,6 +358,9 @@ class PlotCell(ctk.CTkFrame):
         self._fig.clf()
         self._ax = self._fig.add_subplot(111)
         self._ax.set_facecolor(_PANEL)
+        self._sc_plot = None
+        self._scatter_df = None
+        self._scatter_annot = None
 
         try:
             if mode == "Histogram":
@@ -235,28 +369,28 @@ class PlotCell(ctk.CTkFrame):
                     self._ax.text(0.5, 0.5, "Select a parameter",
                                   ha="center", va="center", color="gray",
                                   transform=self._ax.transAxes)
-                    self._canvas.draw_idle()
+                    self._mpl_canvas.draw_idle()
                     return
                 PlotManager.draw_histogram(
                     fig=self._fig,
                     ax=self._ax,
-                    canvas=self._canvas,
+                    canvas=self._mpl_canvas,
                     valid_df=valid_df,
                     current_stim=stim,
                     param=param,
                     dist_type=self._dist.get(),
-                    group_col="None",
+                    group_col=self._group.get(),
                     bins_val=self._bins.get(),
-                    do_zoom=False,
-                    comp_run="None",
+                    do_zoom=self._do_zoom.get(),
+                    comp_run=self._compare.get(),
                 )
                 return   # draw_histogram already calls canvas.draw()
 
             # All other modes use draw_adv_plot
-            PlotManager.draw_adv_plot(
+            self._sc_plot, self._scatter_df = PlotManager.draw_adv_plot(
                 fig=self._fig,
-                ax_dummy=None,      # None → draw_adv_plot rebuilds ax itself
-                canvas=self._canvas,
+                ax_dummy=self._ax,
+                canvas=self._mpl_canvas,
                 valid_df=valid_df,
                 current_stim=stim,
                 mode=mode,
@@ -265,6 +399,16 @@ class PlotCell(ctk.CTkFrame):
                 target=self._target.get(),
                 bg_color=_PANEL,
             )
+            if mode == "Scatter Plot" and self._sc_plot is not None:
+                self._create_scatter_annot()
+            # Fill available panel space better for adv plots.
+            if mode == "Correlation Heatmap":
+                self._fig.subplots_adjust(left=0.20, right=0.96, bottom=0.22, top=0.90)
+            elif mode == "Scatter Plot":
+                self._fig.subplots_adjust(left=0.12, right=0.97, bottom=0.14, top=0.90)
+            else:
+                self._fig.subplots_adjust(left=0.12, right=0.97, bottom=0.12, top=0.90)
+            self._mpl_canvas.draw_idle()
         except Exception as exc:
             self._fig.clf()
             ax = self._fig.add_subplot(111)
@@ -272,7 +416,7 @@ class PlotCell(ctk.CTkFrame):
             ax.text(0.5, 0.5, f"Error:\n{exc}",
                     ha="center", va="center", color="#e74c3c",
                     fontsize=8, wrap=True, transform=ax.transAxes)
-            self._canvas.draw_idle()
+            self._mpl_canvas.draw_idle()
 
     def get_config(self) -> dict:
         return {
@@ -280,6 +424,9 @@ class PlotCell(ctk.CTkFrame):
             "param":  self._param.get(),
             "dist":   self._dist.get(),
             "bins":   self._bins.get(),
+            "group":  self._group.get(),
+            "compare": self._compare.get(),
+            "do_zoom": bool(self._do_zoom.get()),
             "x_col":  self._x_col.get(),
             "y_col":  self._y_col.get(),
             "target": self._target.get(),
@@ -290,6 +437,9 @@ class PlotCell(ctk.CTkFrame):
         self._param.set(cfg.get("param", "-"))
         self._dist.set(cfg.get("dist",   "KDE (Smoothed)"))
         self._bins.set(cfg.get("bins",   "Auto"))
+        self._group.set(cfg.get("group", "None"))
+        self._compare.set(cfg.get("compare", "None"))
+        self._do_zoom.set(bool(cfg.get("do_zoom", False)))
         self._x_col.set(cfg.get("x_col", "-"))
         self._y_col.set(cfg.get("y_col", "-"))
         self._target.set(cfg.get("target", "-"))
@@ -431,12 +581,8 @@ class MultiPlotWindow(ctk.CTkToplevel):
 
     def add_cell(self, mode: str = "Histogram", config: dict | None = None):
         """Append a new PlotCell to the grid and trigger an initial draw."""
-        cell = PlotCell(
-            parent_window=self,
-            remove_cb=lambda c=None: self.remove_cell(c),
-        )
-        # Fix the lambda closure properly
-        cell._remove_cb = lambda _cell=cell: self.remove_cell(_cell)
+        cell = PlotCell(parent_window=self, remove_cb=lambda: None)
+        cell.set_remove_callback(lambda _cell=cell: self.remove_cell(_cell))
 
         if config:
             cell.apply_config(config)
@@ -487,6 +633,20 @@ class MultiPlotWindow(ctk.CTkToplevel):
         sweep_params = getattr(p, "sweep_params",  [])
         derived_cols = getattr(p, "_derived_cols", [])
         return valid_df, stim, sweep_params, derived_cols
+
+    def _get_compare_run_options(self):
+        """Return compare-run options aligned with the main histogram tab semantics."""
+        opts = ["None"]
+        try:
+            hist_vals = list(getattr(self._parent, "history_dropdown").cget("values") or [])
+            if "Latest (simulation_results)" not in hist_vals:
+                hist_vals.insert(0, "Latest (simulation_results)")
+            for v in hist_vals:
+                if v and v != "No runs found" and v not in opts:
+                    opts.append(v)
+        except Exception:
+            pass
+        return opts
 
     def restore_from_config(self, cell_configs: list):
         """Re-create cells from a previously persisted config list."""

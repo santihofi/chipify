@@ -100,21 +100,47 @@ class PlotManager:
                             label=ref_label
                         )
 
-                        # Optional reference KDE overlay for better visual comparison
-                        if len(c_data) > 1:
+                        # Reference fit overlay (same fit type as selected for current run)
+                        if len(c_data) > 1 and dist_type != "None":
                             try:
                                 x_ref = np.linspace(min(c_data), max(c_data), 120)
-                                kde_ref = stats.gaussian_kde(c_data)
-                                y_ref = kde_ref(x_ref)
-                                max_ref_h = max(ref_counts) if len(ref_counts) > 0 else 1.0
-                                y_ref = np.nan_to_num(y_ref, nan=0.0, posinf=0.0, neginf=0.0)
-                                y_ref = np.clip(y_ref, 0.0, max_ref_h * 1.8)
-                                ax.plot(
-                                    x_ref, y_ref,
-                                    color='#f39c12', linewidth=2.0,
-                                    linestyle='--', alpha=0.9,
-                                    label=f"Ref KDE: {comp_run.replace('.csv', '')}"
-                                )
+                                y_ref = None
+                                fit_name = "Ref Fit"
+                                if dist_type == "Gauss (Normal)":
+                                    mu_ref, std_ref = stats.norm.fit(c_data)
+                                    y_ref = stats.norm.pdf(x_ref, mu_ref, std_ref)
+                                    fit_name = "Ref Gauss"
+                                elif dist_type == "KDE (Smoothed)":
+                                    kde_ref = stats.gaussian_kde(c_data)
+                                    y_ref = kde_ref(x_ref)
+                                    fit_name = "Ref KDE"
+                                elif dist_type == "Uniform":
+                                    loc_ref, scale_ref = stats.uniform.fit(c_data)
+                                    y_ref = stats.uniform.pdf(x_ref, loc_ref, scale_ref)
+                                    fit_name = "Ref Uniform"
+                                elif dist_type == "Log-Normal":
+                                    shape_ref, loc_ref, scale_ref = stats.lognorm.fit(c_data)
+                                    y_ref = stats.lognorm.pdf(x_ref, shape_ref, loc_ref, scale_ref)
+                                    fit_name = "Ref LogNorm"
+                                elif dist_type == "Exponential":
+                                    loc_ref, scale_ref = stats.expon.fit(c_data)
+                                    y_ref = stats.expon.pdf(x_ref, loc_ref, scale_ref)
+                                    fit_name = "Ref Exponential"
+                                elif dist_type == "Chi-Squared":
+                                    df_ref, loc_ref, scale_ref = stats.chi2.fit(c_data)
+                                    y_ref = stats.chi2.pdf(x_ref, df_ref, loc=loc_ref, scale=scale_ref)
+                                    fit_name = "Ref Chi2"
+
+                                if y_ref is not None:
+                                    max_ref_h = max(ref_counts) if len(ref_counts) > 0 else 1.0
+                                    y_ref = np.nan_to_num(y_ref, nan=0.0, posinf=0.0, neginf=0.0)
+                                    y_ref = np.clip(y_ref, 0.0, max_ref_h * 1.8)
+                                    ax.plot(
+                                        x_ref, y_ref,
+                                        color='#f39c12', linewidth=2.0,
+                                        linestyle='--', alpha=0.9,
+                                        label=f"{fit_name}: {comp_run.replace('.csv', '')}"
+                                    )
                             except Exception:
                                 pass
             except Exception as e:
