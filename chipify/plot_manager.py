@@ -325,6 +325,21 @@ class PlotManager:
         return sc_plot, scatter_df
 
     @staticmethod
+    def _quote_special_cols(columns, expr: str) -> str:
+        """
+        Backtick-quote column names that contain non-identifier characters
+        (e.g. parentheses in ngspice signal names like ``v(outp)``)
+        so that pandas ``df.eval()`` treats them as column references rather
+        than function calls.  Processes longest names first to avoid partial
+        substitution of shorter substrings.
+        """
+        result = expr
+        for col in sorted(columns, key=len, reverse=True):
+            if not str(col).isidentifier() and col in result:
+                result = result.replace(col, f"`{col}`")
+        return result
+
+    @staticmethod
     def draw_transient_plot(
         fig,
         canvas,
@@ -453,14 +468,15 @@ class PlotManager:
             if "time" not in df.columns:
                 continue
 
-            # Apply custom equations to the waveform DataFrame.
+            # Apply transient equations to the waveform DataFrame.
             if equations:
                 for eq in equations:
                     eq_name = eq.get("name", "").strip()
                     eq_expr = eq.get("expr", "").strip()
                     if eq_name and eq_expr:
                         try:
-                            df = df.eval(f"{eq_name} = {eq_expr}", engine="python")
+                            safe_expr = PlotManager._quote_special_cols(df.columns, eq_expr)
+                            df = df.eval(f"{eq_name} = {safe_expr}", engine="python")
                         except Exception:
                             pass
 

@@ -813,7 +813,12 @@ class SimifyGUI(ctk.CTk):
                         eq_e = eq.get("expr", "").strip()
                         if eq_n and eq_e:
                             try:
-                                df_chunk = df_chunk.eval(f"{eq_n} = {eq_e}", engine="python")
+                                # Backtick-quote cols with special chars (e.g. v(outp))
+                                safe_e = eq_e
+                                for col in sorted(df_chunk.columns, key=len, reverse=True):
+                                    if not str(col).isidentifier() and col in safe_e:
+                                        safe_e = safe_e.replace(col, f"`{col}`")
+                                df_chunk = df_chunk.eval(f"{eq_n} = {safe_e}", engine="python")
                             except Exception:
                                 pass
                 df_chunk.insert(0, "run_id", rid)
