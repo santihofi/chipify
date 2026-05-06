@@ -288,12 +288,19 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
             dest_csv = os.path.join(tran_dir, f"run_{run_id}__{tb_safe}.csv")
             _persist_transient(tran_out_path, tran_signals, dest_csv)
 
+        # Transient-only testbench: no scalar measurements defined → skip MY_DATA.
+        if not test.value_lst:
+            sample[f"{test.tb_path}_overall_pass"] = True
+            continue
+
         if sim_output and sim_output.startswith("MY_DATA:"):
             clean_line = sim_output.replace("MY_DATA:", "").strip()
-            values = clean_line.split(' ')
+            values = [v for v in clean_line.split(' ') if v]
 
             all_passed = True
             for i, val_str in enumerate(values):
+                if i >= len(test.value_lst):
+                    break
                 val_obj = test.value_lst[i]
                 try:
                     val_float = float(val_str)

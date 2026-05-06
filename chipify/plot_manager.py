@@ -334,7 +334,8 @@ class PlotManager:
         *,
         pass_map: dict | None = None,
         bg_color: str = "#1a1a1a",
-    ) -> None:
+        equations: list | None = None,
+    ) -> dict:
         """
         Overlay time-domain waveforms from per-run CSV files.
 
@@ -349,7 +350,14 @@ class PlotManager:
         signals    : list of signal names to overlay (must match CSV columns).
         pass_map   : optional {run_id: bool} — failing runs use #e74c3c tint.
         bg_color   : axes face colour (matches the parent tab panel).
+        equations  : optional list of {name, expr} dicts (custom equations).
+
+        Returns
+        -------
+        dict mapping each plotted Line2D → (run_id, signal_name) for hover.
         """
+        line_map: dict = {}
+
         # ── Mandatory ghost-fix (Project Brief §3) ────────────────────────────
         fig.clf()
         ax = fig.add_subplot(111)
@@ -367,7 +375,7 @@ class PlotManager:
             )
             ax.axis("off")
             canvas.draw()
-            return
+            return line_map
 
         # ── Discover matching files ───────────────────────────────────────────
         run_id_set = set(run_ids)
@@ -375,7 +383,6 @@ class PlotManager:
         for fname in os.listdir(tran_dir):
             if not fname.endswith(".csv"):
                 continue
-            # filename pattern: run_<id>__<tb_safe>.csv
             if not fname.startswith("run_"):
                 continue
             parts = fname[4:].split("__", 1)  # strip "run_" prefix
@@ -394,24 +401,21 @@ class PlotManager:
             )
             ax.axis("off")
             canvas.draw()
-            return
+            return line_map
 
         # ── Time-axis auto-scaling: probe first file ──────────────────────────
         time_scale, time_unit = 1.0, "s"
         try:
-            probe_df = pd.read_csv(matched[0][1], nrows=1)
-            if "time" in probe_df.columns:
-                # Read the last time value to determine magnitude
-                probe_full = pd.read_csv(matched[0][1], usecols=["time"])
-                t_max = probe_full["time"].abs().max()
-                if t_max >= 1e-3:
-                    time_scale, time_unit = 1e3, "ms"
-                if t_max >= 1.0:
-                    time_scale, time_unit = 1.0, "s"
-                if t_max < 1e-3:
-                    time_scale, time_unit = 1e6, "µs"
-                if t_max < 1e-6:
-                    time_scale, time_unit = 1e9, "ns"
+            probe_full = pd.read_csv(matched[0][1], usecols=["time"])
+            t_max = probe_full["time"].abs().max()
+            if t_max >= 1.0:
+                time_scale, time_unit = 1.0, "s"
+            elif t_max >= 1e-3:
+                time_scale, time_unit = 1e3, "ms"
+            elif t_max >= 1e-6:
+                time_scale, time_unit = 1e6, "µs"
+            else:
+                time_scale, time_unit = 1e9, "ns"
         except Exception:
             pass
 
@@ -419,10 +423,20 @@ class PlotManager:
         n_curves = len(matched) * len(signals)
         alpha = 1.0 if n_curves <= 50 else max(0.05, 50.0 / n_curves)
 
-        # ── Color palette: one base colour per signal (tab10) ─────────────────
+        # ── Color mode ────────────────────────────────────────────────────────
+        # Single-signal mode: color by run index (viridis) rather than by signal.
+        single_signal_mode = len(signals) == 1
+        fail_color = "#e74c3c"
         base_colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(signals))))
         sig_color = {sig: base_colors[i % 10] for i, sig in enumerate(signals)}
-        fail_color = "#e74c3c"
+
+        # Build per-run color map for single-signal mode (viridis, sorted by run_id).
+        if single_signal_mode:
+            sorted_rids = sorted({rid for rid, _ in matched})
+            run_palette = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, len(sorted_rids))))
+            run_color_map = {rid: run_palette[i] for i, rid in enumerate(sorted_rids)}
+        else:
+            run_color_map = {}
 
         # ── Draw curves ───────────────────────────────────────────────────────
         first_error: str = ""
@@ -439,13 +453,30 @@ class PlotManager:
             if "time" not in df.columns:
                 continue
 
+            # Apply custom equations to the waveform DataFrame.
+            if equations:
+                for eq in equations:
+                    eq_name = eq.get("name", "").strip()
+                    eq_expr = eq.get("expr", "").strip()
+                    if eq_name and eq_expr:
+                        try:
+                            df = df.eval(f"{eq_name} = {eq_expr}", engine="python")
+                        except Exception:
+                            pass
+
             t = df["time"] * time_scale
             for sig in signals:
                 if sig not in df.columns:
                     continue
-                color = fail_color if is_fail else sig_color[sig]
-                ax.plot(t, df[sig], color=color, alpha=alpha,
-                        linewidth=0.8, rasterized=(n_curves > 200))
+                if single_signal_mode:
+                    color = fail_color if is_fail else run_color_map.get(run_id, sig_color[signals[0]])
+                else:
+                    color = fail_color if is_fail else sig_color[sig]
+                lines = ax.plot(t, df[sig], color=color, alpha=alpha,
+                                linewidth=0.8, rasterized=(n_curves > 200),
+                                picker=4)
+                if lines:
+                    line_map[lines[0]] = (run_id, sig)
                 drawn_any = True
 
         if not drawn_any:
@@ -455,7 +486,7 @@ class PlotManager:
                     transform=ax.transAxes, fontsize=11)
             ax.axis("off")
             canvas.draw()
-            return
+            return line_map
 
         # ── Axes labels ───────────────────────────────────────────────────────
         ax.set_xlabel(f"Time ({time_unit})", color="white")
@@ -471,12 +502,19 @@ class PlotManager:
             spine.set_edgecolor("gray")
         ax.grid(True, linestyle="--", alpha=0.2)
 
-        # ── Legend: one proxy entry per signal (not per curve) ────────────────
+        # ── Legend ────────────────────────────────────────────────────────────
         proxy_handles = []
-        for sig in signals:
+        if single_signal_mode:
+            # Color bar-style indicator instead of per-run entries.
             proxy_handles.append(
-                Line2D([0], [0], color=sig_color[sig], linewidth=1.5, label=sig)
+                Line2D([0], [0], color=plt.cm.viridis(0.1), linewidth=1.5,
+                       label=f"{signals[0]}  (color = run index)")
             )
+        else:
+            for sig in signals:
+                proxy_handles.append(
+                    Line2D([0], [0], color=sig_color[sig], linewidth=1.5, label=sig)
+                )
         if pass_map and any(v is False for v in pass_map.values()):
             proxy_handles.append(
                 Line2D([0], [0], color=fail_color, linewidth=1.5, label="Failing run")
@@ -487,3 +525,4 @@ class PlotManager:
 
         fig.tight_layout()
         canvas.draw()
+        return line_map

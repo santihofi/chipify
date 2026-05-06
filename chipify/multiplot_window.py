@@ -9,12 +9,14 @@ Usage (from SimifyGUI):
     self.multiplot_window = MultiPlotWindow(parent=self)
 """
 
+import os
 import tkinter as tk
 import customtkinter as ctk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from chipify.plot_manager import PlotManager
+from chipify import app_config as _app_config
 
 # ── Shared style (mirrors gui_tk.py constants) ────────────────────────────────
 _BG       = "#000000"
@@ -28,6 +30,7 @@ _ALL_MODES = [
     "Correlation Heatmap",
     "Sensitivity (Tornado)",
     "Fail Breakdown (Pie Chart)",
+    "Transient",
 ]
 
 _DIST_TYPES = ["KDE (Smoothed)", "Gauss (Normal)", "None",
@@ -60,6 +63,10 @@ class PlotCell(ctk.CTkFrame):
         self._sc_plot = None
         self._scatter_df = None
         self._scatter_annot = None
+        # Transient-specific state
+        self._tran_signals = ctk.StringVar(value="")
+        self._tran_run_mode = ctk.StringVar(value="All Valid")
+        self._tran_n = ctk.StringVar(value="50")
 
         self._build_header()
         self._build_controls()
@@ -175,6 +182,28 @@ class PlotCell(ctk.CTkFrame):
             ).grid(row=0, column=1)
 
         # Correlation Heatmap + Fail Breakdown have no extra controls — empty row
+
+        elif mode == "Transient":
+            ctk.CTkLabel(self._ctrl, text="Signals:").grid(row=0, column=0, padx=(0, 4))
+            ctk.CTkEntry(
+                self._ctrl, textvariable=self._tran_signals,
+                placeholder_text="e.g.  v(out), v(in)",
+                width=180,
+            ).grid(row=0, column=1, padx=(0, 12))
+
+            ctk.CTkLabel(self._ctrl, text="Runs:").grid(row=0, column=2, padx=(0, 4))
+            ctk.CTkOptionMenu(
+                self._ctrl,
+                variable=self._tran_run_mode,
+                values=["All Valid", "Failing Only", "First N"],
+                width=110, dynamic_resizing=False,
+                command=lambda *_: self._request_redraw(),
+            ).grid(row=0, column=3, padx=(0, 6))
+
+            ctk.CTkEntry(
+                self._ctrl, textvariable=self._tran_n,
+                placeholder_text="N", width=52,
+            ).grid(row=0, column=4)
 
     def _build_canvas(self):
         plt.style.use("dark_background")
@@ -356,7 +385,7 @@ class PlotCell(ctk.CTkFrame):
 
     # ── Public API ───────────────────────────────────────────────────────────
 
-    def redraw(self, valid_df, stim, sweep_params, derived_cols):
+    def redraw(self, valid_df, stim, sweep_params, derived_cols, tran_dir=""):
         """Repopulate dropdowns then re-render the plot."""
         self._populate_dropdowns(valid_df, stim, sweep_params, derived_cols)
 
@@ -394,6 +423,51 @@ class PlotCell(ctk.CTkFrame):
                 )
                 return   # draw_histogram already calls canvas.draw()
 
+            if mode == "Transient":
+                # Parse comma-separated signals from the entry field.
+                sigs_raw = self._tran_signals.get().strip()
+                signals = [s.strip() for s in sigs_raw.replace(",", " ").split() if s.strip()]
+
+                # Build run_id list based on run-filter mode.
+                run_ids: list = []
+                run_mode = self._tran_run_mode.get()
+                parent_df = getattr(self._win._parent, "current_df", None)
+                if parent_df is not None and "run_id" in parent_df.columns:
+                    if run_mode == "All Valid":
+                        run_ids = list(
+                            parent_df[parent_df.get("sim_error", "None") == "None"]["run_id"].astype(str)
+                        )
+                    elif run_mode == "Failing Only":
+                        if "global_pass" in parent_df.columns:
+                            run_ids = list(
+                                parent_df[parent_df["global_pass"] == False]["run_id"].astype(str)
+                            )
+                    else:  # First N
+                        try:
+                            n = int(self._tran_n.get())
+                        except ValueError:
+                            n = 50
+                        run_ids = list(
+                            parent_df[parent_df.get("sim_error", "None") == "None"]["run_id"]
+                            .astype(str).head(n)
+                        )
+                run_ids = run_ids[:500]  # hard cap
+
+                pass_map: dict = {}
+                if parent_df is not None and "global_pass" in (parent_df.columns if parent_df is not None else []):
+                    for _, row in parent_df[["run_id", "global_pass"]].dropna(subset=["run_id"]).iterrows():
+                        pass_map[str(row["run_id"]).zfill(6)] = bool(row["global_pass"])
+
+                equations = _app_config.load_config().get("custom_equations", [])
+                PlotManager.draw_transient_plot(
+                    self._fig, self._mpl_canvas,
+                    tran_dir, run_ids, signals,
+                    pass_map=pass_map,
+                    bg_color=_PANEL,
+                    equations=equations,
+                )
+                return   # draw_transient_plot already calls canvas.draw()
+
             # All other modes use draw_adv_plot
             self._sc_plot, self._scatter_df = PlotManager.draw_adv_plot(
                 fig=self._fig,
@@ -428,16 +502,19 @@ class PlotCell(ctk.CTkFrame):
 
     def get_config(self) -> dict:
         return {
-            "mode":   self._mode.get(),
-            "param":  self._param.get(),
-            "dist":   self._dist.get(),
-            "bins":   self._bins.get(),
-            "group":  self._group.get(),
-            "compare": self._compare.get(),
-            "do_zoom": bool(self._do_zoom.get()),
-            "x_col":  self._x_col.get(),
-            "y_col":  self._y_col.get(),
-            "target": self._target.get(),
+            "mode":         self._mode.get(),
+            "param":        self._param.get(),
+            "dist":         self._dist.get(),
+            "bins":         self._bins.get(),
+            "group":        self._group.get(),
+            "compare":      self._compare.get(),
+            "do_zoom":      bool(self._do_zoom.get()),
+            "x_col":        self._x_col.get(),
+            "y_col":        self._y_col.get(),
+            "target":       self._target.get(),
+            "tran_signals": self._tran_signals.get(),
+            "tran_run_mode": self._tran_run_mode.get(),
+            "tran_n":       self._tran_n.get(),
         }
 
     def apply_config(self, cfg: dict):
@@ -451,6 +528,9 @@ class PlotCell(ctk.CTkFrame):
         self._x_col.set(cfg.get("x_col", "-"))
         self._y_col.set(cfg.get("y_col", "-"))
         self._target.set(cfg.get("target", "-"))
+        self._tran_signals.set(cfg.get("tran_signals", ""))
+        self._tran_run_mode.set(cfg.get("tran_run_mode", "All Valid"))
+        self._tran_n.set(cfg.get("tran_n", "50"))
         self._rebuild_controls()
 
 
@@ -628,7 +708,7 @@ class MultiPlotWindow(ctk.CTkToplevel):
 
     def _get_data_snapshot(self):
         """
-        Return (valid_df, stim, sweep_params, derived_cols) from parent,
+        Return (valid_df, stim, sweep_params, derived_cols, tran_dir) from parent,
         or None if no data is loaded.
         Always filters out error rows per the project gotcha.
         """
@@ -640,7 +720,8 @@ class MultiPlotWindow(ctk.CTkToplevel):
         stim         = getattr(p, "current_stim",  None)
         sweep_params = getattr(p, "sweep_params",  [])
         derived_cols = getattr(p, "_derived_cols", [])
-        return valid_df, stim, sweep_params, derived_cols
+        tran_dir     = p._resolve_tran_dir() if callable(getattr(p, "_resolve_tran_dir", None)) else ""
+        return valid_df, stim, sweep_params, derived_cols, tran_dir
 
     def _get_compare_run_options(self):
         """Return compare-run options aligned with the main histogram tab semantics."""

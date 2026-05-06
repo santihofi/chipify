@@ -834,7 +834,7 @@ class SimifyGUI(ctk.CTk):
             
             test_val_vars = []
             for v_idx, (v_name, v_data) in enumerate(tb_data.items()):
-                if v_name == 'values': continue 
+                if v_name in ('values', 'transient_signals'): continue
                 if not isinstance(v_data, dict): v_data = {}
                 v_name_var = ctk.StringVar(value=str(v_name))
                 
@@ -850,8 +850,19 @@ class SimifyGUI(ctk.CTk):
                 ctk.CTkButton(val_frame, text="X", width=24, height=24, fg_color="transparent", border_width=1, command=lambda t=t_idx, v=v_name: self.action_del_value(t, v)).grid(row=1+v_idx, column=3, padx=5, pady=2)
                 
                 test_val_vars.append({'name': v_name_var, 'vmin': v_min, 'vmax': v_max})
+
+            # Transient signals row
+            existing_tran = tb_data.get('transient_signals', [])
+            tran_str = ", ".join(str(s) for s in existing_tran) if isinstance(existing_tran, list) else str(existing_tran)
+            tran_var = ctk.StringVar(value=tran_str)
+            tran_row = ctk.CTkFrame(frame, fg_color="transparent")
+            tran_row.pack(fill="x", padx=10, pady=(4, 0))
+            ctk.CTkLabel(tran_row, text="Transient Signals:", text_color="#3484F0",
+                         font=ctk.CTkFont(size=12)).pack(side=tk.LEFT, padx=(0, 8))
+            ctk.CTkEntry(tran_row, textvariable=tran_var,
+                         placeholder_text="e.g.  v(out), v(in), i(vdd)").pack(side=tk.LEFT, fill="x", expand=True)
                 
-            self.test_vars.append({'tb_name': tb_name_var, 'values': test_val_vars})
+            self.test_vars.append({'tb_name': tb_name_var, 'values': test_val_vars, 'tran_signals': tran_var})
             ctk.CTkButton(frame, text="+ Add Measurement", width=140, height=24, fg_color="transparent", border_width=1, command=lambda idx=t_idx: self.action_add_value(idx)).pack(anchor="w", padx=10, pady=(5, 10))
 
     def sync_ui_to_state(self):
@@ -883,6 +894,16 @@ class SimifyGUI(ctk.CTk):
             if not tb_name: continue
             
             tb_content = {}
+
+            # Persist transient_signals before scalar measurements so it appears first.
+            tran_raw = t_dict.get('tran_signals')
+            if tran_raw is not None:
+                tran_str = tran_raw.get().strip()
+                if tran_str:
+                    tran_list = [s.strip() for s in tran_str.replace(",", " ").split() if s.strip()]
+                    if tran_list:
+                        tb_content['transient_signals'] = tran_list
+
             for v_dict in t_dict['values']:
                 name = v_dict['name'].get().strip()
                 if not name: continue
@@ -1512,6 +1533,11 @@ class SimifyGUI(ctk.CTk):
         self.tran_canvas = FigureCanvasTkAgg(self.tran_fig, master=body)
         self.tran_canvas.get_tk_widget().grid(row=0, column=1, sticky="nsew")
 
+        # Hover state
+        self._tran_line_map: dict = {}
+        self._tran_annot = None
+        self.tran_canvas.mpl_connect("motion_notify_event", self._on_tran_hover)
+
     def _on_tran_mode_change(self, mode):
         if mode in ("First N", "Custom IDs"):
             self._tran_n_entry.pack(side=tk.LEFT, padx=(0, 10))
@@ -1533,7 +1559,18 @@ class SimifyGUI(ctk.CTk):
             if td and os.path.isdir(td):
                 return td
 
-        # 2. History meta sidecar
+        # 2a. Latest pointer file (written next to simulation_results.csv on each sim)
+        pointer = os.path.join(settings.OUT_DIR, "tran_data", ".latest")
+        if os.path.exists(pointer):
+            try:
+                with open(pointer, "r", encoding="utf-8") as _f:
+                    td = _f.read().strip()
+                if td and os.path.isdir(td):
+                    return td
+            except Exception:
+                pass
+
+        # 2b. History meta sidecar
         selection = self.history_dropdown.get() if hasattr(self, "history_dropdown") else ""
         if selection and selection not in ("No runs found", "Latest (simulation_results)"):
             csv_path = os.path.join(settings.OUT_DIR, "history", selection)
@@ -1556,17 +1593,24 @@ class SimifyGUI(ctk.CTk):
         return ""
 
     def _refresh_transient_signal_list(self):
-        """Re-populate the signals listbox from the current Stimuli."""
+        """Re-populate the signals listbox from Stimuli + active custom equations."""
         self._tran_sig_lb.delete(0, tk.END)
-        if self.current_stim is None:
-            return
         seen: list = []
-        for test in self.current_stim.tests:
-            for sig in getattr(test, "transient_signals", []):
-                if sig not in seen:
-                    seen.append(sig)
-                    self._tran_sig_lb.insert(tk.END, sig)
-        # Select all by default
+
+        if self.current_stim is not None:
+            for test in self.current_stim.tests:
+                for sig in getattr(test, "transient_signals", []):
+                    if sig not in seen:
+                        seen.append(sig)
+
+        # Also expose active custom equations so derived waveforms can be selected.
+        for eq in app_config.load_config().get("custom_equations", []):
+            name = eq.get("name", "").strip()
+            if name and name not in seen:
+                seen.append(name)
+
+        for sig in seen:
+            self._tran_sig_lb.insert(tk.END, sig)
         if seen:
             self._tran_sig_lb.select_set(0, tk.END)
 
@@ -1577,10 +1621,11 @@ class SimifyGUI(ctk.CTk):
 
         tran_dir = self._resolve_tran_dir()
         if not tran_dir:
-            PlotManager.draw_transient_plot(
+            self._tran_line_map = PlotManager.draw_transient_plot(
                 self.tran_fig, self.tran_canvas, "", [], [],
                 bg_color=panel_color,
             )
+            self._tran_annot = None
             return
 
         # Collect selected signals from listbox
@@ -1589,10 +1634,11 @@ class SimifyGUI(ctk.CTk):
             for i in self._tran_sig_lb.curselection()
         ]
         if not selected_signals:
-            PlotManager.draw_transient_plot(
+            self._tran_line_map = PlotManager.draw_transient_plot(
                 self.tran_fig, self.tran_canvas, tran_dir, [], [],
                 bg_color=panel_color,
             )
+            self._tran_annot = None
             return
 
         # Derive run_id pool from selection mode
@@ -1630,12 +1676,87 @@ class SimifyGUI(ctk.CTk):
             for _, row in df[['run_id', 'global_pass']].dropna(subset=['run_id']).iterrows():
                 pass_map[str(row['run_id']).zfill(6)] = bool(row['global_pass'])
 
-        PlotManager.draw_transient_plot(
+        equations = app_config.load_config().get("custom_equations", [])
+        self._tran_line_map = PlotManager.draw_transient_plot(
             self.tran_fig, self.tran_canvas, tran_dir,
             run_ids, selected_signals,
             pass_map=pass_map,
             bg_color=panel_color,
+            equations=equations,
         )
+        # Rebuild hover annotation on the fresh axis (fig.clf() destroyed the old one).
+        if self.tran_fig.axes:
+            self._tran_annot = self.tran_fig.axes[0].annotate(
+                "", xy=(0, 0), xytext=(14, 14), textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.45", fc="#1c1c1c", ec="#3484F0",
+                          lw=1, alpha=0.95),
+                color="white",
+                arrowprops=dict(arrowstyle="-|>", color="#3484F0"),
+            )
+            self._tran_annot.set_visible(False)
+        else:
+            self._tran_annot = None
+
+    def _on_tran_hover(self, event):
+        """Show a tooltip when the mouse is near a transient curve."""
+        annot = self._tran_annot
+        if annot is None or not self.tran_fig.axes:
+            return
+        if event.inaxes != self.tran_fig.axes[0]:
+            if annot.get_visible():
+                annot.set_visible(False)
+                self.tran_canvas.draw_idle()
+            return
+
+        hit_line, hit_run_id, hit_sig = None, None, None
+        for line, (run_id, sig) in self._tran_line_map.items():
+            try:
+                contains, _ = line.contains(event)
+                if contains:
+                    hit_line, hit_run_id, hit_sig = line, run_id, sig
+                    break
+            except Exception:
+                continue
+
+        if hit_run_id is None:
+            if annot.get_visible():
+                annot.set_visible(False)
+                self.tran_canvas.draw_idle()
+            return
+
+        # Build tooltip text
+        lines = [f"Run ID: {hit_run_id}", f"Signal: {hit_sig}"]
+        df = self.current_df
+        if df is not None and 'run_id' in df.columns:
+            try:
+                row = df[df['run_id'].astype(str).str.zfill(6) == hit_run_id]
+                if not row.empty:
+                    row = row.iloc[0]
+                    status = "PASS" if bool(row.get('global_pass', True)) else "FAIL"
+                    lines.append(f"Status: {status}")
+                    if self.current_stim:
+                        lines.append("─" * 16)
+                        for p in self.current_stim.params.keys():
+                            if p in row.index:
+                                lines.append(f"{p}: {row[p]}")
+            except Exception:
+                pass
+
+        # Position annotation at current mouse location
+        ax = self.tran_fig.axes[0]
+        ax_bbox = ax.get_window_extent()
+        x_off = -14 if event.x > (ax_bbox.x0 + ax_bbox.width * 0.70) else 14
+        y_off = -14 if event.y > (ax_bbox.y0 + ax_bbox.height * 0.70) else 14
+        inv = ax.transData.inverted()
+        x_data, y_data = inv.transform((event.x, event.y))
+        annot.xy = (x_data, y_data)
+        annot.set_text("\n".join(lines))
+        annot.set_position((x_off, y_off))
+        annot.set_ha("right" if x_off < 0 else "left")
+        annot.set_va("top" if y_off < 0 else "bottom")
+        annot.set_annotation_clip(False)
+        annot.set_visible(True)
+        self.tran_canvas.draw_idle()
 
     def apply_treeview_dark_style(self):
         style = ttk.Style()
@@ -1705,6 +1826,17 @@ class SimifyGUI(ctk.CTk):
                 log.info("run_sim returned %d rows. Saving results...", len(df))
                 csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
                 df.to_csv(csv_out, index=False)
+
+                # Write a pointer so the Transient tab can resolve tran_dir on reload.
+                _tran_dir_val = df.attrs.get("tran_dir", "")
+                if _tran_dir_val:
+                    try:
+                        _ptr = os.path.join(settings.OUT_DIR, "tran_data", ".latest")
+                        os.makedirs(os.path.dirname(_ptr), exist_ok=True)
+                        with open(_ptr, "w", encoding="utf-8") as _f:
+                            _f.write(_tran_dir_val)
+                    except Exception as _e:
+                        log.warning("Could not write tran_dir pointer: %s", _e)
                 
                 try:
                     from chipify import run_meta
