@@ -16,6 +16,10 @@ setup(
         "matplotlib",
         "scipy"
     ],
+    extras_require={
+        # pip install chipify[vacask]  → pulls in PyOPUS for VACASK engine support
+        "vacask": ["PyOPUS>=0.11"],
+    },
     entry_points={
         "console_scripts": [
             "chipify-cli=chipify.cli:main", 

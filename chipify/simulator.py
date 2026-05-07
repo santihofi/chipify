@@ -1,5 +1,6 @@
 # simulator.py
 import os
+import re
 import sys
 import glob
 import shutil
@@ -119,8 +120,15 @@ class BaseSimulator(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def run(self, netlist: str, timeout_sec: int = 10):
-        """Execute one netlist and return (output_line, error_message)."""
+    def run(self, netlist: str, timeout_sec: int = 10, test=None, tran_out_path: str = ""):
+        """Execute one netlist and return (output_line, error_message).
+
+        test          – the Test object for the current testbench (optional; used by
+                        VacaskSimulator to evaluate measure expressions).
+        tran_out_path – path where the engine should write transient waveform data in
+                        ngspice wrdata .tab column layout (optional; used by
+                        VacaskSimulator to persist waveforms without a .control block).
+        """
         raise NotImplementedError
 
 
@@ -148,7 +156,7 @@ class NgspiceSimulator(BaseSimulator):
 
             return netlist
 
-    def run(self, netlist: str, timeout_sec: int = 10):
+    def run(self, netlist: str, timeout_sec: int = 10, test=None, tran_out_path: str = ""):
         custom_env = os.environ.copy()
         custom_env["OMP_NUM_THREADS"] = "1"
 
@@ -206,9 +214,363 @@ class NgspiceSimulator(BaseSimulator):
 
 def get_simulator_engine(simulator_name: str) -> BaseSimulator:
     key = (simulator_name or "ngspice").strip().lower()
-    engines = {"ngspice": NgspiceSimulator}
-    engine_cls = engines.get(key, NgspiceSimulator)
-    return engine_cls()
+    engines = {"ngspice": NgspiceSimulator, "vacask": VacaskSimulator}
+    return engines.get(key, NgspiceSimulator)()
+
+
+# ── VACASK helpers ─────────────────────────────────────────────────────────────
+
+def _run_xschem_vacask(xschem_file: str) -> None:
+    """Generate a VACASK .sim netlist via Xschem (requires VACASK-capable Xschem dev build)."""
+    log.info("run_xschem_vacask: %s", xschem_file)
+    process = None
+    try:
+        process = subprocess.Popen(
+            ['xschem', '-n', '-s', '-q', '-x', '--simulator', 'vacask',
+             '-o', settings.FAST_TMP, xschem_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=settings.WORK_DIR,
+        )
+        while process.poll() is None:
+            if _is_aborted():
+                process.kill()
+                raise InterruptedError("Aborted during Xschem VACASK netlist generation.")
+            time.sleep(0.2)
+        if process.returncode != 0:
+            stderr = process.stderr.read() if process.stderr else ""
+            raise RuntimeError(
+                f"Xschem VACASK netlist generation failed (rc={process.returncode}): {stderr}"
+            )
+        log.info("Xschem VACASK netlist generated OK.")
+    except InterruptedError:
+        raise
+    except Exception as exc:
+        if process is not None and process.poll() is None:
+            process.kill()
+        raise RuntimeError(f"Xschem VACASK netlist generation failed: {exc}") from exc
+
+
+def _run_ng2vc(spice_file: str, sim_file: str) -> None:
+    """Convert an ngspice netlist to VACASK .sim format using the ng2vc converter.
+
+    Tries, in order:
+    1. pyopus.simulator.ng2vc  (if PyOPUS is installed with ng2vc support)
+    2. ng2vc / ng2vc.py on the system PATH or next to the vacask binary
+    """
+    # Try PyOPUS built-in converter
+    try:
+        from pyopus.simulator import ng2vc as _m  # type: ignore[import]
+        if hasattr(_m, "convert"):
+            _m.convert(spice_file, sim_file)
+            log.info("ng2vc conversion via PyOPUS OK: %s → %s", spice_file, sim_file)
+            return
+    except Exception:
+        pass
+
+    # Locate ng2vc script next to the vacask binary or on PATH
+    vacask_bin = shutil.which("vacask")
+    candidates = [
+        shutil.which("ng2vc"),
+        os.path.join(os.path.dirname(vacask_bin), "ng2vc") if vacask_bin else None,
+        os.path.join(os.path.dirname(vacask_bin), "ng2vc.py") if vacask_bin else None,
+    ]
+    ng2vc_path = next((p for p in candidates if p and os.path.exists(p)), None)
+    if ng2vc_path is None:
+        raise RuntimeError(
+            "ng2vc converter not found. Install PyOPUS or ensure ng2vc / ng2vc.py "
+            "is on the system PATH alongside the vacask binary."
+        )
+
+    result = subprocess.run(
+        [sys.executable, ng2vc_path, spice_file, sim_file],
+        capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ng2vc conversion failed: {result.stderr.strip()}")
+    log.info("ng2vc conversion via script OK: %s → %s", spice_file, sim_file)
+
+
+_RE_SANITISE = re.compile(r"[^a-zA-Z0-9_]")
+
+
+def _sanitise_key(name: str) -> str:
+    """Turn a SPICE signal name like v(out) into a Python identifier v_out_."""
+    return _RE_SANITISE.sub("_", name)
+
+
+def _parse_ascii_raw(raw_file: str) -> dict:
+    """Minimal parser for SPICE ASCII .raw files. Returns {signal_name_lower: np.ndarray}."""
+    import numpy as np
+
+    var_names: list[str] = []
+    rows: dict[str, list] = {}
+    n_vars = 0
+    in_variables = False
+    in_values = False
+    pending: list[float] = []
+
+    with open(raw_file, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            ls = line.strip()
+            lower = ls.lower()
+            if lower.startswith("no. variables:"):
+                n_vars = int(ls.split(":")[-1].strip())
+            elif lower.startswith("no. points:"):
+                pass  # informational only
+            elif lower == "variables:":
+                in_variables, in_values = True, False
+            elif lower in ("values:", "binary:"):
+                in_variables, in_values = False, True
+                for nm in var_names:
+                    rows[nm] = []
+                if lower == "binary:":
+                    log.warning("Binary .raw format detected – ASCII parser cannot read it. "
+                                "Install PyOPUS for binary raw support.")
+                    return {}
+            elif in_variables:
+                parts = ls.split()
+                if len(parts) >= 2:
+                    var_names.append(parts[1].lower())
+            elif in_values and n_vars > 0:
+                for tok in ls.split():
+                    try:
+                        pending.append(float(tok))
+                    except ValueError:
+                        pass
+                # Flush complete rows
+                while len(pending) >= n_vars:
+                    row_vals = pending[:n_vars]
+                    pending = pending[n_vars:]
+                    for i, nm in enumerate(var_names):
+                        if i < len(row_vals):
+                            rows[nm].append(row_vals[i])
+
+    return {k: np.array(v) for k, v in rows.items()}
+
+
+def _read_raw_file(raw_file: str) -> "dict | None":
+    """Read a VACASK/SPICE .raw output file → {signal_name_lower: np.ndarray}."""
+    # Preferred: PyOPUS rawfile reader (handles binary + ASCII)
+    try:
+        from pyopus.simulator.rawfile import RawFile  # type: ignore[import]
+        rf = RawFile(raw_file)
+        out: dict = {}
+        analyses = getattr(rf, "analyses", None) or [rf]
+        for an in analyses:
+            xvec = getattr(an, "xvec", None)
+            xlabel = getattr(an, "xlabel", "time") or "time"
+            if xvec is not None:
+                out[xlabel.lower()] = xvec
+            for sv in getattr(an, "yvec", []):
+                out[sv.name.lower()] = sv.data
+        if out:
+            return out
+    except Exception:
+        pass
+
+    # Fallback: minimal ASCII raw parser
+    try:
+        return _parse_ascii_raw(raw_file)
+    except Exception as exc:
+        log.warning("Could not parse raw file %s: %s", raw_file, exc)
+        return None
+
+
+def _eval_measure_expr(expr: str, results: dict):
+    """Evaluate a measure expression string against a dict of signal numpy arrays.
+
+    Signal names are available as sanitised Python identifiers (v_out_, i_r1_, …)
+    and also in their SPICE-style form translated to identifier via _sanitise_key().
+    Helper functions (db, last, first, max, min, …) are provided in the namespace.
+    """
+    import numpy as np
+
+    namespace: dict = {
+        "__builtins__": {},
+        "np": np,
+        "max": np.max, "min": np.min, "abs": np.abs,
+        "sum": np.sum, "mean": np.mean, "sqrt": np.sqrt,
+        "log10": np.log10, "log": np.log, "exp": np.exp,
+        "db":    lambda x: 20.0 * np.log10(np.abs(np.asarray(x, dtype=float))),
+        "last":  lambda x: float(np.asarray(x, dtype=float)[-1]),
+        "first": lambda x: float(np.asarray(x, dtype=float)[0]),
+    }
+    for raw_key, vec in results.items():
+        namespace[_sanitise_key(raw_key)] = np.asarray(vec, dtype=float)
+
+    # Translate SPICE-style names in the expression: v(out) → v_out_
+    expr_safe = re.sub(
+        r'([a-zA-Z_]\w*)\(([^)]+)\)',
+        lambda m: _sanitise_key(m.group(1) + "_" + m.group(2) + "_"),
+        expr,
+    )
+    return eval(expr_safe, namespace)  # noqa: S307
+
+
+def _write_transient_tab(results: dict, signals: list, out_path: str) -> None:
+    """Write transient signal vectors to a .tab file readable by _persist_transient().
+
+    Uses the single-time-column layout that _persist_transient() handles:
+        time  sig0  sig1  …
+    """
+    import numpy as np
+
+    x_key = next((k for k in ("time", "frequency") if k in results),
+                 next(iter(results), None))
+    if x_key is None:
+        return
+    x_vec = np.asarray(results[x_key], dtype=float)
+    cols = [x_vec]
+    for sig in signals:
+        vec = results.get(sig.lower(),
+               results.get(_sanitise_key(sig.lower()),
+               np.zeros_like(x_vec)))
+        cols.append(np.asarray(vec, dtype=float))
+
+    n = min(len(c) for c in cols) if cols else 0
+    try:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as fh:
+            for i in range(n):
+                fh.write("  ".join(f"{c[i]:.6e}" for c in cols) + "\n")
+    except Exception as exc:
+        log.warning("Could not write transient tab %s: %s", out_path, exc)
+
+
+def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
+    """Read VACASK .raw output, apply measure expressions, return (MY_DATA line, error)."""
+    if not os.path.exists(raw_file):
+        return None, "NO_RAW_FILE"
+
+    results = _read_raw_file(raw_file)
+    if results is None:
+        return None, "RAW_PARSE_ERROR"
+
+    tran_signals = getattr(test, "transient_signals", []) if test else []
+    measure_exprs = getattr(test, "measure", {}) if test else {}
+    value_lst = test.value_lst if test else []
+
+    # Persist transient waveforms so _persist_transient() can convert them to CSV
+    x_present = any(k in results for k in ("time", "frequency"))
+    if tran_signals and tran_out_path and x_present:
+        _write_transient_tab(results, tran_signals, tran_out_path)
+
+    # Transient-only testbench
+    if not value_lst:
+        return "", None
+
+    scalar_strs: list[str] = []
+    for val_obj in value_lst:
+        expr = measure_exprs.get(val_obj.name, "")
+        if not expr:
+            log.warning(
+                "No VACASK measure expression for '%s'. "
+                "Add it under  measure:  in the datasheet.yaml test block.",
+                val_obj.name,
+            )
+            scalar_strs.append("nan")
+            continue
+        try:
+            val = _eval_measure_expr(expr, results)
+            scalar_strs.append(str(float(val)))
+        except Exception as exc:
+            log.warning("Measure eval error for '%s': %s", val_obj.name, exc)
+            return None, f"MEASURE_ERROR({val_obj.name}): {exc}"
+
+    return "MY_DATA: " + " ".join(scalar_strs), None
+
+
+# ── VACASK simulator engine ────────────────────────────────────────────────────
+
+class VacaskSimulator(BaseSimulator):
+    """Simulator engine that drives VACASK via subprocess, reads results via PyOPUS rawfile."""
+
+    name = "vacask"
+
+    def generate_test_template(self, test) -> str:
+        cfg = app_config.load_config()
+        source = cfg.get("vacask_netlist_source", "xschem")
+        tb_path = os.path.join(settings.TB_DIR, test.tb_path + ".sch")
+
+        if source == "ng2vc":
+            # Generate ngspice netlist via Xschem, then convert to VACASK syntax
+            run_xschem(tb_path)
+            spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
+            sim_file = os.path.join(settings.FAST_TMP, test.tb_path + ".sim")
+            _run_ng2vc(spice_file, sim_file)
+        else:
+            # Use Xschem's native VACASK output mode (requires Xschem dev build with vacask support)
+            _run_xschem_vacask(tb_path)
+            sim_file = os.path.join(settings.FAST_TMP, test.tb_path + ".sim")
+
+        with open(sim_file, "r", encoding="utf-8") as fh:
+            netlist = fh.read()
+
+        return netlist
+
+    def run(self, netlist: str, timeout_sec: int = 10,
+            test=None, tran_out_path: str = "") -> tuple:
+        cfg = app_config.load_config()
+        vacask_binary = cfg.get("vacask_binary") or "vacask"
+        custom_env = os.environ.copy()
+        custom_env["OMP_NUM_THREADS"] = "1"
+
+        pid = os.getpid()
+        temp_sim_file = os.path.join(settings.FAST_TMP, f"sim_{pid}_vc.sim")
+        # VACASK writes <stem>.raw beside the input file by default
+        temp_raw_file = os.path.join(settings.FAST_TMP, f"sim_{pid}_vc.raw")
+        temp_log_file = os.path.join(settings.FAST_TMP, f"sim_{pid}_vc.log")
+
+        with open(temp_sim_file, "w", encoding="utf-8") as fh:
+            fh.write(netlist)
+
+        process = None
+        try:
+            with open(temp_log_file, "w") as log_fh:
+                process = subprocess.Popen(
+                    [vacask_binary, temp_sim_file],
+                    stdout=log_fh,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=settings.FAST_TMP,
+                    env=custom_env,
+                )
+
+                start_time = time.monotonic()
+                while process.poll() is None:
+                    if _is_aborted():
+                        process.kill()
+                        return None, "ABORTED"
+                    if (time.monotonic() - start_time) > timeout_sec:
+                        process.kill()
+                        return None, "TIMEOUT"
+                    time.sleep(0.1)
+
+                if process.returncode != 0:
+                    raise subprocess.CalledProcessError(process.returncode, process.args)
+
+            return _vacask_extract_results(temp_raw_file, test, tran_out_path)
+
+        except subprocess.CalledProcessError:
+            err_msg = "CRASH"
+            if os.path.exists(temp_log_file):
+                with open(temp_log_file, "r") as lf:
+                    err_msg = "".join(lf.readlines()[-5:]).strip()
+            return None, f"CRASH: {err_msg}"
+
+        except Exception as exc:
+            log.exception("VacaskSimulator.run unexpected error: %s", exc)
+            return None, f"CRASH: {exc}"
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+            for f_path in (temp_sim_file, temp_raw_file, temp_log_file):
+                try:
+                    os.remove(f_path)
+                except OSError:
+                    pass
 
 
 def _persist_transient(tab_path: str, signals: list, dest_csv: str) -> None:
@@ -273,7 +635,7 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
             tran_out_path = ""
 
         rendering = Template(test.template_str).render(**render_kwargs)
-        sim_output, error_msg = engine.run(rendering)
+        sim_output, error_msg = engine.run(rendering, test=test, tran_out_path=tran_out_path)
 
         if error_msg:
             sample['sim_error'] = f"{test.tb_path}: {error_msg}"
@@ -366,7 +728,7 @@ def generate_cases(stim) -> list:
     return [dict(zip(param_names, combo)) for combo in itertools.product(*param_values)]
 
 
-def run_sim(stim, progress_callback=None, simulator="ngspice"):
+def run_sim(stim, progress_callback=None, simulator=None):
     """
     Main simulation entry point.
 
@@ -385,7 +747,8 @@ def run_sim(stim, progress_callback=None, simulator="ngspice"):
         param_sets = generate_cases(stim)
         log.info("Total cases: %d", len(param_sets))
         cfg = app_config.load_config()
-        simulator_name = (cfg.get("simulator_engine") or simulator or "ngspice").strip().lower()
+        # CLI --simulator flag (simulator arg) takes precedence over settings.json
+        simulator_name = (simulator or cfg.get("simulator_engine") or "ngspice").strip().lower()
         engine = get_simulator_engine(simulator_name)
         log.info("Selected simulator engine: %s", engine.name)
 

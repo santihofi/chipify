@@ -59,10 +59,16 @@ panel_color = "#1a1a1a"
 class SettingsWindow(ctk.CTkToplevel):
     """Modal settings dialog for persistent user preferences."""
 
+    _ENGINE_HINTS = {
+        "ngspice": "ngspice: default SPICE3 simulator",
+        "vacask":  "vacask: Verilog-A Circuit Analysis Kernel (PyOPUS required)",
+    }
+    _VALID_ENGINES = ["ngspice", "vacask"]
+
     def __init__(self, parent: ctk.CTk):
         super().__init__(parent)
         self.title("Global Settings")
-        self.geometry("460x590")
+        self.geometry("460x720")
         self.resizable(False, False)
 
         # grab_set needs a small delay so the window is fully mapped first
@@ -74,12 +80,17 @@ class SettingsWindow(ctk.CTkToplevel):
         simulator_engine = self._config.get("simulator_engine", "ngspice")
         process_mode = self._config.get("process_start_method", "auto")
         chunk_size_mode = str(self._config.get("chunk_size", "auto"))
-        if simulator_engine not in ["ngspice"]:
+        vacask_binary = self._config.get("vacask_binary", "vacask")
+        vacask_src = self._config.get("vacask_netlist_source", "xschem")
+
+        if simulator_engine not in self._VALID_ENGINES:
             simulator_engine = "ngspice"
         if process_mode not in ["auto", "forkserver", "spawn"]:
             process_mode = "auto"
         if chunk_size_mode not in ["auto", "1", "2", "4", "8", "16", "32"]:
             chunk_size_mode = "auto"
+        if vacask_src not in ["xschem", "ng2vc"]:
+            vacask_src = "xschem"
 
         # ── Header ──────────────────────────────────────────────────────────
         ctk.CTkLabel(
@@ -115,23 +126,60 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(anchor="w")
 
         # ── simulator engine section ────────────────────────────────────────
-        sim_outer = ctk.CTkFrame(self, fg_color="transparent")
-        sim_outer.pack(fill="x", padx=36, pady=(18, 0))
-        ctk.CTkLabel(sim_outer, text="Simulation Engine:", anchor="w").pack(anchor="w")
+        self._sim_outer = ctk.CTkFrame(self, fg_color="transparent")
+        self._sim_outer.pack(fill="x", padx=36, pady=(18, 0))
+        ctk.CTkLabel(self._sim_outer, text="Simulation Engine:", anchor="w").pack(anchor="w")
         self._sim_engine_var = ctk.StringVar(value=simulator_engine)
         self._sim_engine_menu = ctk.CTkOptionMenu(
-            sim_outer,
+            self._sim_outer,
             variable=self._sim_engine_var,
-            values=["ngspice"],
+            values=self._VALID_ENGINES,
             dynamic_resizing=False,
             width=180,
+            command=self._on_engine_change,
         )
         self._sim_engine_menu.pack(anchor="w", pady=(6, 2))
-        ctk.CTkLabel(
-            sim_outer,
-            text="Prepared for future engines (Xyce/Spectre)",
+        self._sim_engine_hint = ctk.CTkLabel(
+            self._sim_outer,
+            text=self._ENGINE_HINTS.get(simulator_engine, ""),
             text_color="gray", font=ctk.CTkFont(size=11)
-        ).pack(anchor="w")
+        )
+        self._sim_engine_hint.pack(anchor="w")
+
+        # ── VACASK-specific settings (shown only when vacask engine is selected) ─
+        self._vacask_frame = ctk.CTkFrame(self, fg_color="transparent")
+
+        vc_bin_row = ctk.CTkFrame(self._vacask_frame, fg_color="transparent")
+        vc_bin_row.pack(fill="x")
+        ctk.CTkLabel(vc_bin_row, text="VACASK Binary:", anchor="w", width=130).pack(side="left")
+        self._vacask_binary_var = ctk.StringVar(value=vacask_binary)
+        ctk.CTkEntry(
+            vc_bin_row, textvariable=self._vacask_binary_var,
+            placeholder_text="vacask", width=200,
+        ).pack(side="left", padx=(8, 0))
+
+        vc_src_row = ctk.CTkFrame(self._vacask_frame, fg_color="transparent")
+        vc_src_row.pack(fill="x", pady=(8, 0))
+        ctk.CTkLabel(vc_src_row, text="Netlist Source:", anchor="w", width=130).pack(side="left")
+        self._vacask_src_var = ctk.StringVar(value=vacask_src)
+        ctk.CTkOptionMenu(
+            vc_src_row,
+            variable=self._vacask_src_var,
+            values=["xschem", "ng2vc"],
+            dynamic_resizing=False,
+            width=200,
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkLabel(
+            self._vacask_frame,
+            text="Requires PyOPUS  (pip install chipify[vacask])  and vacask on PATH",
+            text_color="gray", font=ctk.CTkFont(size=11), wraplength=380,
+        ).pack(anchor="w", pady=(6, 0))
+
+        # Show vacask panel if already selected
+        if simulator_engine == "vacask":
+            self._vacask_frame.pack(fill="x", padx=36, pady=(8, 0),
+                                    after=self._sim_outer)
 
         # ── process start method section ────────────────────────────────────
         proc_outer = ctk.CTkFrame(self, fg_color="transparent")
@@ -189,9 +237,19 @@ class SettingsWindow(ctk.CTkToplevel):
     def _on_cores_change(self, value: float) -> None:
         self._cores_lbl.configure(text=str(int(value)))
 
+    def _on_engine_change(self, choice: str) -> None:
+        self._sim_engine_hint.configure(text=self._ENGINE_HINTS.get(choice, ""))
+        if choice == "vacask":
+            self._vacask_frame.pack(fill="x", padx=36, pady=(8, 0),
+                                    after=self._sim_outer)
+        else:
+            self._vacask_frame.pack_forget()
+
     def _save(self) -> None:
         self._config["num_cores"] = int(self._cores_var.get())
         self._config["simulator_engine"] = self._sim_engine_var.get()
+        self._config["vacask_binary"] = self._vacask_binary_var.get().strip() or "vacask"
+        self._config["vacask_netlist_source"] = self._vacask_src_var.get()
         self._config["process_start_method"] = self._proc_mode_var.get()
         self._config["chunk_size"] = self._chunk_var.get()
         app_config.save_config(self._config)

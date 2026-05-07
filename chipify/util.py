@@ -24,12 +24,18 @@ class Stimuli:
         # 2. Tests generieren
         for tb_path, measurements in data.get('tests', {}).items():
             transient_signals = []
+            measure: dict = {}
             value_lst = []
             for val_name, bounds in measurements.items():
                 if val_name == 'transient_signals':
                     # bounds is a list of signal names, e.g. ["v(out)", "v(in)"]
                     if isinstance(bounds, list):
                         transient_signals = [str(s) for s in bounds]
+                    continue
+                if val_name == 'measure':
+                    # VACASK measure expressions: {value_name: "expression_string"}
+                    if isinstance(bounds, dict):
+                        measure = {k: str(v) for k, v in bounds.items()}
                     continue
                 value_lst.append(
                     Value(
@@ -41,6 +47,7 @@ class Stimuli:
                 )
             t = Test(tb_path, value_lst)
             t.transient_signals = transient_signals
+            t.measure = measure
             self.addTest(t)
 
     def addTest(self, test):
@@ -52,6 +59,7 @@ class Test:
         self.value_lst = value_lst
         self.template = ""
         self.transient_signals: list = []  # populated by Stimuli._load_from_yaml
+        self.measure: dict = {}            # VACASK measure expressions {name: expr_str}
         
 class Value:
     def __init__(self, name, vmin, vmax, vtyp):

@@ -53,6 +53,17 @@ def _ngspice_version() -> str:
         return ""
 
 
+def _vacask_version() -> str:
+    try:
+        result = subprocess.run(
+            ["vacask", "--version"], capture_output=True, text=True, timeout=5
+        )
+        first = (result.stdout or result.stderr or "").splitlines()[0]
+        return first.strip()
+    except Exception:
+        return ""
+
+
 def _git_commit() -> str:
     try:
         result = subprocess.run(
@@ -94,6 +105,7 @@ def write_meta(
         "host": platform.node(),
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "ngspice": _ngspice_version(),
+        "vacask": _vacask_version(),
         "git_commit": _git_commit(),
         "duration_s": duration_s,
         "total_runs": total_runs,

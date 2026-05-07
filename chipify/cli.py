@@ -36,13 +36,14 @@ def _json_summary(df, stim, yaml_name: str, duration_s: float) -> dict:
     }
 
 
-def _run_single(yaml_path: str, *, json_out: bool = False) -> dict | None:
+def _run_single(yaml_path: str, *, json_out: bool = False,
+                simulator_override: str | None = None) -> dict | None:
     """Run simulation for one yaml file. Returns summary dict or None on failure."""
     import time
     print(f"[*] Loading configuration: {os.path.basename(yaml_path)}")
     stim = util.Stimuli(yaml_path)
     t0 = time.perf_counter()
-    df = simulator.run_sim(stim)
+    df = simulator.run_sim(stim, simulator=simulator_override)
     duration_s = time.perf_counter() - t0
 
     if df is None:
@@ -123,6 +124,13 @@ def main():
         help="After simulation, write a Markdown report to OUTPUT path.",
     )
 
+    parser.add_argument(
+        "--simulator",
+        choices=["ngspice", "vacask"],
+        default=None,
+        help="Override the simulator_engine setting for this run (ngspice|vacask).",
+    )
+
     args = parser.parse_args()
 
     # ── Batch mode ────────────────────────────────────────────────────────────
@@ -139,7 +147,8 @@ def main():
         all_ok = True
         for yaml_path in yaml_files:
             print(f"\n{'='*60}")
-            summary = _run_single(yaml_path, json_out=args.json)
+            summary = _run_single(yaml_path, json_out=args.json,
+                                  simulator_override=args.simulator)
             if summary is None:
                 all_ok = False
                 summary = {"yaml": os.path.basename(yaml_path), "error": "no data"}
@@ -165,7 +174,8 @@ def main():
         sys.exit(1)
 
     print(f"[*] Initialising Chipify...")
-    summary = _run_single(yaml_path, json_out=args.json)
+    summary = _run_single(yaml_path, json_out=args.json,
+                          simulator_override=args.simulator)
     if summary is None:
         sys.exit(1)
 
