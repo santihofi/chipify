@@ -332,7 +332,7 @@ class PlotCell(ctk.CTkFrame):
         self._scatter_annot.set_visible(True)
         self._mpl_canvas.draw_idle()
 
-    def _populate_dropdowns(self, valid_df, stim, sweep_params, derived_cols):
+    def _populate_dropdowns(self, valid_df, stim, sweep_params, derived_cols, tran_dir=""):
         """Fill option-menu values without triggering a redraw."""
         mode = self._mode.get()
 
