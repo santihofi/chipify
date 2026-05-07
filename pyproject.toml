@@ -1,28 +1,5 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
-
-[project]
-name = "chipify"
-version = "0.2.0"
-description = "EDA framework for IC simulation analysis (Chipify engine + Silicrunch GUI)"
-requires-python = ">=3.11"
-dependencies = [
-    "pandas",
-    "numpy",
-    "tqdm",
-    "jinja2",
-    "pyyaml",
-    "customtkinter",
-    "matplotlib",
-    "scipy",
-    "asteval",
-]
-
-[project.optional-dependencies]
-vacask = ["PyOPUS>=0.11"]
-fast   = ["numexpr"]
-dev    = ["pytest", "mypy", "pandas-stubs", "types-PyYAML"]
+# Chipify uses setup.py for packaging metadata and dependencies.
+# This file only carries developer-tooling configuration (mypy + pytest).
 
 # ── mypy strict config ────────────────────────────────────────────────────────
 [tool.mypy]
