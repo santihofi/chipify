@@ -221,29 +221,62 @@ def get_simulator_engine(simulator_name: str) -> BaseSimulator:
 # ── VACASK helpers ─────────────────────────────────────────────────────────────
 
 def _run_xschem_vacask(xschem_file: str) -> None:
-    """Generate a VACASK .sim netlist via Xschem (requires VACASK-capable Xschem dev build)."""
+    """Generate a VACASK .sim netlist via Xschem using Spectre-syntax netlist output.
+
+    Uses ``--spectre`` (supported by all recent Xschem builds) which produces
+    the Spectre-like syntax that VACASK expects.  The ``--simulator`` flag is
+    intentionally avoided because many container builds do not support it.
+    """
     log.info("run_xschem_vacask: %s", xschem_file)
     process = None
+    sim_file = os.path.join(
+        settings.FAST_TMP,
+        os.path.splitext(os.path.basename(xschem_file))[0] + ".sim",
+    )
+    last_error = ""
+    # Some xschem builds return rc=1 in batch mode despite writing a valid netlist.
+    # Try both with and without -q, then accept success if the .sim file exists.
+    command_variants = [
+        ['xschem', '-n', '--spectre', '-q', '-x', '-o', settings.FAST_TMP, xschem_file],
+        ['xschem', '-n', '--spectre', '-x', '-o', settings.FAST_TMP, xschem_file],
+    ]
     try:
-        process = subprocess.Popen(
-            ['xschem', '-n', '-s', '-q', '-x', '--simulator', 'vacask',
-             '-o', settings.FAST_TMP, xschem_file],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=settings.WORK_DIR,
-        )
-        while process.poll() is None:
-            if _is_aborted():
-                process.kill()
-                raise InterruptedError("Aborted during Xschem VACASK netlist generation.")
-            time.sleep(0.2)
-        if process.returncode != 0:
-            stderr = process.stderr.read() if process.stderr else ""
-            raise RuntimeError(
-                f"Xschem VACASK netlist generation failed (rc={process.returncode}): {stderr}"
+        for cmd in command_variants:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=settings.WORK_DIR,
             )
-        log.info("Xschem VACASK netlist generated OK.")
+            while process.poll() is None:
+                if _is_aborted():
+                    process.kill()
+                    raise InterruptedError("Aborted during Xschem VACASK netlist generation.")
+                time.sleep(0.2)
+
+            stdout = process.stdout.read() if process.stdout else ""
+            stderr = process.stderr.read() if process.stderr else ""
+
+            if process.returncode == 0 and os.path.exists(sim_file):
+                log.info("Xschem VACASK netlist generated OK.")
+                return
+
+            if os.path.exists(sim_file):
+                log.warning(
+                    "Xschem returned rc=%d but produced %s. Continuing.",
+                    process.returncode, sim_file,
+                )
+                return
+
+            last_error = (
+                f"cmd={' '.join(cmd)} rc={process.returncode} "
+                f"stdout={stdout.strip()} stderr={stderr.strip()}"
+            )
+
+        raise RuntimeError(
+            f"Xschem VACASK netlist generation failed. Last attempt: {last_error}"
+        )
     except InterruptedError:
         raise
     except Exception as exc:
@@ -440,7 +473,16 @@ def _write_transient_tab(results: dict, signals: list, out_path: str) -> None:
 
 
 def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
-    """Read VACASK .raw output, apply measure expressions, return (MY_DATA line, error)."""
+    """Read VACASK .raw output, extract scalars, return (MY_DATA line, error).
+
+    Scalar extraction order (first match wins for each value):
+    1. Named signal in .raw matching the value name exactly — covers testbenches
+       that use VACASK ``meas`` statements (same YAML format as ngspice).
+    2. Explicit ``measure:`` expression in datasheet.yaml — for computed metrics.
+    3. Neither → nan with a warning.
+    """
+    import numpy as np
+
     if not os.path.exists(raw_file):
         return None, "NO_RAW_FILE"
 
@@ -463,21 +505,34 @@ def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
 
     scalar_strs: list[str] = []
     for val_obj in value_lst:
-        expr = measure_exprs.get(val_obj.name, "")
-        if not expr:
-            log.warning(
-                "No VACASK measure expression for '%s'. "
-                "Add it under  measure:  in the datasheet.yaml test block.",
-                val_obj.name,
-            )
-            scalar_strs.append("nan")
+        # 1. Direct .raw signal lookup by value name (works with VACASK meas statements
+        #    — no measure: block needed in YAML, same format as ngspice)
+        raw_val = (results.get(val_obj.name.lower())
+                   or results.get(_sanitise_key(val_obj.name.lower())))
+        if raw_val is not None:
+            arr = np.asarray(raw_val, dtype=float)
+            # Scalar meas result → use directly; vector → take last point
+            scalar_strs.append(str(float(arr) if arr.ndim == 0 else float(arr.flat[-1])))
             continue
-        try:
-            val = _eval_measure_expr(expr, results)
-            scalar_strs.append(str(float(val)))
-        except Exception as exc:
-            log.warning("Measure eval error for '%s': %s", val_obj.name, exc)
-            return None, f"MEASURE_ERROR({val_obj.name}): {exc}"
+
+        # 2. Explicit measure: expression from YAML
+        expr = measure_exprs.get(val_obj.name, "")
+        if expr:
+            try:
+                val = _eval_measure_expr(expr, results)
+                scalar_strs.append(str(float(val)))
+                continue
+            except Exception as exc:
+                log.warning("Measure eval error for '%s': %s", val_obj.name, exc)
+                return None, f"MEASURE_ERROR({val_obj.name}): {exc}"
+
+        # 3. Nothing found
+        log.warning(
+            "No value found for '%s' in VACASK .raw output. "
+            "Add a 'meas' statement in the testbench or a 'measure:' block in the YAML.",
+            val_obj.name,
+        )
+        scalar_strs.append("nan")
 
     return "MY_DATA: " + " ".join(scalar_strs), None
 
@@ -501,9 +556,19 @@ class VacaskSimulator(BaseSimulator):
             sim_file = os.path.join(settings.FAST_TMP, test.tb_path + ".sim")
             _run_ng2vc(spice_file, sim_file)
         else:
-            # Use Xschem's native VACASK output mode (requires Xschem dev build with vacask support)
-            _run_xschem_vacask(tb_path)
+            # Preferred path: Xschem Spectre netlist directly consumable by VACASK.
+            # If this fails (xschem build quirks), fall back to ng2vc conversion.
             sim_file = os.path.join(settings.FAST_TMP, test.tb_path + ".sim")
+            try:
+                _run_xschem_vacask(tb_path)
+            except Exception as exc:
+                log.warning(
+                    "Direct Xschem→VACASK netlist failed (%s). Falling back to ng2vc.",
+                    exc,
+                )
+                run_xschem(tb_path)
+                spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
+                _run_ng2vc(spice_file, sim_file)
 
         with open(sim_file, "r", encoding="utf-8") as fh:
             netlist = fh.read()
@@ -551,6 +616,32 @@ class VacaskSimulator(BaseSimulator):
                 if process.returncode != 0:
                     raise subprocess.CalledProcessError(process.returncode, process.args)
 
+            # ── Primary path: scan log for MY_DATA: (same as NgspiceSimulator) ──
+            # Testbenches can emit MY_DATA: via VACASK's printf command:
+            #   printf "MY_DATA: %g %g\n" gain bw
+            # This makes the testbench+YAML format identical to the ngspice path.
+            my_data_line = ""
+            if os.path.exists(temp_log_file):
+                with open(temp_log_file, "r") as lf:
+                    for line in lf:
+                        if line.startswith("MY_DATA:"):
+                            my_data_line = line.strip()
+                            break
+
+            tran_signals = getattr(test, "transient_signals", []) if test else []
+            if tran_signals and tran_out_path and os.path.exists(temp_raw_file):
+                results = _read_raw_file(temp_raw_file)
+                if results:
+                    x_present = any(k in results for k in ("time", "frequency"))
+                    if x_present:
+                        _write_transient_tab(results, tran_signals, tran_out_path)
+
+            if my_data_line:
+                return my_data_line, None
+
+            # ── Fallback: extract scalars from .raw file ──────────────────────
+            # Used when the testbench saves named meas results or the YAML
+            # defines explicit measure: expressions.
             return _vacask_extract_results(temp_raw_file, test, tran_out_path)
 
         except subprocess.CalledProcessError:
