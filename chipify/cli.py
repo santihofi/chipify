@@ -194,9 +194,9 @@ def main():
 
 def run_gui():
     """Starts the tkinter-based desktop GUI for chipify."""
-    from chipify import gui_tk
+    from chipify.gui.main_window import main as _gui_main
     print("[*] Starting Chipify Desktop GUI...")
-    gui_tk.main()
+    _gui_main()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,262 @@
+"""
+schema.py – TypedDicts and validation helpers for the Chipify datasheet YAML.
+
+TypedDicts define the expected structure of a parsed datasheet.yaml so that
+editors and mypy can provide type-checked access to the data.
+
+``validate_datasheet(data)`` is the single entry-point: it converts a raw
+``yaml.safe_load()`` dict into validated Python objects, raising ``SchemaError``
+with a precise error path on any structural or semantic problem.
+
+Note: The heavy model classes (Stimuli, Test, Value) still live in util.py.
+schema.py imports from util to build those objects; util.py must NOT import
+from schema.py to avoid circular imports.
+"""
+from __future__ import annotations
+
+import ast
+import math
+from typing import Any
+
+import numpy as np
+
+
+# ── Exceptions ────────────────────────────────────────────────────────────────
+
+class SchemaError(ValueError):
+    """Raised when a datasheet.yaml violates the expected schema."""
+
+
+# ── TypedDict definitions (for type-checker use) ─────────────────────────────
+
+class MeasurementSpec:
+    """Represents one measurement boundary specification within a testbench."""
+    __slots__ = ("name", "vmin", "vmax", "vtyp")
+
+    def __init__(
+        self,
+        name: str,
+        vmin: float | None,
+        vmax: float | None,
+        vtyp: float | None,
+    ) -> None:
+        self.name = name
+        self.vmin = vmin
+        self.vmax = vmax
+        self.vtyp = vtyp
+
+
+# ── Allowed range DSL functions ───────────────────────────────────────────────
+
+_ALLOWED_CALLS: dict[str, Any] = {
+    "range": range,
+    "linspace": np.linspace,
+    "logspace": np.logspace,
+}
+
+
+def _parse_range_dsl(value: str) -> list[float]:
+    """
+    Parse a YAML parameter value that encodes a sequence via a safe DSL.
+
+    Allowed forms
+    -------------
+    - ``range(N)``                 → list(range(N))
+    - ``range(start, stop)``       → list(range(start, stop))
+    - ``range(start, stop, step)`` → list(range(start, stop, step))
+    - ``linspace(start, stop, N)`` → list of N evenly spaced floats
+    - ``logspace(start, stop, N)`` → list of N log-spaced floats
+
+    Any other expression is rejected with ValueError (no eval() is used).
+
+    Parameters
+    ----------
+    value:
+        The raw string from the YAML file, e.g. ``"range(10)"`` or
+        ``"linspace(0, 1, 5)"``.
+
+    Returns
+    -------
+    list[float]
+        Evaluated sequence as a Python list.
+
+    Raises
+    ------
+    ValueError
+        If the expression is not one of the allowed forms, uses unsupported
+        node types, or contains non-numeric arguments.
+    """
+    try:
+        tree = ast.parse(value.strip(), mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"Syntax error in range DSL {value!r}: {exc}") from exc
+
+    body = tree.body
+    if not isinstance(body, ast.Call):
+        raise ValueError(
+            f"Range DSL {value!r}: top-level must be a function call "
+            f"(range, linspace, logspace)."
+        )
+
+    # Resolve function name
+    func_node = body.func
+    if not isinstance(func_node, ast.Name):
+        raise ValueError(
+            f"Range DSL {value!r}: function must be a plain name, not an attribute."
+        )
+    func_name = func_node.id
+    if func_name not in _ALLOWED_CALLS:
+        raise ValueError(
+            f"Range DSL {value!r}: function {func_name!r} is not allowed. "
+            f"Use one of: {sorted(_ALLOWED_CALLS)!r}"
+        )
+
+    # No keyword args, no star args
+    if body.keywords or body.starargs if hasattr(body, "starargs") else body.keywords:
+        raise ValueError(f"Range DSL {value!r}: keyword arguments are not supported.")
+
+    # Extract numeric arguments — only constants allowed
+    args: list[float | int] = []
+    for i, arg in enumerate(body.args):
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)):
+            args.append(arg.value)
+        elif isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+            # Allow negation of constants: range(-5, 5)
+            inner = arg.operand
+            if isinstance(inner, ast.Constant) and isinstance(inner.value, (int, float)):
+                args.append(-inner.value)
+            else:
+                raise ValueError(
+                    f"Range DSL {value!r}: argument {i} is not a numeric constant."
+                )
+        else:
+            raise ValueError(
+                f"Range DSL {value!r}: argument {i} is not a numeric constant."
+            )
+
+    # Call the allowed function
+    fn = _ALLOWED_CALLS[func_name]
+    try:
+        if func_name == "range":
+            int_args = [int(a) for a in args]
+            result = list(fn(*int_args))
+        else:  # linspace / logspace return numpy arrays
+            result = fn(*args).tolist()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Range DSL {value!r}: failed to evaluate {func_name}({args!r}): {exc}"
+        ) from exc
+
+    if not isinstance(result, list):
+        result = list(result)
+    return [float(x) if not isinstance(x, float) else x for x in result]
+
+
+def _parse_scalar_value(raw: Any) -> float | None:
+    """Convert a YAML scalar (str/int/float/None) to float or None."""
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_parameters(params_raw: dict[str, Any]) -> dict[str, Any]:
+    """
+    Validate and normalise the ``parameters:`` block.
+
+    Sequences expressed as range-DSL strings are expanded here.
+    Non-DSL scalars and lists are returned unchanged.
+
+    Returns a dict mapping parameter names to their Python values.
+    Raises SchemaError on malformed entries.
+    """
+    result: dict[str, Any] = {}
+    for key, value in params_raw.items():
+        if not isinstance(key, str):
+            raise SchemaError(f"Parameter key must be a string, got {key!r}")
+        if isinstance(value, str):
+            # Only attempt DSL parsing for strings that look like function calls
+            stripped = value.strip()
+            if stripped and stripped[0].isalpha() and "(" in stripped:
+                try:
+                    result[key] = _parse_range_dsl(stripped)
+                except ValueError as exc:
+                    raise SchemaError(f"Parameter {key!r}: {exc}") from exc
+            else:
+                result[key] = value
+        else:
+            result[key] = value
+    return result
+
+
+def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
+    """
+    Build and return a validated ``util.Stimuli`` object from a raw YAML dict.
+
+    This is the authoritative entry-point for loading a datasheet.yaml.
+    It replaces the ad-hoc parsing in ``Stimuli._load_from_yaml``.
+
+    Raises
+    ------
+    SchemaError
+        On structural violations (wrong types, missing required keys, bad
+        range-DSL expressions).
+    """
+    from chipify.util import Stimuli, Test, Value  # local import to avoid circular dep
+
+    if not isinstance(data, dict):
+        raise SchemaError(f"Datasheet root must be a mapping, got {type(data).__name__}.")
+
+    stim = Stimuli()
+
+    # ── Parameters ────────────────────────────────────────────────────────────
+    params_raw: dict[str, Any] = {}
+    for key in ("parameters", "params", "sweep"):
+        if key in data and isinstance(data[key], dict):
+            params_raw = data[key]
+            break
+
+    stim.params = validate_parameters(params_raw)
+
+    # ── Tests / Testbenches ───────────────────────────────────────────────────
+    tests_raw: dict[str, Any] = {}
+    for key in ("tests", "testbenches", "measurements"):
+        if key in data and isinstance(data[key], dict):
+            tests_raw = data[key]
+            break
+
+    for tb_path, measurements in tests_raw.items():
+        if not isinstance(measurements, dict):
+            continue
+
+        transient_signals: list[str] = []
+        measure: dict[str, str] = {}
+        value_lst: list[Value] = []
+
+        for val_name, bounds in measurements.items():
+            if val_name == "transient_signals":
+                if isinstance(bounds, list):
+                    transient_signals = [str(s) for s in bounds]
+                continue
+
+            if val_name == "measure":
+                if isinstance(bounds, dict):
+                    measure = {k: str(v) for k, v in bounds.items()}
+                continue
+
+            # Measurement boundary spec
+            if not isinstance(bounds, dict):
+                bounds = {}
+            vmin = _parse_scalar_value(bounds.get("min", bounds.get("vmin")))
+            vmax = _parse_scalar_value(bounds.get("max", bounds.get("vmax")))
+            vtyp = _parse_scalar_value(bounds.get("typ", bounds.get("vtyp")))
+            value_lst.append(Value(name=str(val_name), vmin=vmin, vmax=vmax, vtyp=vtyp))
+
+        t = Test(tb_path, value_lst)
+        t.transient_signals = transient_signals
+        t.measure = measure
+        stim.addTest(t)
+
+    return stim

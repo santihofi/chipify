@@ -470,13 +470,15 @@ class PlotManager:
 
             # Apply transient equations to the waveform DataFrame.
             if equations:
+                from chipify.expression import default_evaluator
                 for eq in equations:
                     eq_name = eq.get("name", "").strip()
                     eq_expr = eq.get("expr", "").strip()
                     if eq_name and eq_expr:
                         try:
-                            safe_expr = PlotManager._quote_special_cols(df.columns, eq_expr)
-                            df = df.eval(f"{eq_name} = {safe_expr}", engine="python")
+                            df = default_evaluator.evaluate_dataframe_column(
+                                df, eq_name, eq_expr
+                            )
                         except Exception:
                             pass
 

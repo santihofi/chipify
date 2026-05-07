@@ -9,13 +9,14 @@ import os
 import json
 import logging
 import logging.handlers
+from typing import Any
 
 from chipify import settings
 
 CONFIG_PATH = os.path.join(settings.PROJECT_ROOT, "settings.json")
 LOG_PATH    = os.path.join(settings.OUT_DIR, "chipify.log")
 
-DEFAULTS: dict = {
+DEFAULTS: dict[str, Any] = {
     "num_cores": None,                # None → auto-detect via util.get_num_cores()
     "simulator_engine": "ngspice",    # ngspice|vacask
     "vacask_binary": "vacask",        # path or PATH-resolvable name
@@ -73,7 +74,7 @@ def setup_logging(level: int = logging.DEBUG) -> None:
 
 # ── Config persistence ────────────────────────────────────────────────────────
 
-def load_config() -> dict:
+def load_config() -> dict[str, Any]:
     """
     Return the merged config.
 
@@ -108,7 +109,7 @@ def load_config() -> dict:
     return merged
 
 
-def save_config(config: dict) -> None:
+def save_config(config: dict[str, Any]) -> None:
     """Persist *config* to settings.json, overwriting any previous file."""
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:

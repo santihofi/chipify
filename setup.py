@@ -14,11 +14,14 @@ setup(
         "pyyaml",
         "customtkinter",
         "matplotlib",
-        "scipy"
+        "scipy",
+        "asteval",
     ],
     extras_require={
         # pip install chipify[vacask]  → pulls in PyOPUS for VACASK engine support
         "vacask": ["PyOPUS>=0.11"],
+        # pip install chipify[fast]  → numexpr accelerates transient equation eval
+        "fast": ["numexpr"],
     },
     entry_points={
         "console_scripts": [

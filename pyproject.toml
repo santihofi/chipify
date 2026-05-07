@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "chipify"
+version = "0.2.0"
+description = "EDA framework for IC simulation analysis (Chipify engine + Silicrunch GUI)"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas",
+    "numpy",
+    "tqdm",
+    "jinja2",
+    "pyyaml",
+    "customtkinter",
+    "matplotlib",
+    "scipy",
+    "asteval",
+]
+
+[project.optional-dependencies]
+vacask = ["PyOPUS>=0.11"]
+fast   = ["numexpr"]
+dev    = ["pytest", "mypy", "pandas-stubs", "types-PyYAML"]
+
+# ── mypy strict config ────────────────────────────────────────────────────────
+[tool.mypy]
+strict = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+python_version = "3.11"
+exclude = ["tests/"]
+
+# Third-party packages without stubs
+[[tool.mypy.overrides]]
+module = [
+    "customtkinter.*",
+    "tqdm.*",
+    "jinja2.*",
+    "matplotlib.*",
+    "scipy.*",
+    "asteval.*",
+    "numexpr.*",
+    "pyopus.*",
+]
+ignore_missing_imports = true
+
+# Legacy Tk-heavy modules are whitelist-typed gradually
+[[tool.mypy.overrides]]
+module = [
+    "chipify.gui.main_window",
+    "chipify.gui.widgets.settings_window",
+    "chipify.gui_tk",
+    "chipify.multiplot_window",
+    "chipify.pdf_export",
+    "chipify.md_export",
+    "chipify.export_latex",
+    "chipify.debug_export",
+    "chipify.run_meta",
+    "chipify.project_config",
+    "chipify.plugin_loader",
+    "chipify.analyzer",
+    "chipify.plot_manager",
+    "chipify.simulator",
+    "chipify.cli",
+]
+ignore_errors = true
+
+# ── pytest config ─────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]

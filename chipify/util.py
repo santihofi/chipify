@@ -1,84 +1,96 @@
-import yaml
+"""
+util.py – Core domain objects and utilities for Chipify.
+
+Classes
+-------
+Stimuli  – Loads a datasheet.yaml and builds the test plan.
+Test     – A single testbench with its boundary specifications.
+Value    – One measurement boundary (name, min, typ, max).
+
+Functions
+---------
+get_num_cores()  – Returns a safe core count for multiprocessing.
+"""
+from __future__ import annotations
+
 import os
+from typing import Any
+import yaml
+
 
 class Stimuli:
-    def __init__(self, yaml_file=None):
-        self.params = {}
-        self.tests = []
+    """Parses a ``datasheet.yaml`` file into a test plan."""
+
+    def __init__(self, yaml_file: str | None = None) -> None:
+        self.params: dict[str, Any] = {}
+        self.tests: list[Test] = []
         if yaml_file:
             self._load_from_yaml(yaml_file)
-            
-    def _load_from_yaml(self, file_path):
-        with open(file_path, 'r') as file:
-            data = yaml.safe_load(file)
-            
-        # 1. Parameter 1:1 übernehmen
-        self.params = data.get('parameters', {})
-        
-        for key, value in self.params.items():
-            if isinstance(value, str) and value.startswith("range("):
-                # Extrahiert die Zahl aus den Klammern und konvertiert sie
-                num = int(value.replace("range(", "").replace(")", ""))
-                self.params[key] = list(range(num))
-        
-        # 2. Tests generieren
-        for tb_path, measurements in data.get('tests', {}).items():
-            transient_signals = []
-            measure: dict = {}
-            value_lst = []
-            for val_name, bounds in measurements.items():
-                if val_name == 'transient_signals':
-                    # bounds is a list of signal names, e.g. ["v(out)", "v(in)"]
-                    if isinstance(bounds, list):
-                        transient_signals = [str(s) for s in bounds]
-                    continue
-                if val_name == 'measure':
-                    # VACASK measure expressions: {value_name: "expression_string"}
-                    if isinstance(bounds, dict):
-                        measure = {k: str(v) for k, v in bounds.items()}
-                    continue
-                value_lst.append(
-                    Value(
-                        name=val_name,
-                        vmin=bounds.get('min'),
-                        vmax=bounds.get('max'),
-                        vtyp=bounds.get('typ')
-                    )
-                )
-            t = Test(tb_path, value_lst)
-            t.transient_signals = transient_signals
-            t.measure = measure
-            self.addTest(t)
 
-    def addTest(self, test):
+    def _load_from_yaml(self, file_path: str) -> None:
+        """
+        Load and validate the datasheet YAML.
+
+        Delegates to ``schema.validate_datasheet`` which:
+        - expands range-DSL strings (range(N), linspace(…), logspace(…))
+          via a strict AST whitelist — no eval() involved.
+        - validates structural correctness and reports precise error paths.
+        """
+        with open(file_path, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+
+        from chipify.schema import validate_datasheet, SchemaError
+        try:
+            validated = validate_datasheet(data or {})
+        except SchemaError as exc:
+            raise ValueError(f"Datasheet {file_path!r} schema error: {exc}") from exc
+
+        self.params = validated.params
+        self.tests = validated.tests
+
+    def addTest(self, test: "Test") -> None:
         self.tests.append(test)
 
+
 class Test:
-    def __init__(self, tb_path, value_lst):
-        self.tb_path = tb_path
-        self.value_lst = value_lst
-        self.template = ""
-        self.transient_signals: list = []  # populated by Stimuli._load_from_yaml
-        self.measure: dict = {}            # VACASK measure expressions {name: expr_str}
-        
+    """A testbench entry with its measurement specifications."""
+
+    def __init__(self, tb_path: str, value_lst: list["Value"]) -> None:
+        self.tb_path: str = tb_path
+        self.value_lst: list[Value] = value_lst
+        self.template: str = ""
+        self.transient_signals: list[str] = []
+        self.measure: dict[str, str] = {}
+
+
 class Value:
-    def __init__(self, name, vmin, vmax, vtyp):
+    """One measurement boundary specification."""
+
+    def __init__(
+        self,
+        name: str,
+        vmin: float | None,
+        vmax: float | None,
+        vtyp: float | None,
+    ) -> None:
         self.name = name
         self.vmin = vmin
         self.vmax = vmax
         self.vtyp = vtyp
-        
-    def isPass(self, val):
+
+    def isPass(self, val: float) -> bool:
         if self.vmin is not None and val < self.vmin:
             return False
         if self.vmax is not None and val > self.vmax:
             return False
         return True
-    
-def get_num_cores():
+
+
+def get_num_cores() -> int:
+    """Return the number of cores available for simulation workers."""
     try:
-        available_cores = len(os.sched_getaffinity(0))
+        available_cores = len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
     except AttributeError:
-        available_cores = os.cpu_count()
-        
+        available_cores = os.cpu_count() or 1
+
     return max(1, available_cores - 1)

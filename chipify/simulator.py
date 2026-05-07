@@ -414,32 +414,13 @@ def _read_raw_file(raw_file: str) -> "dict | None":
 def _eval_measure_expr(expr: str, results: dict):
     """Evaluate a measure expression string against a dict of signal numpy arrays.
 
-    Signal names are available as sanitised Python identifiers (v_out_, i_r1_, …)
-    and also in their SPICE-style form translated to identifier via _sanitise_key().
-    Helper functions (db, last, first, max, min, …) are provided in the namespace.
+    Delegates to SafeEvaluator.evaluate_spice_measure which:
+    - sanitises SPICE signal names (v(out) → v_out_) in both namespace and expr
+    - restricts evaluation to a numpy-enabled asteval sandbox (no import/exec/open)
+    - provides db(), last(), first() helpers
     """
-    import numpy as np
-
-    namespace: dict = {
-        "__builtins__": {},
-        "np": np,
-        "max": np.max, "min": np.min, "abs": np.abs,
-        "sum": np.sum, "mean": np.mean, "sqrt": np.sqrt,
-        "log10": np.log10, "log": np.log, "exp": np.exp,
-        "db":    lambda x: 20.0 * np.log10(np.abs(np.asarray(x, dtype=float))),
-        "last":  lambda x: float(np.asarray(x, dtype=float)[-1]),
-        "first": lambda x: float(np.asarray(x, dtype=float)[0]),
-    }
-    for raw_key, vec in results.items():
-        namespace[_sanitise_key(raw_key)] = np.asarray(vec, dtype=float)
-
-    # Translate SPICE-style names in the expression: v(out) → v_out_
-    expr_safe = re.sub(
-        r'([a-zA-Z_]\w*)\(([^)]+)\)',
-        lambda m: _sanitise_key(m.group(1) + "_" + m.group(2) + "_"),
-        expr,
-    )
-    return eval(expr_safe, namespace)  # noqa: S307
+    from chipify.expression import default_evaluator
+    return default_evaluator.evaluate_spice_measure(expr, results)
 
 
 def _write_transient_tab(results: dict, signals: list, out_path: str) -> None:
