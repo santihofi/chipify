@@ -20,10 +20,25 @@ from chipify import app_config as _app_config
 from chipify.gui.services import data_loader as _dl_mp
 from chipify.gui.services.throttled_redraw import ThrottledRedraw
 
-# ── Shared style (mirrors gui_tk.py constants) ────────────────────────────────
+# ── Shared style ──────────────────────────────────────────────────────────────
+# These remain as fallback defaults; live colours come from `_theme_colors()`
+# below so the dashboard tracks the global appearance theme.
 _BG       = "#000000"
 _PANEL    = "#1a1a1a"
 _ACCENT   = "#3484F0"
+
+
+def _theme_colors():
+    """Return the current (window_bg, panel, mpl_bg, mpl_fg) palette.
+
+    Reads from chipify.gui.theme so the multiplot window matches whatever
+    theme is currently active in the main app (night/dark/light).
+    """
+    try:
+        from chipify.gui import theme as _t
+        return _t.BACKGROUND_COLOR, _t.PANEL_COLOR, _t.MPL_BG_COLOR, _t.MPL_FG_COLOR
+    except Exception:
+        return _BG, _PANEL, _PANEL, "white"
 
 _ALL_MODES = [
     "Histogram",
@@ -45,8 +60,9 @@ class PlotCell(ctk.CTkFrame):
     """A single configurable plot panel inside the dashboard grid."""
 
     def __init__(self, parent_window, remove_cb, **kwargs):
+        _, _panel_now, _, _ = _theme_colors()
         super().__init__(parent_window.grid_frame,
-                         fg_color=_PANEL, corner_radius=8, **kwargs)
+                         fg_color=_panel_now, corner_radius=8, **kwargs)
         self._win      = parent_window   # back-reference to MultiPlotWindow
         self._remove_cb = remove_cb
         self._show_hist_opts = ctk.BooleanVar(value=False)
@@ -208,12 +224,16 @@ class PlotCell(ctk.CTkFrame):
             ).grid(row=0, column=4)
 
     def _build_canvas(self):
-        plt.style.use("dark_background")
+        _, _, mpl_bg, _ = _theme_colors()
+        if mpl_bg == "white":
+            plt.style.use("default")
+        else:
+            plt.style.use("dark_background")
         self._fig = plt.figure(figsize=(5, 3.5))
-        self._fig.patch.set_facecolor(_PANEL)
+        self._fig.patch.set_facecolor(mpl_bg)
         # ax created fresh each redraw via fig.clf()
         self._ax  = self._fig.add_subplot(111)
-        self._ax.set_facecolor(_PANEL)
+        self._ax.set_facecolor(mpl_bg)
         self._mpl_canvas = FigureCanvasTkAgg(self._fig, master=self)
         self._mpl_canvas.get_tk_widget().grid(
             row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
@@ -228,6 +248,23 @@ class PlotCell(ctk.CTkFrame):
             arrowprops=dict(arrowstyle="-|>", color=_ACCENT),
         )
         self._scatter_annot.set_visible(False)
+
+    def apply_theme(self):
+        """Re-colour cell frame + matplotlib figure to match the current theme."""
+        _, panel, mpl_bg, _ = _theme_colors()
+        try:
+            self.configure(fg_color=panel)
+        except Exception:
+            pass
+        try:
+            self._fig.patch.set_facecolor(mpl_bg)
+            for _ax in self._fig.get_axes():
+                _ax.set_facecolor(mpl_bg)
+            self._mpl_canvas.get_tk_widget().configure(background=mpl_bg)
+        except Exception:
+            pass
+        # Re-render so axis labels / spines pick up the dark/light style.
+        self._request_redraw()
 
     def _create_scatter_annot(self):
         """Create tooltip annotation on the current active axis."""
@@ -312,7 +349,7 @@ class PlotCell(ctk.CTkFrame):
             status,
         ]
         par = getattr(self._win, "_parent", None)
-        pst = getattr(par, "state", None) if par is not None else None
+        pst = getattr(par, "app_state", None) if par is not None else None
         stim = pst.current_stim if pst is not None else getattr(par, "current_stim", None)
         if stim is not None:
             for p in stim.params.keys():
@@ -407,10 +444,13 @@ class PlotCell(ctk.CTkFrame):
 
         mode = self._mode.get()
 
+        _, _, mpl_bg, _ = _theme_colors()
+
         # Ghost-safe axis rebuild (see context.md §3 "Matplotlib Ghosting")
         self._fig.clf()
+        self._fig.patch.set_facecolor(mpl_bg)
         self._ax = self._fig.add_subplot(111)
-        self._ax.set_facecolor(_PANEL)
+        self._ax.set_facecolor(mpl_bg)
         self._sc_plot = None
         self._scatter_df = None
         self._scatter_annot = None
@@ -461,7 +501,7 @@ class PlotCell(ctk.CTkFrame):
                 run_ids: list = []
                 run_mode = self._tran_run_mode.get()
                 par = self._win._parent
-                pst = getattr(par, "state", None)
+                pst = getattr(par, "app_state", None)
                 parent_df = pst.active_df if pst is not None else getattr(par, "current_df", None)
                 if parent_df is not None and "run_id" in parent_df.columns:
                     if run_mode == "All Valid":
@@ -494,7 +534,7 @@ class PlotCell(ctk.CTkFrame):
                     self._fig, self._mpl_canvas,
                     tran_dir, run_ids, signals,
                     pass_map=pass_map,
-                    bg_color=_PANEL,
+                    bg_color=mpl_bg,
                     equations=equations,
                 )
                 return   # draw_transient_plot already calls canvas.draw()
@@ -510,7 +550,7 @@ class PlotCell(ctk.CTkFrame):
                 x_col=self._x_col.get(),
                 y_col=self._y_col.get(),
                 target=self._target.get(),
-                bg_color=_PANEL,
+                bg_color=mpl_bg,
             )
             if mode == "Scatter Plot" and self._sc_plot is not None:
                 self._create_scatter_annot()
@@ -524,8 +564,9 @@ class PlotCell(ctk.CTkFrame):
             self._mpl_canvas.draw_idle()
         except Exception as exc:
             self._fig.clf()
+            self._fig.patch.set_facecolor(mpl_bg)
             ax = self._fig.add_subplot(111)
-            ax.set_facecolor(_PANEL)
+            ax.set_facecolor(mpl_bg)
             ax.text(0.5, 0.5, f"Error:\n{exc}",
                     ha="center", va="center", color="#e74c3c",
                     fontsize=8, wrap=True, transform=ax.transAxes)
@@ -581,7 +622,8 @@ class MultiPlotWindow(ctk.CTkToplevel):
     _DEFAULT_COLS = 2
 
     def __init__(self, parent, **kwargs):
-        super().__init__(parent, fg_color=_BG, **kwargs)
+        bg, _, _, _ = _theme_colors()
+        super().__init__(parent, fg_color=bg, **kwargs)
         self.title("Multi-Plot Dashboard")
         self.geometry("1200x820")
         self.minsize(640, 480)
@@ -598,7 +640,7 @@ class MultiPlotWindow(ctk.CTkToplevel):
         self._live_throttle = ThrottledRedraw(
             self, self.refresh_all, _app_config.get_live_throttle_ms()
         )
-        st = getattr(parent, "state", None)
+        st = getattr(parent, "app_state", None)
         if st is not None:
             try:
                 st.on_data_chunk_added.connect(self._on_live_chunk_mp)
@@ -622,7 +664,9 @@ class MultiPlotWindow(ctk.CTkToplevel):
     # ── Layout ───────────────────────────────────────────────────────────────
 
     def _build_toolbar(self):
-        tb = ctk.CTkFrame(self, fg_color=_PANEL, corner_radius=0, height=48)
+        _, panel, _, _ = _theme_colors()
+        self._toolbar = ctk.CTkFrame(self, fg_color=panel, corner_radius=0, height=48)
+        tb = self._toolbar
         tb.pack(side="top", fill="x")
         tb.pack_propagate(False)
 
@@ -653,8 +697,9 @@ class MultiPlotWindow(ctk.CTkToplevel):
         ).pack(side="left")
 
     def _build_body(self):
+        bg, _, _, _ = _theme_colors()
         self._scroll = ctk.CTkScrollableFrame(
-            self, fg_color=_BG, corner_radius=0)
+            self, fg_color=bg, corner_radius=0)
         self._scroll.pack(side="top", fill="both", expand=True)
 
         self.grid_frame = self._scroll
@@ -714,7 +759,7 @@ class MultiPlotWindow(ctk.CTkToplevel):
         except Exception:
             pass
         try:
-            st = getattr(self._parent, "state", None)
+            st = getattr(self._parent, "app_state", None)
             if st is not None:
                 st.on_data_chunk_added.disconnect(self._on_live_chunk_mp)
                 st.data_changed.disconnect(self._on_data_changed_mp)
@@ -768,6 +813,27 @@ class MultiPlotWindow(ctk.CTkToplevel):
             except Exception:
                 pass
 
+    def change_theme(self, _mode: str | None = None) -> None:
+        """Re-colour the dashboard, toolbar, and every plot cell to match the active theme."""
+        bg, panel, _, _ = _theme_colors()
+        try:
+            self.configure(fg_color=bg)
+        except Exception:
+            pass
+        try:
+            self._toolbar.configure(fg_color=panel)
+        except Exception:
+            pass
+        try:
+            self._scroll.configure(fg_color=bg)
+        except Exception:
+            pass
+        for cell in self._cells:
+            try:
+                cell.apply_theme()
+            except Exception:
+                pass
+
     def _get_data_snapshot(self):
         """
         Return (valid_df, stim, sweep_params, derived_cols, tran_dir) from parent,
@@ -775,7 +841,7 @@ class MultiPlotWindow(ctk.CTkToplevel):
         Always filters out error rows per the project gotcha.
         """
         p = self._parent
-        state = getattr(p, "state", None)
+        state = getattr(p, "app_state", None)
         df_src = state.active_df if state is not None else getattr(p, "current_df", None)
         if df_src is None:
             return None

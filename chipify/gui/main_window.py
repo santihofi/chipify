@@ -89,7 +89,10 @@ class SimifyGUI(ctk.CTk):
         self._tran_hover_line = None          # currently highlighted line
 
         # ── Controller instances ──────────────────────────────────────────────
-        self.state = AppState()
+        # NOTE: do not name this `self.state` — Tk Toplevels expose a built-in
+        # ``state()`` method (used by customtkinter's scaling tracker), and an
+        # instance attribute would shadow it and crash with TypeError.
+        self.app_state = AppState()
         self._sim_ctrl = SimulationController(self)
         self._hist_ctrl = HistoryController(self)
 
@@ -216,7 +219,7 @@ class SimifyGUI(ctk.CTk):
 
     def _wire_live_plotting_hooks(self) -> None:
         """Subscribe AppState signals and build throttled redraw schedulers."""
-        self.state.data_changed.connect(self._on_state_data_changed)
+        self.app_state.data_changed.connect(self._on_state_data_changed)
 
         _ms = app_config.get_live_throttle_ms()
         self._throttle_meas = ThrottledRedraw(self, self._throttled_measurements, _ms)
@@ -231,7 +234,7 @@ class SimifyGUI(ctk.CTk):
             self._throttle_adv,
             self._throttle_tran,
         ]
-        self.state.on_data_chunk_added.connect(self._on_live_chunk)
+        self.app_state.on_data_chunk_added.connect(self._on_live_chunk)
 
         self._live_throttle_tab_map = {
             "Measurements": self._throttle_meas,
@@ -242,23 +245,23 @@ class SimifyGUI(ctk.CTk):
         }
 
     def _throttled_measurements(self) -> None:
-        stim = self.state.current_stim or self.current_stim
+        stim = self.app_state.current_stim or self.current_stim
         if stim is not None:
             self._refresh_measurements_panel(stim)
 
     def _throttled_worst_case(self) -> None:
-        stim = self.state.current_stim or self.current_stim
+        stim = self.app_state.current_stim or self.current_stim
         if stim is not None:
             self._refresh_worst_case_panel(stim)
 
     def _on_state_data_changed(self, stim=None, switch_tab=False, **kwargs) -> None:
-        stim = stim or self.state.current_stim or self.current_stim
+        stim = stim or self.app_state.current_stim or self.current_stim
         if stim is None:
             return
-        adf = self.state.active_df
+        adf = self.app_state.active_df
         if adf is None:
             return
-        self.current_df = self.state.current_df
+        self.current_df = self.app_state.current_df
         self.current_stim = stim
         self._update_status_badges(adf)
         self._refresh_visual_tabs(stim, switch_tab=switch_tab)
@@ -296,7 +299,7 @@ class SimifyGUI(ctk.CTk):
 
     def _measurement_snapshot(self, stim, *, update_tree: bool):
         """Compute measurement columns / failures; optionally rebuild the tree."""
-        adf = self.state.active_df
+        adf = self.app_state.active_df
         if adf is None:
             return None
 
@@ -892,11 +895,11 @@ class SimifyGUI(ctk.CTk):
 
     def _refresh_plot_dropdowns_with_derived(self):
         """Add derived columns to histogram and scatter dropdowns."""
-        if not self._derived_cols or self.state.active_df is None:
+        if not self._derived_cols or self.app_state.active_df is None:
             return
         valid_derived = [
             c for c in self._derived_cols
-            if c in self.state.active_df.columns
+            if c in self.app_state.active_df.columns
         ]
         if not valid_derived:
             return
@@ -926,7 +929,7 @@ class SimifyGUI(ctk.CTk):
         except Exception:
             pass
         try:
-            if self.state.simulation_active and app_config.is_live_plotting_enabled():
+            if self.app_state.simulation_active and app_config.is_live_plotting_enabled():
                 active_tab = self.tabs.get()
                 th = self._live_throttle_tab_map.get(active_tab)
                 if th is not None:
@@ -1459,7 +1462,7 @@ class SimifyGUI(ctk.CTk):
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
     def action_export_latex(self):
-        adf = self.state.active_df
+        adf = self.app_state.active_df
         if adf is None or self.plot_param_var.get() == "-":
             return
         param = self.plot_param_var.get()
@@ -1487,7 +1490,7 @@ class SimifyGUI(ctk.CTk):
         self.update_plot()
 
     def update_plot(self, *args):
-        adf = self.state.active_df
+        adf = self.app_state.active_df
         if adf is None or self.plot_param_var.get() == "-":
             return
         param = self.plot_param_var.get()
@@ -1667,7 +1670,7 @@ class SimifyGUI(ctk.CTk):
                                 meas_names.append(v.name)
 
                 derived_names = []
-                adf = self.state.active_df
+                adf = self.app_state.active_df
                 if adf is not None:
                     derived_names = [c for c in self._derived_cols if c in adf.columns]
 
@@ -1693,7 +1696,7 @@ class SimifyGUI(ctk.CTk):
         self.update_adv_plots()
 
     def update_adv_plots(self, *args):
-        adf = self.state.active_df
+        adf = self.app_state.active_df
         if adf is None:
             return
         valid_df = adf[adf["sim_error"] == "None"]
@@ -1757,18 +1760,18 @@ class SimifyGUI(ctk.CTk):
         body.grid_rowconfigure(0, weight=1)
 
         # Signal selector panel
-        sig_panel = ctk.CTkFrame(body, fg_color=panel_color, width=160, corner_radius=6)
-        sig_panel.grid(row=0, column=0, sticky="ns", padx=(0, 8))
-        sig_panel.grid_propagate(False)
-        sig_panel.grid_rowconfigure(1, weight=1)
+        self.sig_panel = ctk.CTkFrame(body, fg_color=panel_color, width=160, corner_radius=6)
+        self.sig_panel.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        self.sig_panel.grid_propagate(False)
+        self.sig_panel.grid_rowconfigure(1, weight=1)
 
         ctk.CTkLabel(
-            sig_panel, text="Signals",
+            self.sig_panel, text="Signals",
             font=ctk.CTkFont(size=12, weight="bold"), text_color="#3484F0"
         ).grid(row=0, column=0, padx=8, pady=(8, 4), sticky="w")
 
         # Native tk.Listbox – supports extended multi-select without extra deps
-        list_frame = ctk.CTkFrame(sig_panel, fg_color="transparent")
+        list_frame = ctk.CTkFrame(self.sig_panel, fg_color="transparent")
         list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
         list_frame.grid_rowconfigure(0, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
@@ -1790,7 +1793,7 @@ class SimifyGUI(ctk.CTk):
         self._tran_sig_lb.configure(yscrollcommand=lb_scroll.set)
 
         ctk.CTkButton(
-            sig_panel, text="Select All", height=26,
+            self.sig_panel, text="Select All", height=26,
             command=lambda: self._tran_sig_lb.select_set(0, tk.END),
             fg_color="transparent", border_width=1,
             text_color=("gray10", "#DCE4EE"),
@@ -1824,8 +1827,8 @@ class SimifyGUI(ctk.CTk):
         3. Newest out/tran_data/*/  — fallback glob
         """
         # 1. In-memory attr (set by run_sim on a fresh result)
-        if self.state.active_df is not None:
-            td = self.state.active_df.attrs.get("tran_dir", "")
+        if self.app_state.active_df is not None:
+            td = self.app_state.active_df.attrs.get("tran_dir", "")
             if td and os.path.isdir(td):
                 return td
 
@@ -1886,7 +1889,7 @@ class SimifyGUI(ctk.CTk):
 
     def update_transient_plot(self, *_args):
         """Build run_ids list, resolve signals, delegate to PlotManager."""
-        if self.state.active_df is None:
+        if self.app_state.active_df is None:
             return
 
         tran_dir = self._resolve_tran_dir()
@@ -1912,7 +1915,7 @@ class SimifyGUI(ctk.CTk):
             return
 
         # Derive run_id pool from selection mode
-        df = self.state.active_df
+        df = self.app_state.active_df
         if "run_id" not in df.columns:
             return
         mode = self._tran_mode_var.get()
@@ -2031,7 +2034,7 @@ class SimifyGUI(ctk.CTk):
 
         # Build tooltip text
         lines = [f"Run ID: {hit_run_id}", f"Signal: {hit_sig}"]
-        df = self.state.active_df
+        df = self.app_state.active_df
         if df is not None and "run_id" in df.columns:
             try:
                 row = df[df['run_id'].astype(str).str.zfill(6) == hit_run_id]
@@ -2067,40 +2070,52 @@ class SimifyGUI(ctk.CTk):
         _apply_dark_style(self.tree)
 
     def change_theme(self, mode: str) -> None:
+        global background_color, panel_color
         import chipify.gui.theme as _theme_mod
         _theme_mod.apply_theme(mode)
-        t = _theme_mod.THEMES.get(mode, _theme_mod.THEMES["night"])
 
-        # ── Main window background ────────────────────────────────────────────
-        if t["bg"] is not None:
-            self.configure(fg_color=t["bg"])
-        else:
-            try:
-                self.configure(fg_color=ctk.ThemeManager.theme["CTk"]["fg_color"])
-            except (KeyError, AttributeError):
-                self.configure(fg_color=("gray92", "gray14"))
+        bg_fg = _theme_mod.BACKGROUND_COLOR
+        panel_fg = _theme_mod.PANEL_COLOR
+        mpl_bg = _theme_mod.MPL_BG_COLOR
+        mpl_fg = _theme_mod.MPL_FG_COLOR
 
-        # ── Left panel + tab view ─────────────────────────────────────────────
-        if t["panel"] is not None:
-            panel_fg = t["panel"]
-        else:
-            try:
-                panel_fg = ctk.ThemeManager.theme["CTkFrame"]["fg_color"]
-            except (KeyError, AttributeError):
-                panel_fg = ("gray86", "gray17")
+        # ── Main window + persistent panel surfaces ──────────────────────────
+        self.configure(fg_color=bg_fg)
         self.left_frame.configure(fg_color=panel_fg)
         self.tabs.configure(fg_color=panel_fg)
         for _tf in [self.tab_editor, self.tab_table, self.tab_worst,
                     self.tab_hist, self.tab_adv, self.tab_eq, self.tab_tran]:
             _tf.configure(fg_color=panel_fg)
 
+        for _card in (
+            getattr(self, "_scalar_eq_card", None),
+            getattr(self, "_tran_eq_card", None),
+            getattr(self, "sig_panel", None),
+        ):
+            if _card is not None:
+                try:
+                    _card.configure(fg_color=panel_fg)
+                except Exception:
+                    pass
+
+        # Refresh module globals so dynamically-rebuilt UI (e.g. params_frame
+        # in build_editor_ui) picks up the new colours on its next rebuild.
+        background_color = bg_fg
+        panel_color = panel_fg
+
+        # Rebuild the YAML editor pane so its panel-coloured frames adopt the
+        # new theme. sync_ui_to_state() flushes in-progress edits to the model
+        # so the rebuild does not drop them.
+        if getattr(self, "current_yaml_path", None) and self.param_vars:
+            try:
+                self.sync_ui_to_state()
+                self.build_editor_ui()
+            except Exception:
+                log.exception("Failed to rebuild editor UI on theme change.")
+
         # ── Matplotlib figures ────────────────────────────────────────────────
-        if mode == "light":
-            plt.style.use("default")
-            mpl_bg, mpl_fg = "white", "#2b2b2b"
-        else:
-            plt.style.use("dark_background")
-            mpl_bg, mpl_fg = _theme_mod.PANEL_COLOR, "white"
+        # Update style first so any subsequent redraw (incl. multiplot) picks it up.
+        plt.style.use("default" if mode == "light" else "dark_background")
 
         for fig, canvas in [
             (self.fig, self.canvas),
@@ -2117,6 +2132,14 @@ class SimifyGUI(ctk.CTk):
                     spine.set_edgecolor(mpl_fg)
             canvas.get_tk_widget().configure(background=mpl_bg)
             canvas.draw()
+
+        # Propagate to the Multi-Plot Dashboard if it is currently open.
+        mp = getattr(self, "multiplot_window", None)
+        if mp is not None:
+            try:
+                mp.change_theme(mode)
+            except Exception:
+                log.exception("Failed to propagate theme to multiplot window.")
 
         _apply_treeview_style(self.tree, mode)
 
@@ -2142,19 +2165,19 @@ class SimifyGUI(ctk.CTk):
         df = _dl.normalise_sim_error(df)
         df = _dl.compute_global_pass(df)
 
-        self.state.partial_df = None
-        self.state.simulation_active = False
+        self.app_state.partial_df = None
+        self.app_state.simulation_active = False
 
         self.current_df = df
         self.current_stim = stim
-        self.state.current_df = df
-        self.state.current_stim = stim
+        self.app_state.current_df = df
+        self.app_state.current_stim = stim
 
         # Apply saved custom equations so derived columns are available everywhere
         self._derived_cols = self._apply_custom_equations()
-        self.state.current_df = self.current_df
+        self.app_state.current_df = self.current_df
 
-        self.state.data_changed.emit(
+        self.app_state.data_changed.emit(
             df=self.current_df,
             stim=stim,
             switch_tab=switch_tab,

@@ -77,9 +77,9 @@ class SimulationController:
                 log.exception("Bridge stop failed during finalize.")
             self._bridge = None
         try:
-            if app.state.simulation_active:
-                app.state.simulation_active = False
-                app.state.clear_partial()
+            if app.app_state.simulation_active:
+                app.app_state.simulation_active = False
+                app.app_state.clear_partial()
                 for t in getattr(app, "_all_throttles", []):
                     t.cancel_pending()
                 app.history_dropdown.configure(state="normal")
@@ -104,8 +104,8 @@ class SimulationController:
             app.history_dropdown.configure(state="normal")
         except Exception:
             pass
-        app.state.current_stim = stim
-        app.state.promote_partial(final_df=df, emit=False)
+        app.app_state.current_stim = stim
+        app.app_state.promote_partial(final_df=df, emit=False)
         app.update_ui_results(df, stim, True)
         app.lbl_status.configure(
             text=f"Status: Completed in {elapsed:.1f}s",
@@ -147,16 +147,16 @@ class SimulationController:
         app.lbl_wc_empty = ctk.CTkLabel(app.wc_scroll, text="Simulating…", text_color="gray")
         app.lbl_wc_empty.pack(pady=50)
 
-        app.state.clear_partial()
-        app.state.simulation_active = True
+        app.app_state.clear_partial()
+        app.app_state.simulation_active = True
         try:
-            app.state.current_stim = util.Stimuli(yaml_path)
+            app.app_state.current_stim = util.Stimuli(yaml_path)
         except Exception as exc:
             log.warning("Could not preload Stimuli for live state: %s", exc)
 
         self._live_plot_enabled_this_run = app_config.is_live_plotting_enabled()
         if self._live_plot_enabled_this_run:
-            self._bridge = MainThreadBridge(app, app.state)
+            self._bridge = MainThreadBridge(app, app.app_state)
             self._bridge.start_polling()
         else:
             self._bridge = None
