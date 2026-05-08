@@ -17,6 +17,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from chipify.plot_manager import PlotManager
 from chipify import app_config as _app_config
+from chipify.gui.services import data_loader as _dl_mp
 from chipify.gui.services.throttled_redraw import ThrottledRedraw
 
 # ── Shared style (mirrors gui_tk.py constants) ────────────────────────────────
@@ -310,8 +311,9 @@ class PlotCell(ctk.CTkFrame):
             "-" * 15,
             status,
         ]
-        stim = getattr(self._win, "_parent", None)
-        stim = getattr(stim, "current_stim", None)
+        par = getattr(self._win, "_parent", None)
+        pst = getattr(par, "state", None) if par is not None else None
+        stim = pst.current_stim if pst is not None else getattr(par, "current_stim", None)
         if stim is not None:
             for p in stim.params.keys():
                 try:
@@ -458,7 +460,9 @@ class PlotCell(ctk.CTkFrame):
                 # Build run_id list based on run-filter mode.
                 run_ids: list = []
                 run_mode = self._tran_run_mode.get()
-                parent_df = getattr(self._win._parent, "current_df", None)
+                par = self._win._parent
+                pst = getattr(par, "state", None)
+                parent_df = pst.active_df if pst is not None else getattr(par, "current_df", None)
                 if parent_df is not None and "run_id" in parent_df.columns:
                     if run_mode == "All Valid":
                         run_ids = list(
@@ -709,6 +713,13 @@ class MultiPlotWindow(ctk.CTkToplevel):
             app_config.save_config(cfg)
         except Exception:
             pass
+        try:
+            st = getattr(self._parent, "state", None)
+            if st is not None:
+                st.on_data_chunk_added.disconnect(self._on_live_chunk_mp)
+                st.data_changed.disconnect(self._on_data_changed_mp)
+        except Exception:
+            pass
         # Clear parent's reference so the button can re-open later
         try:
             self._parent.multiplot_window = None
@@ -769,11 +780,24 @@ class MultiPlotWindow(ctk.CTkToplevel):
         if df_src is None:
             return None
         df = df_src
+
+        stim = None
+        if state is not None:
+            stim = state.current_stim
+        if stim is None:
+            stim = getattr(p, "current_stim", None)
+
         valid_df = df[df["sim_error"] == "None"].copy() if "sim_error" in df.columns else df.copy()
-        stim         = getattr(p, "current_stim",  None)
-        sweep_params = getattr(p, "sweep_params",  [])
+
+        sweep_params = getattr(p, "sweep_params", [])
+        try:
+            if stim is not None and not valid_df.empty:
+                sweep_params = _dl_mp.compute_plot_cols(valid_df, stim).sweep_params
+        except Exception:
+            pass
+
         derived_cols = getattr(p, "_derived_cols", [])
-        tran_dir     = p._resolve_tran_dir() if callable(getattr(p, "_resolve_tran_dir", None)) else ""
+        tran_dir = p._resolve_tran_dir() if callable(getattr(p, "_resolve_tran_dir", None)) else ""
         return valid_df, stim, sweep_params, derived_cols, tran_dir
 
     def _get_compare_run_options(self):
