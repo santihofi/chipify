@@ -1,7 +1,7 @@
-# Project Briefing: Chipify (Simulation Engine) & Silicrunch (GUI)
+# Project Briefing: Chipify
 
 ## 1. Project Overview
-*   **Project Name:** `Chipify` (Core CLI/Engine) & `Silicrunch` (CustomTkinter Desktop GUI).
+*   **Project Name:** `Chipify` (Core CLI/Engine & CustomTkinter Desktop GUI).
 *   **Purpose:** A high-performance EDA (Electronic Design Automation) tool for mismatch simulations, parameter sweeping, and yield analysis wrapping around Xschem and Ngspice.
 *   **Core Tech Stack:** Python 3.11+, `customtkinter` (GUI), `pandas` (Data Crunching), `matplotlib` & `scipy` (Visualization & Stats), `multiprocessing` (Parallel execution), `jinja2` (Netlist templating), `asteval` (sandboxed expression evaluation).
 

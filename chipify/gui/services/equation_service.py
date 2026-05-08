@@ -26,6 +26,9 @@ def apply_scalar_equations(
     """
     Apply a list of scalar (per-row) equations to *df*.
 
+    Equations from ``ExpressionPlugin`` subclasses in the plugin directory are
+    appended automatically after the explicitly supplied *equations* list.
+
     Parameters
     ----------
     df:
@@ -42,10 +45,20 @@ def apply_scalar_equations(
         ``derived_names`` – names of successfully added columns.
         ``log_lines``     – human-readable per-equation status lines.
     """
+    from chipify.plugin_loader import get_expression_plugins
+    plugin_equations: list[dict[str, str]] = []
+    for cls in get_expression_plugins():
+        name = getattr(cls, "name", "").strip()
+        expr = getattr(cls, "expression", "").strip()
+        if name and expr:
+            plugin_equations.append({"name": name, "expr": expr})
+
+    all_equations = list(equations) + plugin_equations
+
     derived: list[str] = []
     log_lines: list[str] = []
 
-    for eq in equations:
+    for eq in all_equations:
         name = eq.get("name", "").strip()
         expr = eq.get("expr", "").strip()
         if not name or not expr:

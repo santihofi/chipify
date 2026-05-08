@@ -21,7 +21,7 @@ class MainThreadBridge:
     def __init__(self, root_widget, state, poll_interval_ms: int = 100):
         self._root = root_widget
         self._state = state
-        self._queue: queue.Queue = queue.Queue()
+        self._queue: queue.Queue = queue.Queue(maxsize=256)
         self._poll_ms = poll_interval_ms
         self._polling = False
         self._after_id = None
@@ -31,8 +31,11 @@ class MainThreadBridge:
     # ── Called from ANY thread (thread-safe) ──────────────────────────────
 
     def enqueue_chunk(self, chunk_df) -> None:
-        """Put a partial DataFrame onto the queue. Thread-safe."""
-        self._queue.put(chunk_df)
+        """Put a partial DataFrame onto the queue. Thread-safe. Drops chunk if queue is full."""
+        try:
+            self._queue.put_nowait(chunk_df)
+        except queue.Full:
+            log.warning("Bridge queue full (maxsize=%d); live-plot chunk dropped.", self._queue.maxsize)
 
     # ── Called from main thread only ──────────────────────────────────────
 

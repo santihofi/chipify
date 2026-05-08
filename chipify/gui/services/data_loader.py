@@ -50,10 +50,12 @@ def normalise_sim_error(df: pd.DataFrame) -> pd.DataFrame:
     if "sim_error" not in df.columns:
         df = df.copy()
         df["sim_error"] = "None"
-    else:
-        df = df.copy()
-        df["sim_error"] = df["sim_error"].fillna("None").astype(str)
-        df.loc[df["sim_error"].str.lower() == "nan", "sim_error"] = "None"
+        return df
+    if not df["sim_error"].isna().any() and (df["sim_error"].str.lower() != "nan").all():
+        return df
+    df = df.copy()
+    df["sim_error"] = df["sim_error"].fillna("None").astype(str)
+    df.loc[df["sim_error"].str.lower() == "nan", "sim_error"] = "None"
     return df
 
 

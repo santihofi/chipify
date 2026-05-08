@@ -57,7 +57,7 @@ class SimulationController:
         self._bridge: MainThreadBridge | None = None
         self._live_plot_enabled_this_run: bool = False
         self._progress_queue: queue.Queue = queue.Queue()
-        self._sim_running: bool = False
+        self._sim_running: threading.Event = threading.Event()
 
     def _chunk_callback(self, chunk_df: object) -> None:
         """Runs on simulation thread; forwards chunks to the UI bridge when live plotting is on."""
@@ -166,7 +166,7 @@ class SimulationController:
         except Exception:
             pass
 
-        self._sim_running = True
+        self._sim_running.set()
         app.after(0, self._pump_progress_queue)
 
         threading.Thread(target=self.run_sim_thread, args=(yaml_path,), daemon=True).start()
@@ -186,7 +186,7 @@ class SimulationController:
                 self._set_progress_ui(cur, tot)
             except Exception:
                 log.exception("Progress UI update failed.")
-        if self._sim_running:
+        if self._sim_running.is_set():
             app.after(50, self._pump_progress_queue)
 
     def stop_simulation(self) -> None:
@@ -319,7 +319,7 @@ class SimulationController:
 
         finally:
             log.info("run_sim_thread finished. Re-enabling UI.")
-            self._sim_running = False
+            self._sim_running.clear()
 
             def _finish_sim_ui(ctrl: SimulationController = self) -> None:
                 latest = None

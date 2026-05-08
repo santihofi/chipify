@@ -32,6 +32,8 @@ DEFAULTS: dict[str, Any] = {
 }
 
 _logging_ready = False
+_config_cache: dict[str, Any] | None = None
+_config_mtime: float | None = None
 
 
 def setup_logging(level: int = logging.DEBUG) -> None:
@@ -79,11 +81,22 @@ def setup_logging(level: int = logging.DEBUG) -> None:
 
 def load_config() -> dict[str, Any]:
     """
-    Return the merged config.
+    Return the merged config (cached; invalidated when settings.json mtime changes).
 
     Priority (highest wins): settings.json  >  project.yaml defaults  >  DEFAULTS.
     """
-    # Start from DEFAULTS, overlay project.yaml defaults, then user settings.json
+    global _config_cache, _config_mtime
+
+    current_mtime: float | None = None
+    if os.path.exists(CONFIG_PATH):
+        try:
+            current_mtime = os.path.getmtime(CONFIG_PATH)
+        except OSError:
+            pass
+
+    if _config_cache is not None and current_mtime == _config_mtime:
+        return _config_cache.copy()
+
     merged = DEFAULTS.copy()
 
     try:
@@ -99,24 +112,29 @@ def load_config() -> dict[str, Any]:
     except Exception:
         pass
 
-    if os.path.exists(CONFIG_PATH):
+    if current_mtime is not None:
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
             merged.update(data)
-            return merged
         except Exception as exc:
             logging.getLogger("chipify.config").warning(
                 "Could not read %s: %s – using defaults.", CONFIG_PATH, exc
             )
-    return merged
+
+    _config_cache = merged
+    _config_mtime = current_mtime
+    return merged.copy()
 
 
 def save_config(config: dict[str, Any]) -> None:
     """Persist *config* to settings.json, overwriting any previous file."""
+    global _config_cache, _config_mtime
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
+        _config_cache = None
+        _config_mtime = None
     except Exception as exc:
         logging.getLogger("chipify.config").error(
             "Could not write %s: %s", CONFIG_PATH, exc

@@ -30,6 +30,19 @@ log = logging.getLogger("chipify.simulator")
 ABORT_FLAG_PATH = os.path.join(settings.FAST_TMP, "abort.flag")
 
 
+# ── Path helpers ──────────────────────────────────────────────────────────────
+
+def _safe_tb_path(tb_name: str) -> str:
+    """Return the absolute testbench .sch path, raising ValueError on traversal attempts."""
+    base = os.path.normpath(settings.TB_DIR)
+    full = os.path.normpath(os.path.join(settings.TB_DIR, tb_name + ".sch"))
+    if not full.startswith(base + os.sep) and full != base:
+        raise ValueError(
+            f"Testbench path {tb_name!r} escapes TB_DIR ({settings.TB_DIR!r})."
+        )
+    return full
+
+
 # ── Abort helpers ─────────────────────────────────────────────────────────────
 
 def _is_aborted() -> bool:
@@ -103,10 +116,15 @@ def run_xschem(xschem_file: str) -> None:
     except InterruptedError:
         raise
     except Exception as exc:
-        if process is not None and process.poll() is None:
-            process.kill()
         log.exception("Unexpected error in run_xschem: %s", exc)
         sys.exit(1)
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                pass
 
 
 class BaseSimulator(ABC):
@@ -136,7 +154,7 @@ class NgspiceSimulator(BaseSimulator):
     name = "ngspice"
 
     def generate_test_template(self, test) -> str:
-        tb_path = os.path.join(settings.TB_DIR, test.tb_path + ".sch")
+        tb_path = _safe_tb_path(test.tb_path)
         run_xschem(tb_path)
 
         spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
@@ -280,9 +298,14 @@ def _run_xschem_vacask(xschem_file: str) -> None:
     except InterruptedError:
         raise
     except Exception as exc:
-        if process is not None and process.poll() is None:
-            process.kill()
         raise RuntimeError(f"Xschem VACASK netlist generation failed: {exc}") from exc
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                pass
 
 
 def _run_ng2vc(spice_file: str, sim_file: str) -> None:
@@ -528,7 +551,7 @@ class VacaskSimulator(BaseSimulator):
     def generate_test_template(self, test) -> str:
         cfg = app_config.load_config()
         source = cfg.get("vacask_netlist_source", "xschem")
-        tb_path = os.path.join(settings.TB_DIR, test.tb_path + ".sch")
+        tb_path = _safe_tb_path(test.tb_path)
 
         if source == "ng2vc":
             # Generate ngspice netlist via Xschem, then convert to VACASK syntax
