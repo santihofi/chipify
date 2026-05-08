@@ -241,12 +241,12 @@ class SimifyGUI(ctk.CTk):
     def _throttled_measurements(self) -> None:
         stim = self.state.current_stim or self.current_stim
         if stim is not None:
-            self._refresh_visual_tabs(stim, switch_tab=False)
+            self._refresh_measurements_panel(stim)
 
     def _throttled_worst_case(self) -> None:
         stim = self.state.current_stim or self.current_stim
         if stim is not None:
-            self._refresh_visual_tabs(stim, switch_tab=False)
+            self._refresh_worst_case_panel(stim)
 
     def _on_state_data_changed(self, stim=None, switch_tab=False, **kwargs) -> None:
         stim = stim or self.state.current_stim or self.current_stim
@@ -291,11 +291,11 @@ class SimifyGUI(ctk.CTk):
         yield_color = "#2ecc71" if global_yield == 100 else "#f1c40f" if global_yield > 0 else "#e74c3c"
         self.lbl_yield.configure(text=f"Global Yield: {global_yield:.1f}%", text_color=yield_color)
 
-    def _refresh_visual_tabs(self, stim, switch_tab=False) -> None:
-        """Redraw measurements tree, dropdowns, histogram, analytics, worst-case."""
+    def _measurement_snapshot(self, stim, *, update_tree: bool):
+        """Compute measurement columns / failures; optionally rebuild the tree."""
         adf = self.state.active_df
         if adf is None:
-            return
+            return None
 
         total = len(adf)
         valid_df = _dl.valid_rows(adf)
@@ -306,8 +306,9 @@ class SimifyGUI(ctk.CTk):
         failed_params = []
         meas_cols = []
 
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        if update_tree:
+            for item in self.tree.get_children():
+                self.tree.delete(item)
 
         for test in stim.tests:
             for val_obj in test.value_lst:
@@ -352,24 +353,25 @@ class SimifyGUI(ctk.CTk):
                         status, tags = "FAIL", ("fail",)
                         failed_params.append((test, val_obj))
 
-                    self.tree.insert(
-                        "",
-                        tk.END,
-                        values=(
-                            p_name,
-                            fmt(sim_min),
-                            fmt(sim_typ),
-                            fmt(sim_max),
-                            fmt(v_min),
-                            fmt(v_max),
-                            cpk_str,
-                            sigma_str,
-                            status,
-                        ),
-                        tags=tags,
-                    )
+                    if update_tree:
+                        self.tree.insert(
+                            "",
+                            tk.END,
+                            values=(
+                                p_name,
+                                fmt(sim_min),
+                                fmt(sim_typ),
+                                fmt(sim_max),
+                                fmt(v_min),
+                                fmt(v_max),
+                                cpk_str,
+                                sigma_str,
+                                status,
+                            ),
+                            tags=tags,
+                        )
 
-        if not meas_cols and total > 0:
+        if update_tree and not meas_cols and total > 0:
             self.tree.insert(
                 "",
                 tk.END,
@@ -377,15 +379,33 @@ class SimifyGUI(ctk.CTk):
                 tags=("warn",),
             )
 
+        return meas_cols, failed_params, valid_df, total, fmt
+
+    def _rebuild_measurement_tree(self, stim):
+        """Rebuild the measurements tree; return ``(meas_cols, failed_params, valid_df, total, fmt)`` or None."""
+        return self._measurement_snapshot(stim, update_tree=True)
+
+    def _refresh_measurements_panel(self, stim) -> None:
+        """Measurements tab only: tree + sweep metadata + dropdowns (no histogram / adv / worst-case)."""
+        meta = self._rebuild_measurement_tree(stim)
+        if meta is None:
+            return
+        meas_cols, _failed_params, valid_df, _total, _fmt = meta
+
         _plot_cols = _dl.compute_plot_cols(valid_df, stim)
         self.all_plot_cols = _plot_cols.all_numeric_cols
         self.sweep_params = _plot_cols.sweep_params
 
         self.group_by_dropdown.configure(values=["None"] + self.sweep_params)
 
-        if self.group_by_var.get() not in ["None"] + self.sweep_params:
+        choice = self.group_by_var.get()
+        if choice not in ["None"] + self.sweep_params:
             self.group_by_var.set("None")
-        self.on_group_by_change(self.group_by_var.get())
+            choice = "None"
+        if choice != "None":
+            self.compare_dropdown.configure(state="disabled")
+        else:
+            self.compare_dropdown.configure(state="normal")
 
         valid_derived = [c for c in self._derived_cols if c in valid_df.columns]
         all_plot_meas = meas_cols + [c for c in valid_derived if c not in meas_cols]
@@ -394,13 +414,12 @@ class SimifyGUI(ctk.CTk):
             self.plot_param_dropdown.configure(values=all_plot_meas)
             if self.plot_param_var.get() not in all_plot_meas:
                 self.plot_param_var.set(all_plot_meas[0])
-            self.update_plot()
             self.tornado_target_dropdown.configure(values=all_plot_meas)
             if self.tornado_target_var.get() not in all_plot_meas:
                 self.tornado_target_var.set(all_plot_meas[0])
 
-        self.on_adv_mode_change(self.adv_mode_var.get())
-
+    def _refresh_worst_case_cards(self, stim, meas_cols, failed_params, valid_df, total, fmt) -> None:
+        """Rebuild only the worst-case scroll panel content."""
         for widget in self.wc_scroll.winfo_children():
             widget.destroy()
 
@@ -458,6 +477,47 @@ class SimifyGUI(ctk.CTk):
                     ctk.CTkLabel(card, text=f"Triggering parameters:\n{params_text}", justify="left").pack(
                         anchor="w", padx=15, pady=(0, 15)
                     )
+
+    def _refresh_worst_case_panel(self, stim) -> None:
+        """Worst-case tab only: rebuild cards from current data (no measurements tree rebuild)."""
+        meta = self._measurement_snapshot(stim, update_tree=False)
+        if meta is None:
+            return
+        meas_cols, failed_params, valid_df, total, fmt = meta
+        self._refresh_worst_case_cards(stim, meas_cols, failed_params, valid_df, total, fmt)
+
+    def _refresh_visual_tabs(self, stim, switch_tab=False) -> None:
+        """Redraw measurements tree, dropdowns, histogram, analytics, worst-case."""
+        meta = self._rebuild_measurement_tree(stim)
+        if meta is None:
+            return
+        meas_cols, failed_params, valid_df, total, fmt = meta
+
+        _plot_cols = _dl.compute_plot_cols(valid_df, stim)
+        self.all_plot_cols = _plot_cols.all_numeric_cols
+        self.sweep_params = _plot_cols.sweep_params
+
+        self.group_by_dropdown.configure(values=["None"] + self.sweep_params)
+
+        if self.group_by_var.get() not in ["None"] + self.sweep_params:
+            self.group_by_var.set("None")
+        self.on_group_by_change(self.group_by_var.get())
+
+        valid_derived = [c for c in self._derived_cols if c in valid_df.columns]
+        all_plot_meas = meas_cols + [c for c in valid_derived if c not in meas_cols]
+
+        if all_plot_meas:
+            self.plot_param_dropdown.configure(values=all_plot_meas)
+            if self.plot_param_var.get() not in all_plot_meas:
+                self.plot_param_var.set(all_plot_meas[0])
+            self.update_plot()
+            self.tornado_target_dropdown.configure(values=all_plot_meas)
+            if self.tornado_target_var.get() not in all_plot_meas:
+                self.tornado_target_var.set(all_plot_meas[0])
+
+        self.on_adv_mode_change(self.adv_mode_var.get())
+
+        self._refresh_worst_case_cards(stim, meas_cols, failed_params, valid_df, total, fmt)
 
         if switch_tab:
             self.tabs.set("Measurements")

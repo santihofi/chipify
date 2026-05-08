@@ -4,6 +4,9 @@ throttled_redraw.py – Debounced redraw scheduler for Matplotlib-heavy views.
 Guarantees at most one redraw per ``interval_ms``, with a trailing-edge
 call so the final request always fires.
 
+Redraw callbacks are scheduled with ``after_idle`` so Tk can process pending
+input events before heavy Matplotlib work runs.
+
 Usage::
 
     throttle = ThrottledRedraw(widget, some_redraw_fn, interval_ms=1500)
@@ -27,6 +30,7 @@ class ThrottledRedraw:
         self._interval_ms = interval_ms
         self._last_fire: float = 0.0
         self._pending_id = None
+        self._idle_after_id = None
 
     def request(self) -> None:
         """Request a redraw. May be coalesced with nearby requests."""
@@ -52,6 +56,22 @@ class ThrottledRedraw:
     def _fire(self) -> None:
         self._last_fire = time.monotonic()
         self._pending_id = None
+        self._cancel_idle_redraw()
+        try:
+            self._idle_after_id = self._widget.after_idle(self._safe_redraw)
+        except Exception:
+            self._idle_after_id = self._widget.after(1, self._safe_redraw)
+
+    def _cancel_idle_redraw(self) -> None:
+        if self._idle_after_id is not None:
+            try:
+                self._widget.after_cancel(self._idle_after_id)
+            except Exception:
+                pass
+            self._idle_after_id = None
+
+    def _safe_redraw(self) -> None:
+        self._idle_after_id = None
         try:
             self._redraw()
         except Exception as exc:
@@ -62,3 +82,4 @@ class ThrottledRedraw:
         if self._pending_id is not None:
             self._widget.after_cancel(self._pending_id)
             self._pending_id = None
+        self._cancel_idle_redraw()

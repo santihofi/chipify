@@ -23,8 +23,9 @@ DEFAULTS: dict[str, Any] = {
     "vacask_netlist_source": "xschem",# xschem|ng2vc
     "process_start_method": "auto",   # auto|forkserver|spawn
     "chunk_size": "auto",             # auto|1|2|4|8|16|32|64|128|256
-    "live_plotting_enabled": True,    # show live updates during simulation
+    "live_plotting_enabled": False,   # off by default — avoids Tk/worker coupling cost
     "live_plot_throttle_ms": 1500,    # min ms between plot redraws (500–5000)
+    "live_plot_emit_stride": 1,       # emit GUI chunks every N pool batches (1 = every batch)
     "custom_equations": [],           # [{"name": "eff", "expr": "p_out / p_in * 100"}, ...]
     "transient_equations": [],        # [{"name": "vdiff", "expr": "v(outp) - v(outn)"}, ...]
     "multiplot_config": [],           # persisted PlotCell configs for Multi-Plot Dashboard
@@ -132,7 +133,7 @@ def save_config_key(key: str, value: Any) -> None:
 def is_live_plotting_enabled() -> bool:
     """Return whether live plotting is enabled in the current config."""
     cfg = load_config()
-    return bool(cfg.get("live_plotting_enabled", True))
+    return bool(cfg.get("live_plotting_enabled", False))
 
 
 def get_live_throttle_ms() -> int:
@@ -143,3 +144,13 @@ def get_live_throttle_ms() -> int:
         return max(500, min(5000, int(raw)))
     except (TypeError, ValueError):
         return 1500
+
+
+def get_live_plot_emit_stride() -> int:
+    """Emit live-plot chunks once every N completed pool batches (minimum 1)."""
+    cfg = load_config()
+    raw = cfg.get("live_plot_emit_stride", 1)
+    try:
+        return max(1, min(64, int(raw)))
+    except (TypeError, ValueError):
+        return 1

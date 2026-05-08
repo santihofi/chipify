@@ -819,6 +819,14 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None):
     Uses multiprocessing with a non-fork context to avoid deadlocks in GUI apps:
     - Linux:  'forkserver' (stable + faster startup than spawn)
     - others: 'spawn'
+
+    Parameters
+    ----------
+    chunk_callback:
+        If ``None`` (default CLI path), no per-batch DataFrame assembly runs.
+        If set, called with incremental row batches according to
+        ``live_plot_emit_stride`` in settings — omit passing this when live
+        plotting is disabled so the sweep stays at baseline CPU cost.
     """
     pool = None
     log.info("run_sim() started. Testbenches: %d", len(stim.tests))
@@ -895,6 +903,10 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None):
         ]
         log.debug("%d batch tasks submitted (chunk_size=%d).", len(pending), chunk_size)
 
+        chunk_emit_stride = max(1, app_config.get_live_plot_emit_stride()) if chunk_callback else 1
+        chunk_batch_counter = 0
+        chunk_row_buffer: list = []
+
         with tqdm(total=total_tasks) as pbar:
             while pending:
                 if _is_aborted():
@@ -909,12 +921,24 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None):
                             results.extend(batch_results)
                             completed += len(batch_results)
                             if chunk_callback and batch_results:
-                                try:
-                                    chunk_df = _assemble_result_df(batch_results, tran_dir)
-                                    chunk_callback(chunk_df)
-                                except Exception:
-                                    pass
+                                chunk_row_buffer.extend(batch_results)
+                                chunk_batch_counter += 1
+                                sweep_complete = len(results) >= total_tasks
+                                emit_now = sweep_complete or (
+                                    chunk_batch_counter % chunk_emit_stride == 0
+                                )
+                                if emit_now and chunk_row_buffer:
+                                    try:
+                                        chunk_df = _assemble_result_df(
+                                            chunk_row_buffer, tran_dir
+                                        )
+                                        chunk_callback(chunk_df)
+                                    except Exception:
+                                        pass
+                                    chunk_row_buffer = []
                         except (WorkerLostError, Exception) as exc:
+                            if isinstance(exc, InterruptedError):
+                                raise
                             log.error("Worker error (result skipped): %s", exc)
                             completed += chunk_size
                         completed = min(total_tasks, completed)
@@ -927,6 +951,15 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None):
                 pending = still_pending
                 if pending:
                     time.sleep(0.05)
+
+        # Flush any live rows left in stride buffer (should usually be empty).
+        if chunk_callback and chunk_row_buffer:
+            try:
+                chunk_df = _assemble_result_df(chunk_row_buffer, tran_dir)
+                chunk_callback(chunk_df)
+            except Exception:
+                pass
+            chunk_row_buffer = []
 
         pool.close()
         pool.join()

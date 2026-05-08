@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import queue
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -54,10 +55,13 @@ class SimulationController:
     def __init__(self, app: object) -> None:
         self.app = app
         self._bridge: MainThreadBridge | None = None
+        self._live_plot_enabled_this_run: bool = False
+        self._progress_queue: queue.Queue = queue.Queue()
+        self._sim_running: bool = False
 
     def _chunk_callback(self, chunk_df: object) -> None:
-        """Runs on worker thread; forwards chunks when live plotting is enabled."""
-        if not app_config.is_live_plotting_enabled():
+        """Runs on simulation thread; forwards chunks to the UI bridge when live plotting is on."""
+        if not self._live_plot_enabled_this_run:
             return
         bridge = self._bridge
         if bridge is not None:
@@ -118,6 +122,12 @@ class SimulationController:
         yaml_path = os.path.join(settings.IN_DIR, selected)
         log.info("SimulationController.start_simulation: %s", selected)
 
+        try:
+            while True:
+                self._progress_queue.get_nowait()
+        except queue.Empty:
+            pass
+
         app.btn_start.configure(state="disabled")
         app.btn_refresh.configure(state="disabled")
         app.btn_stop.configure(state="normal")
@@ -144,15 +154,40 @@ class SimulationController:
         except Exception as exc:
             log.warning("Could not preload Stimuli for live state: %s", exc)
 
-        self._bridge = MainThreadBridge(app, app.state)
-        self._bridge.start_polling()
+        self._live_plot_enabled_this_run = app_config.is_live_plotting_enabled()
+        if self._live_plot_enabled_this_run:
+            self._bridge = MainThreadBridge(app, app.state)
+            self._bridge.start_polling()
+        else:
+            self._bridge = None
 
         try:
             app.history_dropdown.configure(state="disabled")
         except Exception:
             pass
 
+        self._sim_running = True
+        app.after(0, self._pump_progress_queue)
+
         threading.Thread(target=self.run_sim_thread, args=(yaml_path,), daemon=True).start()
+
+    def _pump_progress_queue(self) -> None:
+        """Apply latest progress on the Tk main thread (never touch Tk from run_sim thread)."""
+        app = self.app  # type: ignore[attr-defined]
+        latest = None
+        try:
+            while True:
+                latest = self._progress_queue.get_nowait()
+        except queue.Empty:
+            pass
+        if latest is not None:
+            try:
+                cur, tot = latest
+                self._set_progress_ui(cur, tot)
+            except Exception:
+                log.exception("Progress UI update failed.")
+        if self._sim_running:
+            app.after(50, self._pump_progress_queue)
 
     def stop_simulation(self) -> None:
         """
@@ -173,7 +208,10 @@ class SimulationController:
         app = self.app  # type: ignore[attr-defined]
         if app.stop_event.is_set():
             raise InterruptedError("Simulation canceled!")
-        app.after(0, self._set_progress_ui, current, total)
+        try:
+            self._progress_queue.put_nowait((current, total))
+        except Exception:
+            pass
 
     def _set_progress_ui(self, current: int, total: int) -> None:
         """Must be called from the main thread via ``app.after()``."""
@@ -209,10 +247,13 @@ class SimulationController:
         t0 = time.perf_counter()
         try:
             stim = util.Stimuli(yaml_path)
+            chunk_cb = (
+                self._chunk_callback if self._live_plot_enabled_this_run else None
+            )
             df = simulator.run_sim(
                 stim,
                 progress_callback=self.progress_callback_wrapper,
-                chunk_callback=self._chunk_callback,
+                chunk_callback=chunk_cb,
             )
 
             if df is not None:
@@ -270,11 +311,29 @@ class SimulationController:
             else:
                 log.info("run_sim returned None (aborted or error).")
 
+        except InterruptedError:
+            log.info("run_sim_thread stopped (user cancel or interrupt).")
         except Exception as exc:
             log.exception("run_sim_thread raised an exception: %s", exc)
             app.after(0, self.show_error, str(exc))
 
         finally:
             log.info("run_sim_thread finished. Re-enabling UI.")
-            app.after(0, self._thread_finalize_guard)
-            app.after(0, _set_btn_start_ready, app)
+            self._sim_running = False
+
+            def _finish_sim_ui(ctrl: SimulationController = self) -> None:
+                latest = None
+                try:
+                    while True:
+                        latest = ctrl._progress_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                if latest is not None:
+                    try:
+                        ctrl._set_progress_ui(*latest)
+                    except Exception:
+                        pass
+                ctrl._thread_finalize_guard()
+                _set_btn_start_ready(app)
+
+            app.after(0, _finish_sim_ui)
