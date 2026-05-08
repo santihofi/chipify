@@ -29,6 +29,7 @@ DEFAULTS: dict[str, Any] = {
     "custom_equations": [],           # [{"name": "eff", "expr": "p_out / p_in * 100"}, ...]
     "transient_equations": [],        # [{"name": "vdiff", "expr": "v(outp) - v(outn)"}, ...]
     "multiplot_config": [],           # persisted PlotCell configs for Multi-Plot Dashboard
+    "theme": "night",                 # appearance theme: night|dark|light
 }
 
 _logging_ready = False

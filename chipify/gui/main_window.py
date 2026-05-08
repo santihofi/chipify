@@ -29,7 +29,7 @@ from chipify import debug_export
 from chipify.gui.widgets.settings_window import SettingsWindow  # noqa: F401
 from chipify.gui.widgets import yaml_dumper as _yaml_dumper
 from chipify.gui.widgets.yaml_dumper import QuotedString
-from chipify.gui.widgets.treeview_styling import apply_dark_style as _apply_dark_style
+from chipify.gui.widgets.treeview_styling import apply_dark_style as _apply_dark_style, apply_treeview_style as _apply_treeview_style
 from chipify.gui.services import data_loader as _dl
 from chipify.gui.services import equation_service as _eq_svc
 from chipify.gui.services import yaml_editor_service as _ye_svc
@@ -96,7 +96,10 @@ class SimifyGUI(ctk.CTk):
         self.setup_left_panel()
         self.setup_right_panel()
         self.apply_treeview_dark_style()
-        
+
+        _saved_theme = app_config.load_config().get("theme", "night")
+        self.after(1, lambda: self.change_theme(_saved_theme))
+
         self.after(200, self._startup_load)
         
     def _startup_load(self):
@@ -2062,6 +2065,60 @@ class SimifyGUI(ctk.CTk):
 
     def apply_treeview_dark_style(self):
         _apply_dark_style(self.tree)
+
+    def change_theme(self, mode: str) -> None:
+        import chipify.gui.theme as _theme_mod
+        _theme_mod.apply_theme(mode)
+        t = _theme_mod.THEMES.get(mode, _theme_mod.THEMES["night"])
+
+        # ── Main window background ────────────────────────────────────────────
+        if t["bg"] is not None:
+            self.configure(fg_color=t["bg"])
+        else:
+            try:
+                self.configure(fg_color=ctk.ThemeManager.theme["CTk"]["fg_color"])
+            except (KeyError, AttributeError):
+                self.configure(fg_color=("gray92", "gray14"))
+
+        # ── Left panel + tab view ─────────────────────────────────────────────
+        if t["panel"] is not None:
+            panel_fg = t["panel"]
+        else:
+            try:
+                panel_fg = ctk.ThemeManager.theme["CTkFrame"]["fg_color"]
+            except (KeyError, AttributeError):
+                panel_fg = ("gray86", "gray17")
+        self.left_frame.configure(fg_color=panel_fg)
+        self.tabs.configure(fg_color=panel_fg)
+        for _tf in [self.tab_editor, self.tab_table, self.tab_worst,
+                    self.tab_hist, self.tab_adv, self.tab_eq, self.tab_tran]:
+            _tf.configure(fg_color=panel_fg)
+
+        # ── Matplotlib figures ────────────────────────────────────────────────
+        if mode == "light":
+            plt.style.use("default")
+            mpl_bg, mpl_fg = "white", "#2b2b2b"
+        else:
+            plt.style.use("dark_background")
+            mpl_bg, mpl_fg = _theme_mod.PANEL_COLOR, "white"
+
+        for fig, canvas in [
+            (self.fig, self.canvas),
+            (self.adv_fig, self.adv_canvas),
+            (self.tran_fig, self.tran_canvas),
+        ]:
+            fig.patch.set_facecolor(mpl_bg)
+            for ax in fig.get_axes():
+                ax.set_facecolor(mpl_bg)
+                ax.tick_params(colors=mpl_fg)
+                ax.xaxis.label.set_color(mpl_fg)
+                ax.yaxis.label.set_color(mpl_fg)
+                for spine in ax.spines.values():
+                    spine.set_edgecolor(mpl_fg)
+            canvas.get_tk_widget().configure(background=mpl_bg)
+            canvas.draw()
+
+        _apply_treeview_style(self.tree, mode)
 
     # ==========================================
     # SIMULATION CORE (delegates to SimulationController)

@@ -25,7 +25,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk) -> None:
         super().__init__(parent)
         self.title("Global Settings")
-        self.geometry("460x860")
+        self.geometry("460x940")
         self.resizable(False, False)
 
         # grab_set needs a small delay so the window is fully mapped first
@@ -41,6 +41,7 @@ class SettingsWindow(ctk.CTkToplevel):
         chunk_size_mode = str(self._config.get("chunk_size", "auto"))
         vacask_binary = self._config.get("vacask_binary", "vacask")
         vacask_src = self._config.get("vacask_netlist_source", "xschem")
+        current_theme = self._config.get("theme", "night")
 
         if simulator_engine not in self._VALID_ENGINES:
             simulator_engine = "ngspice"
@@ -50,6 +51,8 @@ class SettingsWindow(ctk.CTkToplevel):
             chunk_size_mode = "auto"
         if vacask_src not in ["xschem", "ng2vc"]:
             vacask_src = "xschem"
+        if current_theme not in ["night", "dark", "light"]:
+            current_theme = "night"
 
         # ── Header ──────────────────────────────────────────────────────────
         ctk.CTkLabel(
@@ -210,6 +213,24 @@ class SettingsWindow(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11),
         ).pack(anchor="w", pady=(4, 0))
 
+        # ── Appearance Theme ─────────────────────────────────────────────────
+        theme_outer = ctk.CTkFrame(self, fg_color="transparent")
+        theme_outer.pack(fill="x", padx=36, pady=(18, 0))
+        ctk.CTkLabel(theme_outer, text="Appearance Theme:", anchor="w").pack(anchor="w")
+        self._theme_var = ctk.StringVar(value=current_theme)
+        ctk.CTkOptionMenu(
+            theme_outer,
+            variable=self._theme_var,
+            values=["night", "dark", "light"],
+            dynamic_resizing=False,
+            width=180,
+        ).pack(anchor="w", pady=(6, 2))
+        ctk.CTkLabel(
+            theme_outer,
+            text="night: pitch black  •  dark: grey dark  •  light: light mode",
+            text_color="gray", font=ctk.CTkFont(size=11),
+        ).pack(anchor="w")
+
         # ── Buttons ─────────────────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=36, pady=(28, 0))
@@ -273,5 +294,9 @@ class SettingsWindow(ctk.CTkToplevel):
             )
         except (ValueError, TypeError):
             self._config["live_plot_throttle_ms"] = 1500
+        new_theme = self._theme_var.get()
+        self._config["theme"] = new_theme
         app_config.save_config(self._config)
+        if hasattr(self._main_app, "change_theme"):
+            self._main_app.change_theme(new_theme)
         self.destroy()
