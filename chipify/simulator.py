@@ -800,7 +800,19 @@ def generate_cases(stim) -> list:
     return [dict(zip(param_names, combo)) for combo in itertools.product(*param_values)]
 
 
-def run_sim(stim, progress_callback=None, simulator=None):
+def _assemble_result_df(rows: list, tran_dir: str) -> pd.DataFrame:
+    """Build a normalized results DataFrame (matches GUI / CSV load semantics)."""
+    from chipify.gui.services import data_loader as _dl
+
+    df = pd.DataFrame(rows)
+    df = _dl.normalise_sim_error(df)
+    df = _dl.compute_global_pass(df)
+    if tran_dir:
+        df.attrs["tran_dir"] = tran_dir
+    return df
+
+
+def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None):
     """
     Main simulation entry point.
 
@@ -896,6 +908,12 @@ def run_sim(stim, progress_callback=None, simulator=None):
                             batch_results = ar.get(timeout=0)
                             results.extend(batch_results)
                             completed += len(batch_results)
+                            if chunk_callback and batch_results:
+                                try:
+                                    chunk_df = _assemble_result_df(batch_results, tran_dir)
+                                    chunk_callback(chunk_df)
+                                except Exception:
+                                    pass
                         except (WorkerLostError, Exception) as exc:
                             log.error("Worker error (result skipped): %s", exc)
                             completed += chunk_size
@@ -914,9 +932,7 @@ def run_sim(stim, progress_callback=None, simulator=None):
         pool.join()
         log.info("Pool finished cleanly. %d results collected.", len(results))
 
-        result_df = pd.DataFrame(results)
-        if tran_dir:
-            result_df.attrs["tran_dir"] = tran_dir
+        result_df = _assemble_result_df(results, tran_dir)
         return result_df
 
     except InterruptedError:

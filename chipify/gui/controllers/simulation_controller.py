@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from chipify import app_config, settings, simulator, util
-from chipify.gui.services import data_loader as _dl
+from chipify.gui.services.main_thread_bridge import MainThreadBridge
 
 if TYPE_CHECKING:
     pass  # avoid circular import
@@ -32,7 +32,6 @@ log = logging.getLogger("chipify.gui.controllers.simulation")
 def _set_btn_start_ready(app: object) -> None:
     """Re-enable the start button after simulation completes or aborts."""
     # Import inside function to avoid early Tk init during import
-    import customtkinter as ctk
     app_ = app  # type: ignore[attr-defined]
     if not app_.lbl_status.cget("text").startswith("Status: Completed in"):
         app_.lbl_status.configure(text="Status: Ready", text_color="#2ecc71")
@@ -54,6 +53,60 @@ class SimulationController:
 
     def __init__(self, app: object) -> None:
         self.app = app
+        self._bridge: MainThreadBridge | None = None
+
+    def _chunk_callback(self, chunk_df: object) -> None:
+        """Runs on worker thread; forwards chunks when live plotting is enabled."""
+        if not app_config.is_live_plotting_enabled():
+            return
+        bridge = self._bridge
+        if bridge is not None:
+            bridge.enqueue_chunk(chunk_df)
+
+    def _thread_finalize_guard(self) -> None:
+        """Main-thread cleanup when the worker thread exits (abort/error paths)."""
+        app = self.app  # type: ignore[attr-defined]
+        if self._bridge is not None:
+            try:
+                self._bridge.stop_polling()
+            except Exception:
+                log.exception("Bridge stop failed during finalize.")
+            self._bridge = None
+        try:
+            if app.state.simulation_active:
+                app.state.simulation_active = False
+                app.state.clear_partial()
+                for t in getattr(app, "_all_throttles", []):
+                    t.cancel_pending()
+                app.history_dropdown.configure(state="normal")
+        except Exception:
+            log.exception("Simulation finalize guard failed.")
+
+    def _on_sim_success_main(self, df: object, stim: object, elapsed: float) -> None:
+        """Ordered UI finalization after a successful run (main thread)."""
+        app = self.app  # type: ignore[attr-defined]
+        if self._bridge is not None:
+            try:
+                self._bridge.stop_polling()
+            except Exception:
+                log.exception("Bridge stop after simulation failed.")
+            self._bridge = None
+        for t in getattr(app, "_all_throttles", []):
+            try:
+                t.force_now()
+            except Exception:
+                pass
+        try:
+            app.history_dropdown.configure(state="normal")
+        except Exception:
+            pass
+        app.state.current_stim = stim
+        app.state.promote_partial(final_df=df, emit=False)
+        app.update_ui_results(df, stim, True)
+        app.lbl_status.configure(
+            text=f"Status: Completed in {elapsed:.1f}s",
+            text_color="#2ecc71",
+        )
 
     def start_simulation(self) -> None:
         """Called by the Start button.  Validates selection and spawns the thread."""
@@ -80,8 +133,24 @@ class SimulationController:
             widget.destroy()
 
         import customtkinter as ctk
+
         app.lbl_wc_empty = ctk.CTkLabel(app.wc_scroll, text="Simulating…", text_color="gray")
         app.lbl_wc_empty.pack(pady=50)
+
+        app.state.clear_partial()
+        app.state.simulation_active = True
+        try:
+            app.state.current_stim = util.Stimuli(yaml_path)
+        except Exception as exc:
+            log.warning("Could not preload Stimuli for live state: %s", exc)
+
+        self._bridge = MainThreadBridge(app, app.state)
+        self._bridge.start_polling()
+
+        try:
+            app.history_dropdown.configure(state="disabled")
+        except Exception:
+            pass
 
         threading.Thread(target=self.run_sim_thread, args=(yaml_path,), daemon=True).start()
 
@@ -116,7 +185,9 @@ class SimulationController:
 
     def show_error(self, error_msg: str) -> None:
         """Display an error in the status bar and worst-case panel."""
+        self._thread_finalize_guard()
         import customtkinter as ctk
+
         app = self.app  # type: ignore[attr-defined]
         app.lbl_status.configure(text="Status: Error / Aborted!", text_color="red")
         app.btn_start.configure(state="normal")
@@ -125,8 +196,10 @@ class SimulationController:
         for widget in app.wc_scroll.winfo_children():
             widget.destroy()
         ctk.CTkLabel(
-            app.wc_scroll, text=f"LOG:\n{error_msg}",
-            text_color="red", justify="left"
+            app.wc_scroll,
+            text=f"LOG:\n{error_msg}",
+            text_color="red",
+            justify="left",
         ).pack(anchor="w", padx=20, pady=20)
 
     def run_sim_thread(self, yaml_path: str) -> None:
@@ -137,7 +210,9 @@ class SimulationController:
         try:
             stim = util.Stimuli(yaml_path)
             df = simulator.run_sim(
-                stim, progress_callback=self.progress_callback_wrapper
+                stim,
+                progress_callback=self.progress_callback_wrapper,
+                chunk_callback=self._chunk_callback,
             )
 
             if df is not None:
@@ -165,15 +240,14 @@ class SimulationController:
                 # Archive history run + write meta sidecar
                 try:
                     from chipify import run_meta
+
                     history_dir = os.path.join(settings.OUT_DIR, "history")
                     os.makedirs(history_dir, exist_ok=True)
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     history_file = os.path.join(history_dir, f"run_{timestamp}.csv")
                     df.to_csv(history_file, index=False)
                     total = len(df)
-                    valid = int(
-                        (df.get("sim_error", "None") == "None").sum()
-                    ) if "sim_error" in df.columns else total
+                    valid = int((df.get("sim_error", "None") == "None").sum()) if "sim_error" in df.columns else total
                     gpass = int(df["global_pass"].sum()) if "global_pass" in df.columns else None
                     gyield = (gpass / total * 100) if (gpass is not None and total > 0) else None
                     run_meta.write_meta(
@@ -189,12 +263,9 @@ class SimulationController:
                     log.warning("Could not save history: %s", exc)
 
                 app.after(0, app.refresh_history)
-                app.after(0, app.update_ui_results, df, stim, True)
                 app.after(
                     0,
-                    lambda e=elapsed: app.lbl_status.configure(
-                        text=f"Status: Completed in {e:.1f}s", text_color="#2ecc71"
-                    ),
+                    lambda d=df, s=stim, e=elapsed: self._on_sim_success_main(d, s, e),
                 )
             else:
                 log.info("run_sim returned None (aborted or error).")
@@ -205,4 +276,5 @@ class SimulationController:
 
         finally:
             log.info("run_sim_thread finished. Re-enabling UI.")
+            app.after(0, self._thread_finalize_guard)
             app.after(0, _set_btn_start_ready, app)

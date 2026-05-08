@@ -23,6 +23,8 @@ DEFAULTS: dict[str, Any] = {
     "vacask_netlist_source": "xschem",# xschem|ng2vc
     "process_start_method": "auto",   # auto|forkserver|spawn
     "chunk_size": "auto",             # auto|1|2|4|8|16|32|64|128|256
+    "live_plotting_enabled": True,    # show live updates during simulation
+    "live_plot_throttle_ms": 1500,    # min ms between plot redraws (500–5000)
     "custom_equations": [],           # [{"name": "eff", "expr": "p_out / p_in * 100"}, ...]
     "transient_equations": [],        # [{"name": "vdiff", "expr": "v(outp) - v(outn)"}, ...]
     "multiplot_config": [],           # persisted PlotCell configs for Multi-Plot Dashboard
@@ -118,3 +120,26 @@ def save_config(config: dict[str, Any]) -> None:
         logging.getLogger("chipify.config").error(
             "Could not write %s: %s", CONFIG_PATH, exc
         )
+
+
+def save_config_key(key: str, value: Any) -> None:
+    """Update a single config key and persist."""
+    cfg = load_config()
+    cfg[key] = value
+    save_config(cfg)
+
+
+def is_live_plotting_enabled() -> bool:
+    """Return whether live plotting is enabled in the current config."""
+    cfg = load_config()
+    return bool(cfg.get("live_plotting_enabled", True))
+
+
+def get_live_throttle_ms() -> int:
+    """Return the live-plot throttle interval in milliseconds."""
+    cfg = load_config()
+    raw = cfg.get("live_plot_throttle_ms", 1500)
+    try:
+        return max(500, min(5000, int(raw)))
+    except (TypeError, ValueError):
+        return 1500

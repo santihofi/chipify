@@ -88,6 +88,9 @@ class AppState:
     status_changed
         Emitted when a status-bar update is requested.
         kwargs: ``text: str``, ``color: str``
+    on_data_chunk_added
+        Emitted when a live simulation chunk is merged into ``partial_df``.
+        kwargs: ``df``, ``stim``, ``chunk_len: int``
     """
 
     def __init__(self) -> None:
@@ -104,7 +107,63 @@ class AppState:
         # Weak reference to MultiPlotWindow Toplevel (may be destroyed externally)
         self.multiplot_window: Any = None
 
+        # ── Live-plotting state ─────────────────────────────────────────────
+        self.partial_df: pd.DataFrame | None = None
+        self.simulation_active: bool = False
+
         # ── Signals ───────────────────────────────────────────────────────────
         self.data_changed: Signal = Signal()
         self.yaml_changed: Signal = Signal()
         self.status_changed: Signal = Signal()
+        self.on_data_chunk_added: Signal = Signal()
+
+    @property
+    def active_df(self) -> pd.DataFrame | None:
+        """Views read this: returns partial_df during sim, current_df otherwise."""
+        if self.simulation_active and self.partial_df is not None:
+            return self.partial_df
+        return self.current_df
+
+    def append_results(self, chunk: pd.DataFrame) -> None:
+        """Append a results chunk to partial_df. MUST be called on main thread."""
+        if self.partial_df is None:
+            self.partial_df = chunk.copy()
+        else:
+            self.partial_df = pd.concat(
+                [self.partial_df, chunk], ignore_index=True
+            )
+
+        tran_dir = chunk.attrs.get("tran_dir", "") if hasattr(chunk, "attrs") else ""
+        if tran_dir:
+            self.partial_df.attrs["tran_dir"] = tran_dir
+
+        self.on_data_chunk_added.emit(
+            df=self.partial_df,
+            stim=self.current_stim,
+            chunk_len=len(chunk),
+        )
+
+    def promote_partial(
+        self, final_df: pd.DataFrame | None = None, *, emit: bool = True
+    ) -> None:
+        """Move partial_df → current_df, or install final_df from the worker."""
+        if final_df is not None:
+            self.current_df = final_df.copy()
+            if hasattr(final_df, "attrs"):
+                self.current_df.attrs.update(dict(final_df.attrs))
+        elif self.partial_df is not None:
+            attrs = self.partial_df.attrs.copy()
+            self.current_df = self.partial_df
+            self.current_df.attrs.update(attrs)
+        self.partial_df = None
+        self.simulation_active = False
+        if emit:
+            self.data_changed.emit(
+                df=self.current_df,
+                stim=self.current_stim,
+                switch_tab=True,
+            )
+
+    def clear_partial(self) -> None:
+        """Reset live-plotting accumulator (sim start or abort)."""
+        self.partial_df = None

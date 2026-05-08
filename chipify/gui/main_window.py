@@ -37,6 +37,7 @@ from chipify.gui.services import transient_loader as _tl
 from chipify.gui.controllers.simulation_controller import SimulationController
 from chipify.gui.controllers.history_controller import HistoryController
 from chipify.gui.state import AppState
+from chipify.gui.services.throttled_redraw import ThrottledRedraw
 
 # Register custom YAML representers (list inline, QuotedString single-quote style)
 _yaml_dumper.register()
@@ -207,6 +208,261 @@ class SimifyGUI(ctk.CTk):
         self.setup_adv_analytics_tab()
         self.setup_equations_tab()
         self.setup_transient_tab()
+
+        self._wire_live_plotting_hooks()
+
+    def _wire_live_plotting_hooks(self) -> None:
+        """Subscribe AppState signals and build throttled redraw schedulers."""
+        self.state.data_changed.connect(self._on_state_data_changed)
+
+        _ms = app_config.get_live_throttle_ms()
+        self._throttle_meas = ThrottledRedraw(self, self._throttled_measurements, _ms)
+        self._throttle_hist = ThrottledRedraw(self, self.update_plot, _ms)
+        self._throttle_wc = ThrottledRedraw(self, self._throttled_worst_case, _ms)
+        self._throttle_adv = ThrottledRedraw(self, self.update_adv_plots, _ms)
+        self._throttle_tran = ThrottledRedraw(self, self.update_transient_plot, _ms)
+        self._all_throttles = [
+            self._throttle_meas,
+            self._throttle_hist,
+            self._throttle_wc,
+            self._throttle_adv,
+            self._throttle_tran,
+        ]
+        self.state.on_data_chunk_added.connect(self._on_live_chunk)
+
+        self._live_throttle_tab_map = {
+            "Measurements": self._throttle_meas,
+            "Histograms": self._throttle_hist,
+            "Worst-Case Analysis": self._throttle_wc,
+            "Advanced Analytics": self._throttle_adv,
+            "Transient": self._throttle_tran,
+        }
+
+    def _throttled_measurements(self) -> None:
+        stim = self.state.current_stim or self.current_stim
+        if stim is not None:
+            self._refresh_visual_tabs(stim, switch_tab=False)
+
+    def _throttled_worst_case(self) -> None:
+        stim = self.state.current_stim or self.current_stim
+        if stim is not None:
+            self._refresh_visual_tabs(stim, switch_tab=False)
+
+    def _on_state_data_changed(self, stim=None, switch_tab=False, **kwargs) -> None:
+        stim = stim or self.state.current_stim or self.current_stim
+        if stim is None:
+            return
+        adf = self.state.active_df
+        if adf is None:
+            return
+        self.current_df = self.state.current_df
+        self.current_stim = stim
+        self._update_status_badges(adf)
+        self._refresh_visual_tabs(stim, switch_tab=switch_tab)
+        self._refresh_transient_signal_list()
+        if self._resolve_tran_dir():
+            self.update_transient_plot()
+        self._notify_multiplot()
+
+    def _on_live_chunk(self, df=None, stim=None, chunk_len=0, **kwargs) -> None:
+        del chunk_len
+        if not app_config.is_live_plotting_enabled():
+            return
+        if df is not None:
+            self._update_status_badges(df)
+
+        active_tab = self.tabs.get()
+        throttle = self._live_throttle_tab_map.get(active_tab)
+        if throttle is not None:
+            throttle.request()
+
+    def _update_status_badges(self, df) -> None:
+        """Update iterations / crashes / yield labels from the given DataFrame."""
+        if df is None or len(df) == 0:
+            return
+        total = len(df)
+        crashes = len(df[df["sim_error"] != "None"]) if "sim_error" in df.columns else 0
+        global_passed = int(df["global_pass"].sum()) if "global_pass" in df.columns else 0
+        global_yield = (global_passed / total) * 100 if total > 0 else 0
+
+        self.lbl_total.configure(text=f"Iterations: {total}")
+        self.lbl_crashes.configure(text=f"Crashes: {crashes}")
+
+        yield_color = "#2ecc71" if global_yield == 100 else "#f1c40f" if global_yield > 0 else "#e74c3c"
+        self.lbl_yield.configure(text=f"Global Yield: {global_yield:.1f}%", text_color=yield_color)
+
+    def _refresh_visual_tabs(self, stim, switch_tab=False) -> None:
+        """Redraw measurements tree, dropdowns, histogram, analytics, worst-case."""
+        adf = self.state.active_df
+        if adf is None:
+            return
+
+        total = len(adf)
+        valid_df = _dl.valid_rows(adf)
+
+        def fmt(val):
+            return "-" if pd.isna(val) or val is None else f"{val:.4g}"
+
+        failed_params = []
+        meas_cols = []
+
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        for test in stim.tests:
+            for val_obj in test.value_lst:
+                p_name = val_obj.name
+                if p_name in valid_df.columns:
+                    meas_cols.append(p_name)
+
+                    data_col = valid_df[p_name].dropna()
+                    sim_min = data_col.min() if not data_col.empty else np.nan
+                    sim_max = data_col.max() if not data_col.empty else np.nan
+                    sim_typ = data_col.mean() if not data_col.empty else np.nan
+                    sim_std = data_col.std() if len(data_col) > 1 else 0.0
+
+                    v_min = getattr(val_obj, "vmin", getattr(val_obj, "min", None))
+                    v_max = getattr(val_obj, "vmax", getattr(val_obj, "max", None))
+
+                    cpk_vals, z_vals = [], []
+                    if sim_std > 0:
+                        if v_min is not None:
+                            cpk_vals.append(((sim_typ - v_min) / sim_std) / 3.0)
+                            z_vals.append((sim_typ - v_min) / sim_std)
+                        if v_max is not None:
+                            cpk_vals.append(((v_max - sim_typ) / sim_std) / 3.0)
+                            z_vals.append((v_max - sim_typ) / sim_std)
+
+                    if cpk_vals:
+                        cpk, sigma_lvl = min(cpk_vals), min(z_vals)
+                        cpk_str, sigma_str = f"{cpk:.2f}", f"{sigma_lvl:.2f}σ"
+                    else:
+                        if sim_std == 0.0 and (v_min is not None or v_max is not None):
+                            if (v_min is None or sim_typ >= v_min) and (v_max is None or sim_typ <= v_max):
+                                cpk_str, sigma_str = "INF", "INF"
+                            else:
+                                cpk_str, sigma_str = "0.00", "0.00"
+                        else:
+                            cpk_str, sigma_str = "-", "-"
+
+                    pass_col = f"{p_name}_pass"
+                    if pass_col in valid_df.columns and valid_df[pass_col].all():
+                        status, tags = "PASS", ("pass",)
+                    else:
+                        status, tags = "FAIL", ("fail",)
+                        failed_params.append((test, val_obj))
+
+                    self.tree.insert(
+                        "",
+                        tk.END,
+                        values=(
+                            p_name,
+                            fmt(sim_min),
+                            fmt(sim_typ),
+                            fmt(sim_max),
+                            fmt(v_min),
+                            fmt(v_max),
+                            cpk_str,
+                            sigma_str,
+                            status,
+                        ),
+                        tags=tags,
+                    )
+
+        if not meas_cols and total > 0:
+            self.tree.insert(
+                "",
+                tk.END,
+                values=("No matching params", "-", "-", "-", "-", "-", "-", "-", "WARN"),
+                tags=("warn",),
+            )
+
+        _plot_cols = _dl.compute_plot_cols(valid_df, stim)
+        self.all_plot_cols = _plot_cols.all_numeric_cols
+        self.sweep_params = _plot_cols.sweep_params
+
+        self.group_by_dropdown.configure(values=["None"] + self.sweep_params)
+
+        if self.group_by_var.get() not in ["None"] + self.sweep_params:
+            self.group_by_var.set("None")
+        self.on_group_by_change(self.group_by_var.get())
+
+        valid_derived = [c for c in self._derived_cols if c in valid_df.columns]
+        all_plot_meas = meas_cols + [c for c in valid_derived if c not in meas_cols]
+
+        if all_plot_meas:
+            self.plot_param_dropdown.configure(values=all_plot_meas)
+            if self.plot_param_var.get() not in all_plot_meas:
+                self.plot_param_var.set(all_plot_meas[0])
+            self.update_plot()
+            self.tornado_target_dropdown.configure(values=all_plot_meas)
+            if self.tornado_target_var.get() not in all_plot_meas:
+                self.tornado_target_var.set(all_plot_meas[0])
+
+        self.on_adv_mode_change(self.adv_mode_var.get())
+
+        for widget in self.wc_scroll.winfo_children():
+            widget.destroy()
+
+        if not meas_cols and total > 0:
+            ctk.CTkLabel(
+                self.wc_scroll,
+                text="Loaded CSV does not match the current Datasheet specifications.",
+                text_color="#e67e22",
+                font=ctk.CTkFont(size=14),
+            ).pack(pady=50)
+        elif not failed_params:
+            ctk.CTkLabel(
+                self.wc_scroll,
+                text="All specifications met! No outliers found.",
+                text_color="#2ecc71",
+                font=ctk.CTkFont(size=16),
+            ).pack(pady=50)
+        else:
+            param_cols = list(stim.params.keys())
+            for test, val_obj in failed_params:
+                p_name, pass_col = val_obj.name, f"{val_obj.name}_pass"
+                failed_rows = valid_df[valid_df[pass_col] == False]
+                if failed_rows.empty:
+                    continue
+
+                min_fail, max_fail = failed_rows[p_name].min(), failed_rows[p_name].max()
+                worst_val, worst_idx, violation = None, None, ""
+
+                v_min = getattr(val_obj, "vmin", getattr(val_obj, "min", None))
+                v_max = getattr(val_obj, "vmax", getattr(val_obj, "max", None))
+
+                if v_min is not None and min_fail < v_min:
+                    worst_val, worst_idx, violation = min_fail, failed_rows[p_name].idxmin(), f"< {fmt(v_min)}"
+                elif v_max is not None and max_fail > v_max:
+                    worst_val, worst_idx, violation = max_fail, failed_rows[p_name].idxmax(), f"> {fmt(v_max)}"
+
+                if worst_idx is not None:
+                    worst_row = failed_rows.loc[worst_idx]
+                    card = ctk.CTkFrame(self.wc_scroll, border_width=2, border_color="#e74c3c", corner_radius=8)
+                    card.pack(fill="x", padx=10, pady=10)
+                    header = ctk.CTkFrame(card, fg_color="#e74c3c", corner_radius=0)
+                    header.pack(fill="x")
+                    ctk.CTkLabel(
+                        header,
+                        text=f"FAIL: {p_name} = {fmt(worst_val)}",
+                        font=ctk.CTkFont(weight="bold", size=14),
+                        text_color="white",
+                    ).pack(anchor="w", padx=15, pady=5)
+                    ctk.CTkLabel(
+                        card,
+                        text=f"Specification exceeded: {violation}",
+                        text_color="#ff9999",
+                    ).pack(anchor="w", padx=15, pady=(10, 5))
+                    params_text = "\n".join([f"• {k}: {worst_row[k]}" for k in param_cols if k in worst_row])
+                    ctk.CTkLabel(card, text=f"Triggering parameters:\n{params_text}", justify="left").pack(
+                        anchor="w", padx=15, pady=(0, 15)
+                    )
+
+        if switch_tab:
+            self.tabs.set("Measurements")
+            self.lbl_current_run.configure(text="Viewing: Latest (simulation_results)")
+            self.history_dropdown.set("Latest (simulation_results)")
 
     # ==========================================
     # HISTORY & DATA LOADING
@@ -573,11 +829,11 @@ class SimifyGUI(ctk.CTk):
 
     def _refresh_plot_dropdowns_with_derived(self):
         """Add derived columns to histogram and scatter dropdowns."""
-        if not self._derived_cols or self.current_df is None:
+        if not self._derived_cols or self.state.active_df is None:
             return
         valid_derived = [
             c for c in self._derived_cols
-            if c in self.current_df.columns
+            if c in self.state.active_df.columns
         ]
         if not valid_derived:
             return
@@ -600,10 +856,18 @@ class SimifyGUI(ctk.CTk):
             self.tornado_target_dropdown.configure(values=new_tornado)
 
     def _on_tab_change(self, *_args):
-        """Auto-refresh the Transient tab whenever it becomes active."""
+        """Auto-refresh the Transient tab when it becomes active; live-tab redraw."""
         try:
             if self.tabs.get() == "Transient":
                 self.update_transient_plot()
+        except Exception:
+            pass
+        try:
+            if self.state.simulation_active and app_config.is_live_plotting_enabled():
+                active_tab = self.tabs.get()
+                th = self._live_throttle_tab_map.get(active_tab)
+                if th is not None:
+                    th.force_now()
         except Exception:
             pass
 
@@ -1132,13 +1396,15 @@ class SimifyGUI(ctk.CTk):
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
     def action_export_latex(self):
-        if self.current_df is None or self.plot_param_var.get() == "-": return
+        adf = self.state.active_df
+        if adf is None or self.plot_param_var.get() == "-":
+            return
         param = self.plot_param_var.get()
         dist_type = self.plot_dist_var.get()
         bins_val = self.bins_var.get()
         b = 'auto' if bins_val == "Auto" else int(bins_val)
         
-        valid_df = self.current_df[self.current_df['sim_error'] == 'None']
+        valid_df = adf[adf['sim_error'] == 'None']
         if param not in valid_df.columns: return
         data = valid_df[param].dropna()
         if len(data) == 0: return
@@ -1158,15 +1424,17 @@ class SimifyGUI(ctk.CTk):
         self.update_plot()
 
     def update_plot(self, *args):
-        if self.current_df is None or self.plot_param_var.get() == "-": return
+        adf = self.state.active_df
+        if adf is None or self.plot_param_var.get() == "-":
+            return
         param = self.plot_param_var.get()
         dist_type = self.plot_dist_var.get()
         group_col = self.group_by_var.get()
         bins_val = self.bins_var.get()
         do_zoom = self.zoom_var.get()
         comp_run = self.compare_var.get()
-        
-        valid_df = self.current_df[self.current_df['sim_error'] == 'None']
+
+        valid_df = adf[adf["sim_error"] == "None"]
         if param not in valid_df.columns: return
         
         data_col = valid_df[param].dropna()
@@ -1336,8 +1604,9 @@ class SimifyGUI(ctk.CTk):
                                 meas_names.append(v.name)
 
                 derived_names = []
-                if self.current_df is not None:
-                    derived_names = [c for c in self._derived_cols if c in self.current_df.columns]
+                adf = self.state.active_df
+                if adf is not None:
+                    derived_names = [c for c in self._derived_cols if c in adf.columns]
 
                 options = []
                 for name in self.sweep_params + meas_names + derived_names:
@@ -1345,14 +1614,14 @@ class SimifyGUI(ctk.CTk):
                         options.append(name)
                 if not options:
                     options = ["-"]
-                
+
             self.scatter_x_dropdown.configure(values=options)
             self.scatter_y_dropdown.configure(values=options)
-            
+
             if self.scatter_x_var.get() not in options:
                 self.scatter_x_var.set(options[0] if options else "-")
             if self.scatter_y_var.get() not in options:
-                self.scatter_y_var.set(options[1] if len(options)>1 else options[0] if options else "-")
+                self.scatter_y_var.set(options[1] if len(options) > 1 else options[0] if options else "-")
                 
         elif mode == "Sensitivity (Tornado)":
             self.lbl_tornado.pack(side=tk.LEFT, padx=(0, 5))
@@ -1361,8 +1630,10 @@ class SimifyGUI(ctk.CTk):
         self.update_adv_plots()
 
     def update_adv_plots(self, *args):
-        if self.current_df is None: return
-        valid_df = self.current_df[self.current_df['sim_error'] == 'None']
+        adf = self.state.active_df
+        if adf is None:
+            return
+        valid_df = adf[adf["sim_error"] == "None"]
         if valid_df.empty: return
 
         mode = self.adv_mode_var.get()
@@ -1490,8 +1761,8 @@ class SimifyGUI(ctk.CTk):
         3. Newest out/tran_data/*/  — fallback glob
         """
         # 1. In-memory attr (set by run_sim on a fresh result)
-        if self.current_df is not None:
-            td = self.current_df.attrs.get("tran_dir", "")
+        if self.state.active_df is not None:
+            td = self.state.active_df.attrs.get("tran_dir", "")
             if td and os.path.isdir(td):
                 return td
 
@@ -1552,7 +1823,7 @@ class SimifyGUI(ctk.CTk):
 
     def update_transient_plot(self, *_args):
         """Build run_ids list, resolve signals, delegate to PlotManager."""
-        if self.current_df is None:
+        if self.state.active_df is None:
             return
 
         tran_dir = self._resolve_tran_dir()
@@ -1578,8 +1849,8 @@ class SimifyGUI(ctk.CTk):
             return
 
         # Derive run_id pool from selection mode
-        df = self.current_df
-        if 'run_id' not in df.columns:
+        df = self.state.active_df
+        if "run_id" not in df.columns:
             return
         mode = self._tran_mode_var.get()
 
@@ -1697,8 +1968,8 @@ class SimifyGUI(ctk.CTk):
 
         # Build tooltip text
         lines = [f"Run ID: {hit_run_id}", f"Signal: {hit_sig}"]
-        df = self.current_df
-        if df is not None and 'run_id' in df.columns:
+        df = self.state.active_df
+        if df is not None and "run_id" in df.columns:
             try:
                 row = df[df['run_id'].astype(str).str.zfill(6) == hit_run_id]
                 if not row.empty:
@@ -1754,151 +2025,23 @@ class SimifyGUI(ctk.CTk):
         df = _dl.normalise_sim_error(df)
         df = _dl.compute_global_pass(df)
 
+        self.state.partial_df = None
+        self.state.simulation_active = False
+
         self.current_df = df
         self.current_stim = stim
+        self.state.current_df = df
+        self.state.current_stim = stim
 
         # Apply saved custom equations so derived columns are available everywhere
         self._derived_cols = self._apply_custom_equations()
+        self.state.current_df = self.current_df
 
-        total = len(self.current_df)
-        crashes = len(self.current_df[self.current_df['sim_error'] != 'None'])
-        valid_df = _dl.valid_rows(self.current_df)
-            
-        global_passed = int(self.current_df['global_pass'].sum())
-        global_yield = (global_passed / total) * 100 if total > 0 else 0
-        
-        self.lbl_total.configure(text=f"Iterations: {total}")
-        self.lbl_crashes.configure(text=f"Crashes: {crashes}")
-        
-        yield_color = "#2ecc71" if global_yield == 100 else "#f1c40f" if global_yield > 0 else "#e74c3c"
-        self.lbl_yield.configure(text=f"Global Yield: {global_yield:.1f}%", text_color=yield_color)
-            
-        def fmt(val): return "-" if pd.isna(val) or val is None else f"{val:.4g}"
-
-        failed_params = []
-        meas_cols = [] 
-        
-        for item in self.tree.get_children(): self.tree.delete(item)
-
-        for test in stim.tests:
-            for val_obj in test.value_lst:
-                p_name = val_obj.name
-                if p_name in valid_df.columns:
-                    meas_cols.append(p_name)
-                    
-                    data_col = valid_df[p_name].dropna()
-                    sim_min = data_col.min() if not data_col.empty else np.nan
-                    sim_max = data_col.max() if not data_col.empty else np.nan
-                    sim_typ = data_col.mean() if not data_col.empty else np.nan
-                    sim_std = data_col.std() if len(data_col) > 1 else 0.0
-                    
-                    v_min = getattr(val_obj, 'vmin', getattr(val_obj, 'min', None))
-                    v_max = getattr(val_obj, 'vmax', getattr(val_obj, 'max', None))
-                    
-                    cpk_vals, z_vals = [], []
-                    if sim_std > 0:
-                        if v_min is not None:
-                            cpk_vals.append(((sim_typ - v_min) / sim_std) / 3.0)
-                            z_vals.append((sim_typ - v_min) / sim_std)
-                        if v_max is not None:
-                            cpk_vals.append(((v_max - sim_typ) / sim_std) / 3.0)
-                            z_vals.append((v_max - sim_typ) / sim_std)
-                            
-                    if cpk_vals:
-                        cpk, sigma_lvl = min(cpk_vals), min(z_vals)
-                        cpk_str, sigma_str = f"{cpk:.2f}", f"{sigma_lvl:.2f}σ"
-                    else:
-                        if sim_std == 0.0 and (v_min is not None or v_max is not None):
-                            if (v_min is None or sim_typ >= v_min) and (v_max is None or sim_typ <= v_max):
-                                cpk_str, sigma_str = "INF", "INF"
-                            else: cpk_str, sigma_str = "0.00", "0.00"
-                        else: cpk_str, sigma_str = "-", "-"
-                    
-                    pass_col = f"{p_name}_pass"
-                    if pass_col in valid_df.columns and valid_df[pass_col].all():
-                        status, tags = "PASS", ('pass',)
-                    else:
-                        status, tags = "FAIL", ('fail',)
-                        failed_params.append((test, val_obj))
-                        
-                    self.tree.insert("", tk.END, values=(p_name, fmt(sim_min), fmt(sim_typ), fmt(sim_max), fmt(v_min), fmt(v_max), cpk_str, sigma_str, status), tags=tags)
-                    
-        if not meas_cols and total > 0:
-             self.tree.insert("", tk.END, values=("No matching params", "-", "-", "-", "-", "-", "-", "-", "WARN"), tags=('warn',))
-                    
-        # Compute plot column metadata via data_loader service
-        _plot_cols = _dl.compute_plot_cols(valid_df, stim)
-        self.all_plot_cols = _plot_cols.all_numeric_cols
-        self.sweep_params = _plot_cols.sweep_params
-        
-        self.group_by_dropdown.configure(values=["None"] + self.sweep_params)
-        
-        if self.group_by_var.get() not in ["None"] + self.sweep_params:
-            self.group_by_var.set("None")
-        self.on_group_by_change(self.group_by_var.get())
-        
-        # Merge measurement columns with any successfully derived columns
-        valid_derived = [c for c in self._derived_cols if c in valid_df.columns]
-        all_plot_meas = meas_cols + [c for c in valid_derived if c not in meas_cols]
-
-        if all_plot_meas:
-            self.plot_param_dropdown.configure(values=all_plot_meas)
-            if self.plot_param_var.get() not in all_plot_meas:
-                self.plot_param_var.set(all_plot_meas[0])
-            self.update_plot()
-            self.tornado_target_dropdown.configure(values=all_plot_meas)
-            if self.tornado_target_var.get() not in all_plot_meas:
-                self.tornado_target_var.set(all_plot_meas[0])
-            
-        # UI-Update für Dropdowns triggern
-        self.on_adv_mode_change(self.adv_mode_var.get())
-                    
-        for widget in self.wc_scroll.winfo_children(): widget.destroy()
-            
-        if not meas_cols and total > 0:
-            ctk.CTkLabel(self.wc_scroll, text="Loaded CSV does not match the current Datasheet specifications.", text_color="#e67e22", font=ctk.CTkFont(size=14)).pack(pady=50)
-        elif not failed_params:
-            ctk.CTkLabel(self.wc_scroll, text="All specifications met! No outliers found.", text_color="#2ecc71", font=ctk.CTkFont(size=16)).pack(pady=50)
-        else:
-            param_cols = list(stim.params.keys())
-            for test, val_obj in failed_params:
-                p_name, pass_col = val_obj.name, f"{val_obj.name}_pass"
-                failed_rows = valid_df[valid_df[pass_col] == False]
-                if failed_rows.empty: continue
-                    
-                min_fail, max_fail = failed_rows[p_name].min(), failed_rows[p_name].max()
-                worst_val, worst_idx, violation = None, None, ""
-                
-                v_min = getattr(val_obj, 'vmin', getattr(val_obj, 'min', None))
-                v_max = getattr(val_obj, 'vmax', getattr(val_obj, 'max', None))
-                
-                if v_min is not None and min_fail < v_min:
-                    worst_val, worst_idx, violation = min_fail, failed_rows[p_name].idxmin(), f"< {fmt(v_min)}"
-                elif v_max is not None and max_fail > v_max:
-                    worst_val, worst_idx, violation = max_fail, failed_rows[p_name].idxmax(), f"> {fmt(v_max)}"
-                    
-                if worst_idx is not None:
-                    worst_row = failed_rows.loc[worst_idx]
-                    card = ctk.CTkFrame(self.wc_scroll, border_width=2, border_color="#e74c3c", corner_radius=8)
-                    card.pack(fill="x", padx=10, pady=10)
-                    header = ctk.CTkFrame(card, fg_color="#e74c3c", corner_radius=0)
-                    header.pack(fill="x")
-                    ctk.CTkLabel(header, text=f"FAIL: {p_name} = {fmt(worst_val)}", font=ctk.CTkFont(weight="bold", size=14), text_color="white").pack(anchor="w", padx=15, pady=5)
-                    ctk.CTkLabel(card, text=f"Specification exceeded: {violation}", text_color="#ff9999").pack(anchor="w", padx=15, pady=(10, 5))
-                    params_text = "\n".join([f"• {k}: {worst_row[k]}" for k in param_cols if k in worst_row])
-                    ctk.CTkLabel(card, text=f"Triggering parameters:\n{params_text}", justify="left").pack(anchor="w", padx=15, pady=(0, 15))
-
-        if switch_tab:
-            self.tabs.set("Measurements") 
-            self.lbl_current_run.configure(text=f"Viewing: Latest (simulation_results)")
-            self.history_dropdown.set("Latest (simulation_results)")
-
-        # Refresh transient tab when new data is loaded
-        self._refresh_transient_signal_list()
-        if self._resolve_tran_dir():
-            self.update_transient_plot()
-
-        self._notify_multiplot()
+        self.state.data_changed.emit(
+            df=self.current_df,
+            stim=stim,
+            switch_tab=switch_tab,
+        )
 
     def _notify_multiplot(self):
         """Trigger a live refresh of the Multi-Plot Dashboard if it is open."""
@@ -1909,12 +2052,6 @@ class SimifyGUI(ctk.CTk):
         except Exception:
             self.multiplot_window = None
 
-def set_btn_start_ready(self):
-    if not self.lbl_status.cget("text").startswith("Status: Completed in"):
-        self.lbl_status.configure(text=f"Status: Ready", text_color="#2ecc71")
-    self.btn_start.configure(state="normal")
-    self.btn_stop.configure(state="disabled")
-    self.btn_refresh.configure(state="normal")
 
 def main():
     app_config.setup_logging()

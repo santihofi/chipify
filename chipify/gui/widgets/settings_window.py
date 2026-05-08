@@ -25,11 +25,13 @@ class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk) -> None:
         super().__init__(parent)
         self.title("Global Settings")
-        self.geometry("460x720")
+        self.geometry("460x860")
         self.resizable(False, False)
 
         # grab_set needs a small delay so the window is fully mapped first
         self.after(50, self.grab_set)
+
+        self._main_app = parent
 
         self._config = app_config.load_config()
         max_cores = os.cpu_count() or 1
@@ -175,6 +177,39 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color="gray", font=ctk.CTkFont(size=11)
         ).pack(anchor="w")
 
+        # ── Live plotting ─────────────────────────────────────────────────────
+        live_outer = ctk.CTkFrame(self, fg_color="transparent")
+        live_outer.pack(fill="x", padx=36, pady=(18, 0))
+        ctk.CTkLabel(
+            live_outer,
+            text="Live plotting during simulation",
+            anchor="w",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w")
+
+        self._live_plot_var = ctk.BooleanVar(value=app_config.is_live_plotting_enabled())
+        ctk.CTkCheckBox(
+            live_outer,
+            text="Enable live plotting during simulation",
+            variable=self._live_plot_var,
+            command=self._on_live_plot_toggle,
+        ).pack(anchor="w", pady=(8, 4))
+
+        throttle_row = ctk.CTkFrame(live_outer, fg_color="transparent")
+        throttle_row.pack(fill="x", pady=(4, 0))
+        ctk.CTkLabel(throttle_row, text="Plot refresh interval (ms):").pack(side="left", padx=(0, 8))
+        self._throttle_var = ctk.StringVar(value=str(app_config.get_live_throttle_ms()))
+        throttle_entry = ctk.CTkEntry(throttle_row, textvariable=self._throttle_var, width=72)
+        throttle_entry.pack(side="left")
+        throttle_entry.bind("<FocusOut>", self._on_throttle_change_evt)
+        throttle_entry.bind("<Return>", self._on_throttle_change_evt)
+        ctk.CTkLabel(
+            live_outer,
+            text="500–5000 ms (lower = more frequent redraws)",
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+        ).pack(anchor="w", pady=(4, 0))
+
         # ── Buttons ─────────────────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=36, pady=(28, 0))
@@ -193,6 +228,29 @@ class SettingsWindow(ctk.CTkToplevel):
     def _on_cores_change(self, value: float) -> None:
         self._cores_lbl.configure(text=str(int(value)))
 
+    def _on_live_plot_toggle(self) -> None:
+        app_config.save_config_key("live_plotting_enabled", bool(self._live_plot_var.get()))
+
+    def _on_throttle_change_evt(self, _evt=None) -> None:
+        try:
+            ms = max(500, min(5000, int(self._throttle_var.get())))
+        except (ValueError, TypeError):
+            ms = 1500
+        self._throttle_var.set(str(ms))
+        app_config.save_config_key("live_plot_throttle_ms", ms)
+        main = self._main_app
+        for t in getattr(main, "_all_throttles", []) or []:
+            try:
+                t.update_interval(ms)
+            except Exception:
+                pass
+        mp = getattr(main, "multiplot_window", None)
+        if mp is not None and hasattr(mp, "_live_throttle"):
+            try:
+                mp._live_throttle.update_interval(ms)
+            except Exception:
+                pass
+
     def _on_engine_change(self, choice: str) -> None:
         self._sim_engine_hint.configure(text=self._ENGINE_HINTS.get(choice, ""))
         if choice == "vacask":
@@ -208,5 +266,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self._config["vacask_netlist_source"] = self._vacask_src_var.get()
         self._config["process_start_method"] = self._proc_mode_var.get()
         self._config["chunk_size"] = self._chunk_var.get()
+        self._config["live_plotting_enabled"] = bool(self._live_plot_var.get())
+        try:
+            self._config["live_plot_throttle_ms"] = max(
+                500, min(5000, int(self._throttle_var.get()))
+            )
+        except (ValueError, TypeError):
+            self._config["live_plot_throttle_ms"] = 1500
         app_config.save_config(self._config)
         self.destroy()

@@ -17,6 +17,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from chipify.plot_manager import PlotManager
 from chipify import app_config as _app_config
+from chipify.gui.services.throttled_redraw import ThrottledRedraw
 
 # ── Shared style (mirrors gui_tk.py constants) ────────────────────────────────
 _BG       = "#000000"
@@ -590,6 +591,30 @@ class MultiPlotWindow(ctk.CTkToplevel):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        self._live_throttle = ThrottledRedraw(
+            self, self.refresh_all, _app_config.get_live_throttle_ms()
+        )
+        st = getattr(parent, "state", None)
+        if st is not None:
+            try:
+                st.on_data_chunk_added.connect(self._on_live_chunk_mp)
+                st.data_changed.connect(self._on_data_changed_mp)
+            except Exception:
+                pass
+
+    def _on_live_chunk_mp(self, **kwargs: object) -> None:
+        try:
+            if _app_config.is_live_plotting_enabled():
+                self._live_throttle.request()
+        except Exception:
+            pass
+
+    def _on_data_changed_mp(self, **kwargs: object) -> None:
+        try:
+            self._live_throttle.force_now()
+        except Exception:
+            pass
+
     # ── Layout ───────────────────────────────────────────────────────────────
 
     def _build_toolbar(self):
@@ -739,9 +764,11 @@ class MultiPlotWindow(ctk.CTkToplevel):
         Always filters out error rows per the project gotcha.
         """
         p = self._parent
-        if getattr(p, "current_df", None) is None:
+        state = getattr(p, "state", None)
+        df_src = state.active_df if state is not None else getattr(p, "current_df", None)
+        if df_src is None:
             return None
-        df = p.current_df
+        df = df_src
         valid_df = df[df["sim_error"] == "None"].copy() if "sim_error" in df.columns else df.copy()
         stim         = getattr(p, "current_stim",  None)
         sweep_params = getattr(p, "sweep_params",  [])
