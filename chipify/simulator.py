@@ -4,6 +4,7 @@ import re
 import sys
 import glob
 import shutil
+import tempfile
 import itertools
 import subprocess
 import time
@@ -19,7 +20,7 @@ except ImportError:
 
 import pandas as pd
 from tqdm import tqdm
-from jinja2 import Template
+from jinja2 import Template, StrictUndefined
 
 from chipify import settings
 from chipify import util
@@ -406,53 +407,93 @@ def _sanitise_key(name: str) -> str:
 
 
 def _parse_ascii_raw(raw_file: str) -> dict:
-    """Minimal parser for SPICE ASCII .raw files. Returns {signal_name_lower: np.ndarray}."""
+    """Parse a SPICE-format .raw file (binary or ASCII).
+
+    Handles the format ngspice and vacask both write: an ASCII header
+    (Title/Plotname/Flags/No. Variables/No. Points), a Variables section,
+    then either ``Values:`` (ASCII) or ``Binary:`` followed by little-endian
+    float64 data (or complex128 if Flags contains ``complex``).
+    """
     import numpy as np
 
     var_names: list[str] = []
-    rows: dict[str, list] = {}
     n_vars = 0
-    in_variables = False
-    in_values = False
-    pending: list[float] = []
+    n_points = 0
+    is_complex = False
 
-    with open(raw_file, "r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            ls = line.strip()
+    with open(raw_file, "rb") as fh:
+        section: "str | None" = None
+        while True:
+            line = fh.readline()
+            if not line:
+                return {}
+            ls = line.decode("utf-8", errors="replace").strip()
             lower = ls.lower()
-            if lower.startswith("no. variables:"):
-                n_vars = int(ls.split(":")[-1].strip())
+
+            if lower.startswith("flags:"):
+                is_complex = "complex" in lower
+            elif lower.startswith("no. variables:"):
+                try:
+                    n_vars = int(ls.split(":", 1)[1].strip())
+                except (ValueError, IndexError):
+                    pass
             elif lower.startswith("no. points:"):
-                pass  # informational only
+                try:
+                    n_points = int(ls.split(":", 1)[1].strip())
+                except (ValueError, IndexError):
+                    pass
             elif lower == "variables:":
-                in_variables, in_values = True, False
-            elif lower in ("values:", "binary:"):
-                in_variables, in_values = False, True
-                for nm in var_names:
-                    rows[nm] = []
-                if lower == "binary:":
-                    log.warning("Binary .raw format detected – ASCII parser cannot read it. "
-                                "Install PyOPUS for binary raw support.")
-                    return {}
-            elif in_variables:
+                section = "variables"
+            elif lower == "values:":
+                section = "ascii_values"
+                break
+            elif lower == "binary:":
+                section = "binary"
+                break
+            elif section == "variables":
+                # Variable lines: "<idx>\t<name>\t<type>"
                 parts = ls.split()
                 if len(parts) >= 2:
                     var_names.append(parts[1].lower())
-            elif in_values and n_vars > 0:
+
+        if section == "binary":
+            if n_vars <= 0 or n_points <= 0 or not var_names:
+                return {}
+            dtype = np.dtype("<c16") if is_complex else np.dtype("<f8")
+            count = n_vars * n_points
+            blob = fh.read(count * dtype.itemsize)
+            data = np.frombuffer(blob, dtype=dtype)
+            if data.size != count:
+                log.warning(
+                    "Binary .raw truncated: expected %d values (%d vars x %d points), got %d.",
+                    count, n_vars, n_points, data.size,
+                )
+                return {}
+            data = data.reshape(n_points, n_vars)
+            return {var_names[i]: data[:, i].copy()
+                    for i in range(min(n_vars, len(var_names)))}
+
+        if section == "ascii_values":
+            if n_vars <= 0:
+                return {}
+            rows: dict[str, list[float]] = {nm: [] for nm in var_names}
+            pending: list[float] = []
+            for raw_line in fh:
+                ls = raw_line.decode("utf-8", errors="replace").strip()
                 for tok in ls.split():
                     try:
                         pending.append(float(tok))
                     except ValueError:
                         pass
-                # Flush complete rows
                 while len(pending) >= n_vars:
                     row_vals = pending[:n_vars]
                     pending = pending[n_vars:]
                     for i, nm in enumerate(var_names):
                         if i < len(row_vals):
                             rows[nm].append(row_vals[i])
+            return {k: np.array(v) for k, v in rows.items() if v}
 
-    return {k: np.array(v) for k, v in rows.items()}
+    return {}
 
 
 def _read_raw_file(raw_file: str) -> "dict | None":
@@ -460,27 +501,44 @@ def _read_raw_file(raw_file: str) -> "dict | None":
     # Preferred: PyOPUS rawfile reader (handles binary + ASCII)
     try:
         from pyopus.simulator.rawfile import RawFile  # type: ignore[import]
-        rf = RawFile(raw_file)
-        out: dict = {}
-        analyses = getattr(rf, "analyses", None) or [rf]
-        for an in analyses:
-            xvec = getattr(an, "xvec", None)
-            xlabel = getattr(an, "xlabel", "time") or "time"
-            if xvec is not None:
-                out[xlabel.lower()] = xvec
-            for sv in getattr(an, "yvec", []):
-                out[sv.name.lower()] = sv.data
-        if out:
-            return out
-    except Exception:
-        pass
+    except ImportError as exc:
+        log.warning(
+            "pyopus.simulator.rawfile import failed: %s. "
+            "Vacask .raw files are typically binary (spectre format); install pyopus "
+            "to parse them. Falling back to ASCII-only parser.",
+            exc,
+        )
+    else:
+        try:
+            rf = RawFile(raw_file)
+            out: dict = {}
+            analyses = getattr(rf, "analyses", None) or [rf]
+            for an in analyses:
+                xvec = getattr(an, "xvec", None)
+                xlabel = getattr(an, "xlabel", "time") or "time"
+                if xvec is not None:
+                    out[xlabel.lower()] = xvec
+                for sv in getattr(an, "yvec", []):
+                    out[sv.name.lower()] = sv.data
+            if out:
+                return out
+            log.warning("pyopus parsed %s but produced no signals.", raw_file)
+        except Exception:
+            log.warning("pyopus failed to parse %s; trying ASCII fallback.",
+                        raw_file, exc_info=True)
 
-    # Fallback: minimal ASCII raw parser
+    # Fallback: built-in SPICE-format parser (handles binary + ASCII).
     try:
-        return _parse_ascii_raw(raw_file)
-    except Exception as exc:
-        log.warning("Could not parse raw file %s: %s", raw_file, exc)
+        parsed = _parse_ascii_raw(raw_file)
+    except Exception:
+        log.warning("Could not parse raw file %s.", raw_file, exc_info=True)
         return None
+    if not parsed:
+        log.warning("Raw file %s parsed to 0 signals — unknown format. "
+                    "Expected ngspice/vacask SPICE rawfile (Title/Variables/Binary).",
+                    raw_file)
+        return None
+    return parsed
 
 
 def _eval_measure_expr(expr: str, results: dict):
@@ -547,6 +605,8 @@ def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
     measure_exprs = getattr(test, "measure", {}) if test else {}
     value_lst = test.value_lst if test else []
 
+    log.info("vacask .raw signals: %s", sorted(results.keys()))
+
     # Persist transient waveforms so _persist_transient() can convert them to CSV
     x_present = any(k in results for k in ("time", "frequency"))
     if tran_signals and tran_out_path and x_present:
@@ -558,10 +618,23 @@ def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
 
     scalar_strs: list[str] = []
     for val_obj in value_lst:
-        # 1. Direct .raw signal lookup by value name (works with VACASK meas statements
-        #    — no measure: block needed in YAML, same format as ngspice)
-        raw_val = (results.get(val_obj.name.lower())
-                   or results.get(_sanitise_key(val_obj.name.lower())))
+        # 1. Direct .raw signal lookup by value name (works with VACASK meas
+        #    statements and direct node-voltage reads). Try a handful of
+        #    common naming variants because different raw formats label
+        #    node voltages differently (spectre: "out", ngspice: "v(out)").
+        name = val_obj.name.lower()
+        candidates = (
+            name,
+            _sanitise_key(name),
+            f"v({name})",
+            _sanitise_key(f"v({name})"),
+            f"i({name})",
+            _sanitise_key(f"i({name})"),
+        )
+        raw_val = next(
+            (results[c] for c in candidates if c in results),
+            None,
+        )
         if raw_val is not None:
             arr = np.asarray(raw_val, dtype=float)
             # Scalar meas result → use directly; vector → take last point
@@ -666,10 +739,31 @@ class VacaskSimulator(BaseSimulator):
         custom_env["OMP_NUM_THREADS"] = "1"
 
         pid = os.getpid()
-        temp_sim_file = os.path.join(settings.FAST_TMP, f"sim_{pid}_vc.sim")
-        # VACASK writes <stem>.raw beside the input file by default
-        temp_raw_file = os.path.join(settings.FAST_TMP, f"sim_{pid}_vc.raw")
-        temp_log_file = os.path.join(settings.FAST_TMP, f"sim_{pid}_vc.log")
+        # VACASK names its .raw output after the analysis (e.g. `analysis nmos
+        # op` → nmos.raw), so concurrent workers running in the same dir would
+        # clobber each other. Each invocation gets its own subdir, with the
+        # parent FAST_TMP contents symlinked in so OSDI / model loads still
+        # resolve relative to cwd.
+        workdir = tempfile.mkdtemp(prefix=f"vc_{pid}_", dir=settings.FAST_TMP)
+        temp_sim_file = os.path.join(workdir, "sim.sim")
+        temp_log_file = os.path.join(workdir, "sim.log")
+        temp_raw_file = ""  # resolved post-run by scanning workdir for *.raw
+
+        # Make staged files (osdi, libs, models) visible inside the workdir.
+        for fname in os.listdir(settings.FAST_TMP):
+            if fname == os.path.basename(workdir):
+                continue
+            src = os.path.join(settings.FAST_TMP, fname)
+            if not (os.path.isfile(src) or os.path.islink(src)):
+                continue
+            dest = os.path.join(workdir, fname)
+            try:
+                os.symlink(src, dest)
+            except OSError:
+                try:
+                    shutil.copy2(src, dest)
+                except OSError:
+                    pass
 
         with open(temp_sim_file, "w", encoding="utf-8") as fh:
             fh.write(netlist)
@@ -682,7 +776,7 @@ class VacaskSimulator(BaseSimulator):
                     stdout=log_fh,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    cwd=settings.FAST_TMP,
+                    cwd=workdir,
                     env=custom_env,
                 )
 
@@ -698,6 +792,20 @@ class VacaskSimulator(BaseSimulator):
 
                 if process.returncode != 0:
                     raise subprocess.CalledProcessError(process.returncode, process.args)
+
+            # Vacask wrote its .raw somewhere in our private workdir. Take it.
+            raw_candidates = sorted(
+                f for f in os.listdir(workdir) if f.endswith(".raw")
+            )
+            if raw_candidates:
+                temp_raw_file = os.path.join(workdir, raw_candidates[0])
+                if len(raw_candidates) > 1:
+                    log.warning("Multiple .raw files from vacask: %s — picked %s",
+                                raw_candidates, raw_candidates[0])
+            else:
+                # No .raw produced even though vacask exited 0 — preserve the
+                # log so the user can see what vacask actually did.
+                self._preserve_vacask_log(temp_log_file, reason="no_raw")
 
             # ── Primary path: scan log for MY_DATA: (same as NgspiceSimulator) ──
             # Testbenches can emit MY_DATA: via VACASK's printf command:
@@ -753,11 +861,28 @@ class VacaskSimulator(BaseSimulator):
         finally:
             if process is not None and process.poll() is None:
                 process.kill()
-            for f_path in (temp_sim_file, temp_raw_file, temp_log_file):
-                try:
-                    os.remove(f_path)
-                except OSError:
-                    pass
+            try:
+                shutil.rmtree(workdir, ignore_errors=True)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _preserve_vacask_log(temp_log_file: str, reason: str) -> str:
+        """Copy a vacask log into OUT_DIR so it survives workdir cleanup."""
+        if not os.path.exists(temp_log_file):
+            return ""
+        try:
+            os.makedirs(settings.OUT_DIR, exist_ok=True)
+            dest = os.path.join(
+                settings.OUT_DIR,
+                f"vacask_{reason}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.log",
+            )
+            shutil.copy2(temp_log_file, dest)
+            log.warning("vacask produced no .raw — saved log: %s", dest)
+            return dest
+        except Exception as exc:
+            log.warning("Could not preserve vacask log: %s", exc)
+            return ""
 
 
 def _persist_transient(tab_path: str, signals: list, dest_csv: str) -> None:
@@ -821,7 +946,7 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
         else:
             tran_out_path = ""
 
-        rendering = Template(test.template_str).render(**render_kwargs)
+        rendering = Template(test.template_str, undefined=StrictUndefined).render(**render_kwargs)
         sim_output, error_msg = engine.run(rendering, test=test, tran_out_path=tran_out_path)
 
         if error_msg:

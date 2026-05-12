@@ -79,6 +79,9 @@ class Value:
         self.vtyp = vtyp
 
     def isPass(self, val: float) -> bool:
+        import math
+        if val is None or (isinstance(val, float) and math.isnan(val)):
+            return False
         if self.vmin is not None and val < self.vmin:
             return False
         if self.vmax is not None and val > self.vmax:
