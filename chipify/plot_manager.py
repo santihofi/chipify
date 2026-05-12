@@ -6,15 +6,48 @@ from matplotlib.lines import Line2D
 import scipy.stats as stats
 from chipify import settings
 
+
+# Default palette used when no theme dict is supplied (preserves the
+# pre-theming behaviour: dark axes with white text).
+_DEFAULT_THEME: dict = {
+    "bg":          "#1a1a1a",
+    "fg":          "white",
+    "grid":        "gray",
+    "spine":       "white",
+    "legend_bg":   "#2b2b2b",
+    "legend_edge": "gray",
+    "legend_text": "white",
+    "accent":      "#3484F0",
+}
+
+
+def _resolve_theme(theme: dict | None, bg_color: str | None = None) -> dict:
+    """Return a complete theme dict, filling missing keys from defaults.
+
+    If *bg_color* is supplied (legacy callers), it overrides ``theme["bg"]``.
+    """
+    base = dict(_DEFAULT_THEME)
+    if theme:
+        base.update({k: v for k, v in theme.items() if v is not None})
+    if bg_color is not None:
+        base["bg"] = bg_color
+    return base
+
+
 class PlotManager:
     @staticmethod
-    def draw_histogram(fig, ax, canvas, valid_df, current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run):
+    def draw_histogram(fig, ax, canvas, valid_df, current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run, theme=None):
+        th = _resolve_theme(theme)
         ax.clear()
-        ax.grid(True, linestyle='--', alpha=0.3)
+        ax.set_facecolor(th["bg"])
+        ax.grid(True, linestyle='--', alpha=0.3, color=th["grid"])
+        for spine in ax.spines.values():
+            spine.set_edgecolor(th["spine"])
+        ax.tick_params(colors=th["fg"])
         title_suffix = f" grouped by {group_col}" if group_col != "None" else ""
-        ax.set_title(f"Distribution of: {param}{title_suffix}", color="white", pad=10)
-        ax.set_xlabel("Simulated Value")
-        ax.set_ylabel("Density")
+        ax.set_title(f"Distribution of: {param}{title_suffix}", color=th["fg"], pad=10)
+        ax.set_xlabel("Simulated Value", color=th["fg"])
+        ax.set_ylabel("Density", color=th["fg"])
         
         b = 'auto' if bins_val == "Auto" else int(bins_val)
         data_min, data_max = float('inf'), float('-inf')
@@ -63,7 +96,7 @@ class PlotManager:
                         label_text += f" (df={df_stat:.2g}, loc={loc:.2g}, scale={scale:.2g})"
                 except Exception: pass
 
-            counts, bins_plot, patches = ax.hist(grp_data, bins=b, density=True, color=c, alpha=0.5, edgecolor='white', linewidth=0.5, label=label_text)
+            counts, bins_plot, patches = ax.hist(grp_data, bins=b, density=True, color=c, alpha=0.5, edgecolor=th["fg"], linewidth=0.5, label=label_text)
             max_hist_height = max(counts) if len(counts) > 0 else 1.0
 
             if fit_x is not None and fit_y is not None:
@@ -162,13 +195,17 @@ class PlotManager:
             ax.set_xlim(data_min - (padding or 0.1), data_max + (padding or 0.1))
 
         if len(ax.get_legend_handles_labels()[1]) > 0:
-            ax.legend(loc='best', facecolor='#2b2b2b', edgecolor='gray')
+            leg = ax.legend(loc='best', facecolor=th["legend_bg"], edgecolor=th["legend_edge"])
+            for txt in leg.get_texts():
+                txt.set_color(th["legend_text"])
 
         fig.tight_layout()
         canvas.draw()
 
     @staticmethod
-    def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b"):
+    def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b", theme=None):
+        th = _resolve_theme(theme, bg_color=bg_color)
+        fg = th["fg"]
         if ax_dummy is None or ax_dummy not in fig.axes:
             fig.clf()
             ax = fig.add_subplot(111)
@@ -183,83 +220,89 @@ class PlotManager:
                     except Exception:
                         pass
             ax.clear()
-        ax.set_facecolor(bg_color)
+        ax.set_facecolor(th["bg"])
+        for spine in ax.spines.values():
+            spine.set_edgecolor(th["spine"])
+        ax.tick_params(colors=fg)
         sc_plot, scatter_df = None, None
 
         if mode == "Scatter Plot":
             if x_col not in valid_df.columns or y_col not in valid_df.columns: return None, None
             pass_mask = valid_df['global_pass'] == True
             colors = np.where(pass_mask, '#2ecc71', '#e74c3c')
-            
-            sc_plot = ax.scatter(valid_df[x_col], valid_df[y_col], c=colors, alpha=0.7, edgecolors='white', linewidths=0.5, picker=5)
+
+            sc_plot = ax.scatter(valid_df[x_col], valid_df[y_col], c=colors, alpha=0.7, edgecolors=fg, linewidths=0.5, picker=5)
             scatter_df = valid_df.copy()
-            
-            ax.set_xlabel(x_col, color='white')
-            ax.set_ylabel(y_col, color='white')
-            ax.set_title(f"Interactive Shmoo Plot: {y_col} vs {x_col}", color='white', pad=10)
-            ax.grid(True, linestyle='--', alpha=0.3)
+
+            ax.set_xlabel(x_col, color=fg)
+            ax.set_ylabel(y_col, color=fg)
+            ax.set_title(f"Interactive Shmoo Plot: {y_col} vs {x_col}", color=fg, pad=10)
+            ax.grid(True, linestyle='--', alpha=0.3, color=th["grid"])
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
-            
+
             legend_elements = [Line2D([0], [0], marker='o', color='w', markerfacecolor='#2ecc71', label='Pass', markersize=8),
                                Line2D([0], [0], marker='o', color='w', markerfacecolor='#e74c3c', label='Fail', markersize=8)]
-            ax.legend(handles=legend_elements, facecolor="#2b2b2b", edgecolor='gray')
+            leg = ax.legend(handles=legend_elements, facecolor=th["legend_bg"], edgecolor=th["legend_edge"])
+            for t in leg.get_texts():
+                t.set_color(th["legend_text"])
 
         elif mode == "Corner Yield Matrix":
             if x_col not in valid_df.columns or y_col not in valid_df.columns: return None, None
             if len(valid_df[x_col].unique()) > 50 or len(valid_df[y_col].unique()) > 50:
-                ax.text(0.5, 0.5, "Zu viele X/Y Werte!\nBitte wähle diskrete Sweep-Parameter.", color='white', ha='center', va='center')
+                ax.text(0.5, 0.5, "Zu viele X/Y Werte!\nBitte wähle diskrete Sweep-Parameter.", color=fg, ha='center', va='center')
                 canvas.draw()
                 return None, None
-                
+
             # Berechne den prozentualen Anteil von 'True' (Pass) pro Block
             pivot = valid_df.pivot_table(index=y_col, columns=x_col, values='global_pass', aggfunc='mean')
-            
+
             cax = ax.matshow(pivot, cmap='RdYlGn', vmin=0, vmax=1)
             cbar = fig.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
-            cbar.ax.yaxis.set_tick_params(color='white')
-            cbar.outline.set_edgecolor('gray')
-            plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
-            
+            cbar.ax.yaxis.set_tick_params(color=fg)
+            cbar.outline.set_edgecolor(th["spine"])
+            plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=fg)
+
             for i in range(len(pivot.index)):
                 for j in range(len(pivot.columns)):
                     val = pivot.iloc[i, j]
                     if not pd.isna(val):
-                        ax.text(j, i, f"{val*100:.0f}%", ha='center', va='center', color='black' if 0.3 < val < 0.7 else 'white')
-                    
+                        # Mid-range (yellow) cells need black text; saturated cells get fg
+                        ax.text(j, i, f"{val*100:.0f}%", ha='center', va='center', color='black' if 0.3 < val < 0.7 else fg)
+
             ax.set_xticks(range(len(pivot.columns)))
             ax.set_yticks(range(len(pivot.index)))
-            ax.set_xticklabels(pivot.columns, color='white')
-            ax.set_yticklabels(pivot.index, color='white')
+            ax.set_xticklabels(pivot.columns, color=fg)
+            ax.set_yticklabels(pivot.index, color=fg)
             ax.xaxis.set_ticks_position('bottom')
-            ax.set_xlabel(x_col, color='white')
-            ax.set_ylabel(y_col, color='white')
-            ax.set_title(f"Corner Yield Matrix: {y_col} vs {x_col}", color='white', pad=20)
+            ax.set_xlabel(x_col, color=fg)
+            ax.set_ylabel(y_col, color=fg)
+            ax.set_title(f"Corner Yield Matrix: {y_col} vs {x_col}", color=fg, pad=20)
 
         elif mode == "Correlation Heatmap":
             numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
             plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
             active_cols = [c for c in plot_cols if valid_df[c].nunique() > 1]
-            
+
             if len(active_cols) < 2:
-                ax.text(0.5, 0.5, "Not enough varying data for correlation map.", color='white', ha='center', va='center', transform=ax.transAxes)
+                ax.text(0.5, 0.5, "Not enough varying data for correlation map.", color=fg, ha='center', va='center', transform=ax.transAxes)
             else:
                 corr = valid_df[active_cols].corr()
                 cax = ax.matshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
                 cbar = fig.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
-                cbar.ax.yaxis.set_tick_params(color='white')
-                cbar.outline.set_edgecolor('gray')
-                plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
+                cbar.ax.yaxis.set_tick_params(color=fg)
+                cbar.outline.set_edgecolor(th["spine"])
+                plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=fg)
                 ax.set_xticks(range(len(active_cols)))
                 ax.set_yticks(range(len(active_cols)))
-                ax.set_xticklabels(active_cols, rotation=45, ha='left', color='white', fontsize=9)
-                ax.set_yticklabels(active_cols, color='white', fontsize=9)
+                ax.set_xticklabels(active_cols, rotation=45, ha='left', color=fg, fontsize=9)
+                ax.set_yticklabels(active_cols, color=fg, fontsize=9)
                 ax.xaxis.set_ticks_position('bottom')
-                ax.set_title("Parameter Correlation Matrix", color='white', pad=20)
-                
+                ax.set_title("Parameter Correlation Matrix", color=fg, pad=20)
+
         elif mode == "Sensitivity (Tornado)":
             if target == "-" or target not in valid_df.columns or current_stim is None:
-                ax.text(0.5, 0.5, "Select a target measurement first.", color='white', ha='center', va='center')
+                ax.text(0.5, 0.5, "Select a target measurement first.", color=fg, ha='center', va='center')
             else:
                 correlations = []
                 for p in list(current_stim.params.keys()):
@@ -267,22 +310,21 @@ class PlotManager:
                         if pd.api.types.is_numeric_dtype(valid_df[p]): corr = valid_df[p].corr(valid_df[target])
                         else: corr = pd.Series(pd.factorize(valid_df[p])[0]).corr(valid_df[target])
                         if not np.isnan(corr): correlations.append((p, corr))
-                        
+
                 if not correlations:
-                    ax.text(0.5, 0.5, "No varied parameters found.", color='white', ha='center', va='center')
+                    ax.text(0.5, 0.5, "No varied parameters found.", color=fg, ha='center', va='center')
                 else:
                     correlations.sort(key=lambda x: abs(x[1]))
                     labels, values = [x[0] for x in correlations], [x[1] for x in correlations]
                     colors = ['#2ecc71' if v >= 0 else '#e74c3c' for v in values]
                     ax.barh(labels, values, color=colors, edgecolor='black', linewidth=0.5, alpha=0.8)
-                    ax.axvline(0, color='gray', linestyle='-', linewidth=1)
-                    ax.set_xlabel("Correlation Impact (Sensitivity)", color='white')
-                    ax.set_title(f"Sensitivity Analysis for: {target}", color='white', pad=15)
-                    ax.tick_params(colors='white')
-            
+                    ax.axvline(0, color=th["grid"], linestyle='-', linewidth=1)
+                    ax.set_xlabel("Correlation Impact (Sensitivity)", color=fg)
+                    ax.set_ylabel("", color=fg)
+                    ax.set_title(f"Sensitivity Analysis for: {target}", color=fg, pad=15)
+                    ax.tick_params(colors=fg)
+
         elif mode == "Fail Breakdown (Pie Chart)":
-            _light = isinstance(bg_color, str) and bg_color.strip().lower() in ("white", "#fff", "#ffffff")
-            _fg    = "#222222" if _light else "white"
             pass_cols = [c for c in valid_df.columns if c.endswith('_pass') and not c.endswith('_overall_pass') and c != 'global_pass']
             fail_counts = {c.replace('_pass', ''): (valid_df[c] == False).sum() for c in pass_cols if (valid_df[c] == False).sum() > 0}
 
@@ -293,17 +335,17 @@ class PlotManager:
                 labels, sizes = list(fail_counts.keys()), list(fail_counts.values())
                 colors = plt.cm.Pastel1(np.linspace(0, 1, len(labels)))
                 explode = [0.1 if s == max(sizes) else 0 for s in sizes]
-                _edge   = "#aaaaaa" if _light else "gray"
                 patches, texts, autotexts = ax.pie(
                     sizes, explode=explode, labels=labels, colors=colors,
                     autopct='%1.1f%%', startangle=140,
-                    textprops={'color': _fg, 'fontsize': 10},
-                    wedgeprops={'edgecolor': _edge, 'linewidth': 1},
+                    textprops={'color': fg, 'fontsize': 10},
+                    wedgeprops={'edgecolor': th["spine"], 'linewidth': 1},
                 )
                 for autotext in autotexts:
+                    # Pastel slices are light — keep autopct text black for legibility.
                     autotext.set_color('black')
                     autotext.set_weight('bold')
-                ax.set_title("Fail Breakdown: Which constraints caused failures?", color=_fg, pad=20)
+                ax.set_title("Fail Breakdown: Which constraints caused failures?", color=fg, pad=20)
                 ax.axis('equal')
 
         # ── Plugin plot modes ─────────────────────────────────────────────────
@@ -312,7 +354,12 @@ class PlotManager:
                 from chipify.plugin_loader import get_plot_plugins
                 for cls in get_plot_plugins():
                     if cls.name == mode:
-                        cls().draw(fig, ax, valid_df, current_stim)
+                        plugin = cls()
+                        try:
+                            plugin.draw(fig, ax, valid_df, current_stim, theme=th)
+                        except TypeError:
+                            # Older plugins without theme kwarg — fall back gracefully.
+                            plugin.draw(fig, ax, valid_df, current_stim)
                         break
             except Exception as exc:
                 ax.text(0.5, 0.5, f"Plugin error:\n{exc}",
@@ -350,6 +397,7 @@ class PlotManager:
         pass_map: dict | None = None,
         bg_color: str = "#1a1a1a",
         equations: list | None = None,
+        theme=None,
     ) -> dict:
         """
         Overlay time-domain waveforms from per-run CSV files.
@@ -371,13 +419,15 @@ class PlotManager:
         -------
         dict mapping each plotted Line2D → (run_id, signal_name) for hover.
         """
+        th = _resolve_theme(theme, bg_color=bg_color)
+        fg = th["fg"]
         line_map: dict = {}
 
         # ── Mandatory ghost-fix (Project Brief §3) ────────────────────────────
         fig.clf()
         ax = fig.add_subplot(111)
-        ax.set_facecolor(bg_color)
-        fig.patch.set_facecolor(bg_color)
+        ax.set_facecolor(th["bg"])
+        fig.patch.set_facecolor(th["bg"])
 
         # ── Guard: nothing to plot ────────────────────────────────────────────
         if not tran_dir or not run_ids or not signals:
@@ -507,18 +557,18 @@ class PlotManager:
             return line_map
 
         # ── Axes labels ───────────────────────────────────────────────────────
-        ax.set_xlabel(f"Time ({time_unit})", color="white")
-        ax.set_ylabel("Signal Value", color="white")
+        ax.set_xlabel(f"Time ({time_unit})", color=fg)
+        ax.set_ylabel("Signal Value", color=fg)
         n_runs_drawn = len({rid for rid, _ in matched})
         ax.set_title(
             f"Transient Overlay — {n_runs_drawn} run(s) × {len(signals)} signal(s)"
             + (f"  [α={alpha:.2f}]" if n_curves > 50 else ""),
-            color="white", pad=10,
+            color=fg, pad=10,
         )
-        ax.tick_params(colors="white")
+        ax.tick_params(colors=fg)
         for spine in ax.spines.values():
-            spine.set_edgecolor("gray")
-        ax.grid(True, linestyle="--", alpha=0.2)
+            spine.set_edgecolor(th["spine"])
+        ax.grid(True, linestyle="--", alpha=0.2, color=th["grid"])
 
         # ── Legend ────────────────────────────────────────────────────────────
         proxy_handles = []
@@ -538,8 +588,8 @@ class PlotManager:
                 Line2D([0], [0], color=fail_color, linewidth=1.5, label="Failing run")
             )
         ax.legend(handles=proxy_handles, loc="best",
-                  facecolor="#2b2b2b", edgecolor="gray",
-                  labelcolor="white", fontsize=9)
+                  facecolor=th["legend_bg"], edgecolor=th["legend_edge"],
+                  labelcolor=th["legend_text"], fontsize=9)
 
         fig.tight_layout()
         canvas.draw()

@@ -61,3 +61,30 @@ def apply_theme(mode: str) -> None:
     CURRENT_MODE = mode
     background_color = BACKGROUND_COLOR
     panel_color = PANEL_COLOR
+
+
+def plot_theme() -> dict:
+    """
+    Return the active matplotlib palette as a dict.
+
+    Stable keys (suitable for use in PlotManager and plot plugins):
+        bg          – axes/figure facecolor
+        fg          – primary text + tick + label colour
+        grid        – grid line colour
+        spine       – axis spine colour
+        legend_bg   – legend facecolor
+        legend_edge – legend frame colour
+        legend_text – legend text colour
+        accent      – primary highlight colour (e.g. selected items)
+    """
+    is_light = CURRENT_MODE == "light"
+    return {
+        "bg":          MPL_BG_COLOR,
+        "fg":          MPL_FG_COLOR,
+        "grid":        "#999999" if is_light else "gray",
+        "spine":       MPL_FG_COLOR,
+        "legend_bg":   "#dbdbdb" if is_light else "#2b2b2b",
+        "legend_edge": "#888888" if is_light else "gray",
+        "legend_text": MPL_FG_COLOR,
+        "accent":      "#3484F0",
+    }

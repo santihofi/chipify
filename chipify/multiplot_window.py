@@ -40,6 +40,15 @@ def _theme_colors():
     except Exception:
         return _BG, _PANEL, _PANEL, "white"
 
+
+def _plot_theme():
+    """Return the active matplotlib palette dict."""
+    try:
+        from chipify.gui import theme as _t
+        return _t.plot_theme()
+    except Exception:
+        return None
+
 _ALL_MODES = [
     "Histogram",
     "Scatter Plot",
@@ -445,6 +454,7 @@ class PlotCell(ctk.CTkFrame):
         mode = self._mode.get()
 
         _, _, mpl_bg, _ = _theme_colors()
+        plot_th = _plot_theme()
 
         # Ghost-safe axis rebuild (see context.md §3 "Matplotlib Ghosting")
         self._fig.clf()
@@ -476,6 +486,7 @@ class PlotCell(ctk.CTkFrame):
                     bins_val=self._bins.get(),
                     do_zoom=self._do_zoom.get(),
                     comp_run=self._compare.get(),
+                    theme=plot_th,
                 )
                 return   # draw_histogram already calls canvas.draw()
 
@@ -536,6 +547,7 @@ class PlotCell(ctk.CTkFrame):
                     pass_map=pass_map,
                     bg_color=mpl_bg,
                     equations=equations,
+                    theme=plot_th,
                 )
                 return   # draw_transient_plot already calls canvas.draw()
 
@@ -551,6 +563,7 @@ class PlotCell(ctk.CTkFrame):
                 y_col=self._y_col.get(),
                 target=self._target.get(),
                 bg_color=mpl_bg,
+                theme=plot_th,
             )
             if mode == "Scatter Plot" and self._sc_plot is not None:
                 self._create_scatter_annot()

@@ -399,6 +399,14 @@ def _add_table(pdf: PdfPages, rows: list, valid_df: pd.DataFrame, stim):
                 pie_y = area_bottom + (area_height - pie_h) / 2.0
                 try:
                     pie_ax = fig.add_axes([0.24, pie_y, 0.52, pie_h])
+                    # PDF export always renders against a white page — pin a print-friendly
+                    # palette regardless of which GUI theme is active.
+                    _pdf_theme = {
+                        "bg": "white", "fg": "#222222",
+                        "grid": "#cccccc", "spine": "#888888",
+                        "legend_bg": "white", "legend_edge": "#888888",
+                        "legend_text": "#222222", "accent": "#3484F0",
+                    }
                     PlotManager.draw_adv_plot(
                         fig=fig,
                         ax_dummy=pie_ax,
@@ -410,6 +418,7 @@ def _add_table(pdf: PdfPages, rows: list, valid_df: pd.DataFrame, stim):
                         y_col="-",
                         target="-",
                         bg_color="white",
+                        theme=_pdf_theme,
                     )
                     pie_ax.set_title("")
                 except Exception:

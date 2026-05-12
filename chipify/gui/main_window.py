@@ -625,10 +625,13 @@ class SimifyGUI(ctk.CTk):
         self._eq_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
         self._eq_scroll.grid_columnconfigure(1, weight=1)
 
+        # CTkTextbox accepts ``("light", "dark")`` tuples for fg/text colours
+        # so the log box auto-tracks the appearance mode.
         self._eq_log = ctk.CTkTextbox(
             self._scalar_eq_card, height=80, state="disabled",
             font=ctk.CTkFont(family="Courier", size=12),
-            fg_color="#0d0d0d", text_color="#b0b0b0",
+            fg_color=("#f0f0f0", "#0d0d0d"),
+            text_color=("#333333", "#b0b0b0"),
         )
         self._eq_log.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 0))
 
@@ -671,7 +674,8 @@ class SimifyGUI(ctk.CTk):
         self._tran_eq_log = ctk.CTkTextbox(
             self._tran_eq_card, height=80, state="disabled",
             font=ctk.CTkFont(family="Courier", size=12),
-            fg_color="#0d0d0d", text_color="#b0b0b0",
+            fg_color=("#f0f0f0", "#0d0d0d"),
+            text_color=("#333333", "#b0b0b0"),
         )
         self._tran_eq_log.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 0))
 
@@ -1555,7 +1559,8 @@ class SimifyGUI(ctk.CTk):
                 self.lbl_kpi_cpk.configure(text="Cpk: —", text_color="white")
                 self.lbl_kpi_sigma.configure(text="σ: —", text_color="white")
         
-        PlotManager.draw_histogram(self.fig, self.ax, self.canvas, valid_df, self.current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run)
+        from chipify.gui import theme as _theme_mod
+        PlotManager.draw_histogram(self.fig, self.ax, self.canvas, valid_df, self.current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run, theme=_theme_mod.plot_theme())
 
     def setup_adv_analytics_tab(self):
         self.tab_adv.grid_columnconfigure(0, weight=1)
@@ -1707,9 +1712,12 @@ class SimifyGUI(ctk.CTk):
         y_col = self.scatter_y_var.get()
         target = self.tornado_target_var.get()
         
+        from chipify.gui import theme as _theme_mod
+        _pt = _theme_mod.plot_theme()
         self.sc_plot, self.scatter_df = PlotManager.draw_adv_plot(
             self.adv_fig, None,  # always clf + tight_layout; prevents axis-shrink ghosting
-            self.adv_canvas, valid_df, self.current_stim, mode, x_col, y_col, target, bg_color=panel_color
+            self.adv_canvas, valid_df, self.current_stim, mode, x_col, y_col, target,
+            bg_color=_pt["bg"], theme=_pt,
         )
         
         if mode == "Scatter Plot":
@@ -1892,11 +1900,14 @@ class SimifyGUI(ctk.CTk):
         if self.app_state.active_df is None:
             return
 
+        from chipify.gui import theme as _theme_mod
+        _pt = _theme_mod.plot_theme()
+
         tran_dir = self._resolve_tran_dir()
         if not tran_dir:
             self._tran_line_map = PlotManager.draw_transient_plot(
                 self.tran_fig, self.tran_canvas, "", [], [],
-                bg_color=panel_color,
+                bg_color=_pt["bg"], theme=_pt,
             )
             self._tran_annot = None
             return
@@ -1909,7 +1920,7 @@ class SimifyGUI(ctk.CTk):
         if not selected_signals:
             self._tran_line_map = PlotManager.draw_transient_plot(
                 self.tran_fig, self.tran_canvas, tran_dir, [], [],
-                bg_color=panel_color,
+                bg_color=_pt["bg"], theme=_pt,
             )
             self._tran_annot = None
             return
@@ -1954,7 +1965,7 @@ class SimifyGUI(ctk.CTk):
             self.tran_fig, self.tran_canvas, tran_dir,
             run_ids, selected_signals,
             pass_map=pass_map,
-            bg_color=panel_color,
+            bg_color=_pt["bg"], theme=_pt,
             equations=equations,
         )
         # Store original line properties for hover highlight/restore.
@@ -2098,6 +2109,21 @@ class SimifyGUI(ctk.CTk):
                 except Exception:
                     pass
 
+        # CTkScrollableFrame's inner canvas does not always honour an explicit
+        # ``fg_color="transparent"`` — force it to the panel colour so the
+        # tab content area no longer shows the previous appearance's bg.
+        for _sf in (
+            getattr(self, "editor_scroll", None),
+            getattr(self, "wc_scroll", None),
+            getattr(self, "_eq_scroll", None),
+            getattr(self, "_tran_eq_scroll", None),
+        ):
+            if _sf is not None:
+                try:
+                    _sf.configure(fg_color=panel_fg)
+                except Exception:
+                    pass
+
         # Refresh module globals so dynamically-rebuilt UI (e.g. params_frame
         # in build_editor_ui) picks up the new colours on its next rebuild.
         background_color = bg_fg
@@ -2132,6 +2158,30 @@ class SimifyGUI(ctk.CTk):
                     spine.set_edgecolor(mpl_fg)
             canvas.get_tk_widget().configure(background=mpl_bg)
             canvas.draw()
+
+        # ── Native tk widgets that aren't appearance-aware ───────────────────
+        # tk.Listbox (transient signals list) and tk.Menu (treeview context menu)
+        # take hex colours and stay frozen unless we reconfigure them.
+        if mode == "light":
+            lb_bg, lb_fg = "#ffffff", "#000000"
+            menu_bg, menu_fg = "#f5f5f5", "#000000"
+        else:
+            lb_bg, lb_fg = panel_fg, "white"
+            menu_bg, menu_fg = panel_fg, "white"
+        if hasattr(self, "_tran_sig_lb"):
+            try:
+                self._tran_sig_lb.configure(bg=lb_bg, fg=lb_fg,
+                                            selectbackground="#3484F0",
+                                            selectforeground="white")
+            except Exception:
+                pass
+        if hasattr(self, "_tree_menu"):
+            try:
+                self._tree_menu.configure(bg=menu_bg, fg=menu_fg,
+                                          activebackground="#3484F0",
+                                          activeforeground="white")
+            except Exception:
+                pass
 
         # Propagate to the Multi-Plot Dashboard if it is currently open.
         mp = getattr(self, "multiplot_window", None)

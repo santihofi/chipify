@@ -108,6 +108,8 @@ class PlotPlugin:
         ax: "Axes",
         valid_df: "pd.DataFrame",
         stim: Any,
+        *,
+        theme: dict | None = None,
     ) -> None:
         """
         Draw onto *ax* inside *fig*.
@@ -122,6 +124,13 @@ class PlotPlugin:
             ``pd.DataFrame`` containing only rows where ``sim_error == 'None'``.
         stim:
             ``chipify.util.Stimuli`` — the parsed YAML test specification.
+        theme:
+            Optional palette dict for the active appearance theme. Keys:
+            ``bg``, ``fg``, ``grid``, ``spine``, ``legend_bg``, ``legend_edge``,
+            ``legend_text``, ``accent``. Plugins that ignore *theme* will draw
+            with matplotlib's current rcParams. Plugins that omit the kwarg
+            from their signature continue to work (the host calls via
+            try/except fallback).
         """
         ax.text(
             0.5, 0.5, f"Plugin '{self.name}' has no draw() implementation.",
