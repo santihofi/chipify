@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast; ast.parse\\(open\\(r'd:\\\\designs\\\\chipify\\\\chipify\\\\simulator.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+    ]
+  }
+}

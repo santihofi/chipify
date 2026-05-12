@@ -85,39 +85,151 @@ def stage_files_to_ram() -> None:
                     log.warning("Could not stage %s: %s", filename, exc)
 
 
-def run_xschem(xschem_file: str) -> None:
-    """Generate a SPICE netlist via Xschem. Respects abort flag."""
-    log.info("run_xschem: %s", xschem_file)
+XSCHEM_DEFAULT_TIMEOUT_SEC = 60
+
+
+def _read_log_tail(log_path: str, n_lines: int = 60) -> str:
+    try:
+        with open(log_path, "r") as lf:
+            return "".join(lf.readlines()[-n_lines:]).strip()
+    except OSError:
+        return "<log unavailable>"
+
+
+_XSCHEM_NETLIST_EXTS = (".spice", ".sim", ".spectre", ".scs", ".spc", ".sp", ".cdl", ".cir")
+
+
+def _snapshot_dir(path: str) -> set:
+    try:
+        return set(os.listdir(path))
+    except OSError:
+        return set()
+
+
+def run_xschem(
+    xschem_file: str,
+    netlist_mode: str = "spice",
+    timeout_sec: int = XSCHEM_DEFAULT_TIMEOUT_SEC,
+) -> None:
+    """Generate a netlist from a schematic via Xschem in batch mode.
+
+    netlist_mode:
+      - "spice"   : ngspice-compatible netlist (final file: <stem>.spice)
+      - "spectre" : Spectre-syntax netlist for VACASK (final file: <stem>.sim)
+
+    Xschem's output extension depends on the build (often <stem>.spice
+    regardless of netlist_type, sometimes .spectre or .scs). We snapshot the
+    output dir before/after, take whatever new netlist xschem wrote, and
+    rename it to the caller's expected name.
+    """
+    mode = (netlist_mode or "spice").strip().lower()
+    if mode not in ("spice", "spectre"):
+        raise ValueError(f"Unknown netlist_mode: {netlist_mode!r}")
+    log.info("run_xschem: %s (mode=%s)", xschem_file, mode)
+
+    stem = os.path.splitext(os.path.basename(xschem_file))[0]
+    expected_ext = ".sim" if mode == "spectre" else ".spice"
+    out_file = os.path.join(settings.FAST_TMP, stem + expected_ext)
+    log_path = os.path.join(settings.FAST_TMP, stem + ".xschem.log")
+
+    # `-s` (simulate) triggers xschem to invoke the simulator binary after
+    # netlisting. For spice that's ngspice (installed, harmless because -q
+    # makes xschem quit). For spectre that would try to invoke a missing
+    # `spectre` binary, so skip it.
+    cmd = ['xschem', '-n']
+    if mode == "spice":
+        cmd.append('-s')
+    else:
+        # `--spectre` sets netlist_type=spectre. We tried `-r script.tcl` here
+        # instead but xschem with `-r ... -q` quits after the script and never
+        # loads the positional schematic.
+        cmd.append('--spectre')
+    # -q (quit after batch) is mandatory — without it xschem stays open and
+    # never returns. -x suppresses the X server attach.
+    cmd += ['-q', '-x', '-o', settings.FAST_TMP, xschem_file]
+
+    before = _snapshot_dir(settings.FAST_TMP)
+
     process = None
     try:
-        process = subprocess.Popen(
-            ['xschem', '-n', '-s', '-q', '-x', '-o', settings.FAST_TMP, xschem_file],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=settings.WORK_DIR,
-        )
-        log.debug("Xschem PID=%d", process.pid)
+        with open(log_path, "w") as log_fh:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=settings.WORK_DIR,
+            )
+            log.info("Xschem PID=%d cmd=%s", process.pid, ' '.join(cmd))
+            start = time.monotonic()
+            timed_out = False
+            while process.poll() is None:
+                if _is_aborted():
+                    process.kill()
+                    raise InterruptedError("Aborted during Xschem netlist generation.")
+                if time.monotonic() - start > timeout_sec:
+                    process.kill()
+                    try:
+                        process.wait(timeout=5)
+                    except Exception:
+                        pass
+                    timed_out = True
+                    break
+                time.sleep(0.2)
 
-        while process.poll() is None:
-            if _is_aborted():
-                process.kill()
-                log.info("Xschem killed due to abort flag (PID=%d).", process.pid)
-                raise InterruptedError("Aborted during Xschem netlist generation.")
-            time.sleep(0.2)
+        if timed_out:
+            tail = _read_log_tail(log_path)
+            log.error(
+                "Xschem timed out after %ds. cmd=%s\n--- xschem log tail (%s) ---\n%s\n--- end log tail ---",
+                timeout_sec, ' '.join(cmd), log_path, tail,
+            )
+            raise RuntimeError(
+                f"Xschem netlist generation timed out ({mode}, {timeout_sec}s). "
+                f"See {log_path}. log_tail={tail}"
+            )
+
+        after = _snapshot_dir(settings.FAST_TMP)
+        new_files = (after - before) - {os.path.basename(log_path)}
+        netlist_files = [f for f in new_files
+                         if any(f.lower().endswith(e) for e in _XSCHEM_NETLIST_EXTS)]
+        # Prefer a file whose basename matches our stem.
+        preferred = [f for f in netlist_files if os.path.splitext(f)[0] == stem]
+        chosen = (preferred[0] if preferred
+                  else (netlist_files[0] if netlist_files else ""))
+
+        if not chosen:
+            tail = _read_log_tail(log_path)
+            raise RuntimeError(
+                f"Xschem ran (rc={process.returncode}) but wrote no netlist file. "
+                f"New files in {settings.FAST_TMP}: {sorted(new_files) or '<none>'}. "
+                f"See {log_path}. log_tail={tail}"
+            )
+
+        produced = os.path.join(settings.FAST_TMP, chosen)
+        # Normalize whatever xschem wrote to the caller's expected filename.
+        if produced != out_file:
+            shutil.move(produced, out_file)
+            log.info("Renamed xschem output %s → %s", chosen, os.path.basename(out_file))
 
         if process.returncode != 0:
-            stderr = process.stderr.read() if process.stderr else ""
-            log.error("Xschem failed (rc=%d): %s", process.returncode, stderr)
-            sys.exit(1)
-
-        log.info("Xschem finished OK.")
+            log.warning(
+                "Xschem returned rc=%d but produced %s. Continuing.",
+                process.returncode, out_file,
+            )
+        log.info("Xschem netlist generated OK (%s).", mode)
+        try:
+            os.remove(log_path)
+        except OSError:
+            pass
+        return
 
     except InterruptedError:
         raise
+    except RuntimeError:
+        raise
     except Exception as exc:
-        log.exception("Unexpected error in run_xschem: %s", exc)
-        sys.exit(1)
+        raise RuntimeError(f"Xschem netlist generation failed ({mode}): {exc}") from exc
     finally:
         if process is not None and process.poll() is None:
             try:
@@ -237,76 +349,6 @@ def get_simulator_engine(simulator_name: str) -> BaseSimulator:
 
 
 # ── VACASK helpers ─────────────────────────────────────────────────────────────
-
-def _run_xschem_vacask(xschem_file: str) -> None:
-    """Generate a VACASK .sim netlist via Xschem using Spectre-syntax netlist output.
-
-    Uses ``--spectre`` (supported by all recent Xschem builds) which produces
-    the Spectre-like syntax that VACASK expects.  The ``--simulator`` flag is
-    intentionally avoided because many container builds do not support it.
-    """
-    log.info("run_xschem_vacask: %s", xschem_file)
-    process = None
-    sim_file = os.path.join(
-        settings.FAST_TMP,
-        os.path.splitext(os.path.basename(xschem_file))[0] + ".sim",
-    )
-    last_error = ""
-    # Some xschem builds return rc=1 in batch mode despite writing a valid netlist.
-    # Try both with and without -q, then accept success if the .sim file exists.
-    command_variants = [
-        ['xschem', '-n', '--spectre', '-q', '-x', '-o', settings.FAST_TMP, xschem_file],
-        ['xschem', '-n', '--spectre', '-x', '-o', settings.FAST_TMP, xschem_file],
-    ]
-    try:
-        for cmd in command_variants:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=settings.WORK_DIR,
-            )
-            while process.poll() is None:
-                if _is_aborted():
-                    process.kill()
-                    raise InterruptedError("Aborted during Xschem VACASK netlist generation.")
-                time.sleep(0.2)
-
-            stdout = process.stdout.read() if process.stdout else ""
-            stderr = process.stderr.read() if process.stderr else ""
-
-            if process.returncode == 0 and os.path.exists(sim_file):
-                log.info("Xschem VACASK netlist generated OK.")
-                return
-
-            if os.path.exists(sim_file):
-                log.warning(
-                    "Xschem returned rc=%d but produced %s. Continuing.",
-                    process.returncode, sim_file,
-                )
-                return
-
-            last_error = (
-                f"cmd={' '.join(cmd)} rc={process.returncode} "
-                f"stdout={stdout.strip()} stderr={stderr.strip()}"
-            )
-
-        raise RuntimeError(
-            f"Xschem VACASK netlist generation failed. Last attempt: {last_error}"
-        )
-    except InterruptedError:
-        raise
-    except Exception as exc:
-        raise RuntimeError(f"Xschem VACASK netlist generation failed: {exc}") from exc
-    finally:
-        if process is not None and process.poll() is None:
-            try:
-                process.kill()
-                process.wait(timeout=5)
-            except Exception:
-                pass
-
 
 def _run_ng2vc(spice_file: str, sim_file: str) -> None:
     """Convert an ngspice netlist to VACASK .sim format using the ng2vc converter.
@@ -560,19 +602,10 @@ class VacaskSimulator(BaseSimulator):
             sim_file = os.path.join(settings.FAST_TMP, test.tb_path + ".sim")
             _run_ng2vc(spice_file, sim_file)
         else:
-            # Preferred path: Xschem Spectre netlist directly consumable by VACASK.
-            # If this fails (xschem build quirks), fall back to ng2vc conversion.
+            # User picked xschem: produce the Spectre netlist directly via xschem.
+            # No silent fallback — switch the setting to "ng2vc" to opt into that path.
             sim_file = os.path.join(settings.FAST_TMP, test.tb_path + ".sim")
-            try:
-                _run_xschem_vacask(tb_path)
-            except Exception as exc:
-                log.warning(
-                    "Direct Xschem→VACASK netlist failed (%s). Falling back to ng2vc.",
-                    exc,
-                )
-                run_xschem(tb_path)
-                spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
-                _run_ng2vc(spice_file, sim_file)
+            run_xschem(tb_path, netlist_mode="spectre")
 
         with open(sim_file, "r", encoding="utf-8") as fh:
             netlist = fh.read()
