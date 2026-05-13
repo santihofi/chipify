@@ -140,35 +140,46 @@ def run_xschem(
     out_file = os.path.join(settings.FAST_TMP, stem + expected_ext)
     log_path = os.path.join(settings.FAST_TMP, stem + ".xschem.log")
 
-    # `-s` (simulate) triggers xschem to invoke the simulator binary after
-    # netlisting. For spice that's ngspice (installed, harmless because -q
-    # makes xschem quit). For spectre that would try to invoke a missing
-    # `spectre` binary, so skip it.
+    # `-n` alone doesn't always trigger the netlist write on every xschem
+    # build (observed on 3.4.8RC: schematic loads, "Netlist mode: <default>"
+    # is printed, then xschem exits rc=0 with no file). The explicit
+    # `--spice` / `--spectre` format flag is what reliably both sets
+    # netlist_type and triggers the action.
+    # `-s` (simulate) is omitted: chipify runs the simulator itself.
     cmd = ['xschem', '-n']
-    if mode == "spice":
-        cmd.append('-s')
-    else:
-        # `--spectre` sets netlist_type=spectre. We tried `-r script.tcl` here
-        # instead but xschem with `-r ... -q` quits after the script and never
-        # loads the positional schematic.
+    if mode == "spectre":
         cmd.append('--spectre')
+    else:
+        cmd.append('--spice')
     # -q (quit after batch) is mandatory — without it xschem stays open and
     # never returns. -x suppresses the X server attach.
     cmd += ['-q', '-x', '-o', settings.FAST_TMP, xschem_file]
 
     before = _snapshot_dir(settings.FAST_TMP)
+    start_ts = time.time()
 
     process = None
+    log.info("Xschem env: HOME=%s XSCHEM_SHAREDIR=%s PATH=%s cwd=%s",
+             os.environ.get("HOME"), os.environ.get("XSCHEM_SHAREDIR"),
+             os.environ.get("PATH", "")[:200], settings.PROJECT_ROOT)
     try:
         with open(log_path, "w") as log_fh:
             process = subprocess.Popen(
                 cmd,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
                 text=True,
-                cwd=settings.WORK_DIR,
+                cwd=settings.PROJECT_ROOT,
             )
+            # Send EOF immediately so xschem doesn't block on / get confused by
+            # an inherited stdin handle (Qt GUI parents often hand the child a
+            # closed or non-readable stdin). This is the portable replacement
+            # for stdin=DEVNULL, which fails in containers without /dev/null.
+            try:
+                process.stdin.close()
+            except Exception:
+                pass
             log.info("Xschem PID=%d cmd=%s", process.pid, ' '.join(cmd))
             start = time.monotonic()
             timed_out = False
@@ -197,28 +208,62 @@ def run_xschem(
                 f"See {log_path}. log_tail={tail}"
             )
 
-        after = _snapshot_dir(settings.FAST_TMP)
-        new_files = (after - before) - {os.path.basename(log_path)}
-        netlist_files = [f for f in new_files
-                         if any(f.lower().endswith(e) for e in _XSCHEM_NETLIST_EXTS)]
-        # Prefer a file whose basename matches our stem.
-        preferred = [f for f in netlist_files if os.path.splitext(f)[0] == stem]
-        chosen = (preferred[0] if preferred
-                  else (netlist_files[0] if netlist_files else ""))
+        # Find anything xschem wrote: any netlist-extension file in FAST_TMP
+        # or PROJECT_ROOT whose mtime is at/after start_ts. mtime-based
+        # detection is more reliable than name-diff (catches overwrites of
+        # files that already existed in the before-snapshot).
+        def _modified_since(path: str, since: float) -> list:
+            out = []
+            try:
+                entries = os.scandir(path)
+            except OSError:
+                return out
+            with entries:
+                for e in entries:
+                    try:
+                        if not e.is_file(follow_symlinks=False):
+                            continue
+                        if e.stat(follow_symlinks=False).st_mtime >= since - 1.0:
+                            out.append(e.path)
+                    except OSError:
+                        continue
+            return out
 
-        if not chosen:
+        # Scan both FAST_TMP (where -o points) and PROJECT_ROOT (cwd) just in
+        # case xschem wrote relative to cwd despite the -o flag.
+        scan_dirs = [settings.FAST_TMP, settings.PROJECT_ROOT]
+        recent_files = []
+        for d in scan_dirs:
+            recent_files += _modified_since(d, start_ts)
+
+        netlist_files = [p for p in recent_files
+                         if any(p.lower().endswith(e) for e in _XSCHEM_NETLIST_EXTS)]
+        preferred = [p for p in netlist_files
+                     if os.path.splitext(os.path.basename(p))[0] == stem]
+        chosen_path = (preferred[0] if preferred
+                       else (netlist_files[0] if netlist_files else ""))
+
+        log.info("xschem post-run scan: recent_files=%s netlist_files=%s chosen=%s",
+                 [os.path.relpath(p) for p in recent_files],
+                 [os.path.relpath(p) for p in netlist_files],
+                 os.path.relpath(chosen_path) if chosen_path else "<none>")
+
+        if not chosen_path:
             tail = _read_log_tail(log_path)
+            after = _snapshot_dir(settings.FAST_TMP)
             raise RuntimeError(
                 f"Xschem ran (rc={process.returncode}) but wrote no netlist file. "
-                f"New files in {settings.FAST_TMP}: {sorted(new_files) or '<none>'}. "
+                f"recent_files={recent_files}. "
+                f"FAST_TMP contents: {sorted(after)}. "
                 f"See {log_path}. log_tail={tail}"
             )
 
-        produced = os.path.join(settings.FAST_TMP, chosen)
+        produced = chosen_path
         # Normalize whatever xschem wrote to the caller's expected filename.
         if produced != out_file:
             shutil.move(produced, out_file)
-            log.info("Renamed xschem output %s → %s", chosen, os.path.basename(out_file))
+            log.info("Moved xschem output %s -> %s",
+                     os.path.relpath(produced), out_file)
 
         if process.returncode != 0:
             log.warning(
