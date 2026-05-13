@@ -1072,11 +1072,27 @@ def _resolve_chunk_size(cfg, total_tasks, num_cores):
         return max(1, min(16, total_tasks // (num_cores * 8) if num_cores > 0 else 1))
 
 
-def generate_templates(stim, engine: BaseSimulator) -> None:
+def generate_templates(stim, engine: BaseSimulator,
+                       templates_dir: str = "") -> None:
+    """Populate ``test.template_str`` for every test in *stim*.
+
+    If *templates_dir* is set, read pre-rendered xschem outputs from
+    ``<templates_dir>/<safe_tb_path>.spice`` (``.sim`` for vacask) instead of
+    invoking xschem locally. Used by chipify-cli when running on a remote
+    server via RemoteDispatcher — xschem already produced the templates on
+    the local host.
+    """
+    ext = ".sim" if engine.name == "vacask" else ".spice"
     for test in stim.tests:
         if _is_aborted():
             raise InterruptedError("Aborted before netlist generation.")
-        test.template_str = engine.generate_test_template(test)
+        if templates_dir:
+            safe = test.tb_path.replace("/", "__").replace("\\", "__")
+            fp = os.path.join(templates_dir, safe + ext)
+            with open(fp, "r", encoding="utf-8") as fh:
+                test.template_str = fh.read()
+        else:
+            test.template_str = engine.generate_test_template(test)
 
 
 def generate_cases(stim) -> list:
@@ -1097,7 +1113,8 @@ def _assemble_result_df(rows: list, tran_dir: str) -> pd.DataFrame:
     return df
 
 
-def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None):
+def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
+            yaml_path: str = "", templates_dir: str = ""):
     """
     Main simulation entry point.
 
@@ -1112,6 +1129,13 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None):
         If set, called with incremental row batches according to
         ``live_plot_emit_stride`` in settings — omit passing this when live
         plotting is disabled so the sweep stays at baseline CPU cost.
+    yaml_path:
+        Absolute path to the datasheet YAML, required when ``compute_target``
+        is ``"remote"``. Ignored for local runs.
+    templates_dir:
+        When set, skip xschem and load pre-rendered Jinja2 templates from
+        this directory. Set by chipify-cli's ``--templates-dir`` flag when
+        the CLI is invoked on a remote host by RemoteDispatcher.
     """
     pool = None
     log.info("run_sim() started. Testbenches: %d", len(stim.tests))
@@ -1129,10 +1153,52 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None):
         engine = get_simulator_engine(simulator_name)
         log.info("Selected simulator engine: %s", engine.name)
 
+        # ── Remote dispatch branch ───────────────────────────────────────────
+        # `templates_dir` being set means we are *already* running on the remote
+        # host (chipify-cli was invoked with --templates-dir) — never recurse.
+        if cfg.get("compute_target", "local") == "remote" and not templates_dir:
+            if not yaml_path:
+                log.error(
+                    "compute_target=remote but no yaml_path supplied to run_sim()."
+                )
+                return None
+            try:
+                from chipify.remote_dispatcher import (
+                    RemoteDispatcher, RemoteDispatcherError,
+                )
+            except ImportError as exc:
+                log.error("Remote dispatcher unavailable: %s", exc)
+                return None
+            try:
+                with RemoteDispatcher(
+                    host=cfg.get("remote_host", ""),
+                    username=cfg.get("remote_user", ""),
+                    key_path=cfg.get("remote_key_path", ""),
+                    remote_work_dir=cfg.get(
+                        "remote_work_dir", "/tmp/chipify_remote"
+                    ),
+                    port=int(cfg.get("remote_port", 22) or 22),
+                    remote_chipify_cmd=cfg.get(
+                        "remote_chipify_cmd", "chipify-cli"
+                    ),
+                ) as disp:
+                    return disp.run(
+                        stim,
+                        yaml_path=yaml_path,
+                        simulator_name=engine.name,
+                        progress_callback=progress_callback,
+                    )
+            except RemoteDispatcherError as exc:
+                log.error("Remote dispatch failed: %s", exc)
+                return None
+            except InterruptedError:
+                log.info("Remote run aborted by user.")
+                return None
+
         if _is_aborted():
             raise InterruptedError("Aborted before template generation.")
         log.info("Phase 2/3: generating Xschem templates...")
-        generate_templates(stim, engine)
+        generate_templates(stim, engine, templates_dir=templates_dir)
 
         if _is_aborted():
             raise InterruptedError("Aborted before RAM staging.")

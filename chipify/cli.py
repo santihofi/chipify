@@ -36,14 +36,35 @@ def _json_summary(df, stim, yaml_name: str, duration_s: float) -> dict:
     }
 
 
+def _make_progress_stream_cb():
+    """Return a progress_callback that emits 'PROGRESS: <done> <total>' to stdout.
+
+    Used by --progress-stream when chipify-cli is invoked over SSH by
+    RemoteDispatcher; the local side tails stdout for these lines to drive
+    the GUI progress bar.
+    """
+    def _cb(current: int, total: int) -> None:
+        print(f"PROGRESS: {current} {total}", flush=True)
+    return _cb
+
+
 def _run_single(yaml_path: str, *, json_out: bool = False,
-                simulator_override: str | None = None) -> dict | None:
+                simulator_override: str | None = None,
+                templates_dir: str | None = None,
+                progress_stream: bool = False) -> dict | None:
     """Run simulation for one yaml file. Returns summary dict or None on failure."""
     import time
     print(f"[*] Loading configuration: {os.path.basename(yaml_path)}")
     stim = util.Stimuli(yaml_path)
     t0 = time.perf_counter()
-    df = simulator.run_sim(stim, simulator=simulator_override)
+    progress_cb = _make_progress_stream_cb() if progress_stream else None
+    df = simulator.run_sim(
+        stim,
+        simulator=simulator_override,
+        yaml_path=yaml_path,
+        templates_dir=templates_dir or "",
+        progress_callback=progress_cb,
+    )
     duration_s = time.perf_counter() - t0
 
     if df is None:
@@ -131,6 +152,28 @@ def main():
         help="Override the simulator_engine setting for this run (ngspice|vacask).",
     )
 
+    parser.add_argument(
+        "--templates-dir",
+        metavar="DIR",
+        default=None,
+        help=(
+            "Skip xschem netlist generation and load pre-rendered Jinja2\n"
+            "templates from DIR. Set by chipify on the remote host when\n"
+            "RemoteDispatcher offloads a sweep — not for normal local use."
+        ),
+    )
+
+    parser.add_argument(
+        "--progress-stream",
+        action="store_true",
+        default=False,
+        help=(
+            "Emit 'PROGRESS: <done> <total>' lines to stdout for each batch\n"
+            "completion. Used by RemoteDispatcher to drive the GUI progress\n"
+            "bar over SSH; harmless if grep'd out otherwise."
+        ),
+    )
+
     args = parser.parse_args()
 
     # ── Batch mode ────────────────────────────────────────────────────────────
@@ -148,7 +191,9 @@ def main():
         for yaml_path in yaml_files:
             print(f"\n{'='*60}")
             summary = _run_single(yaml_path, json_out=args.json,
-                                  simulator_override=args.simulator)
+                                  simulator_override=args.simulator,
+                                  templates_dir=args.templates_dir,
+                                  progress_stream=args.progress_stream)
             if summary is None:
                 all_ok = False
                 summary = {"yaml": os.path.basename(yaml_path), "error": "no data"}
@@ -175,7 +220,9 @@ def main():
 
     print(f"[*] Initialising Chipify...")
     summary = _run_single(yaml_path, json_out=args.json,
-                          simulator_override=args.simulator)
+                          simulator_override=args.simulator,
+                          templates_dir=args.templates_dir,
+                          progress_stream=args.progress_stream)
     if summary is None:
         sys.exit(1)
 

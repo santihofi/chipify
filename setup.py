@@ -22,6 +22,8 @@ setup(
         "vacask": ["PyOPUS>=0.11"],
         # pip install chipify[fast]  → numexpr accelerates transient equation eval
         "fast": ["numexpr"],
+        # pip install chipify[remote] → paramiko for SSH/SFTP remote dispatcher
+        "remote": ["paramiko>=3.0"],
     },
     entry_points={
         "console_scripts": [
