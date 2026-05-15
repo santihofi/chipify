@@ -434,9 +434,17 @@ class RemoteDispatcher:
 
 
 def test_connection(
-    host: str, username: str, key_path: str, port: int = 22
+    host: str, username: str, key_path: str, port: int = 22,
+    remote_chipify_cmd: str = "chipify-cli",
 ) -> tuple[bool, str]:
-    """Quick connectivity probe for the settings dialog."""
+    """Quick connectivity probe for the settings dialog.
+
+    Probes the configured *remote_chipify_cmd* (which may be a bare name on
+    PATH like ``chipify-cli`` or an absolute path like
+    ``/usr/local/bin/chipify-cli`` for a wrapper that shells into a docker
+    container). Falls back to a direct file existence check if the command
+    is absolute.
+    """
     try:
         import paramiko  # type: ignore[import]
     except ImportError:
@@ -449,6 +457,20 @@ def test_connection(
     if not os.path.exists(key_path):
         return False, f"SSH key not found: {key_path}"
 
+    cmd = (remote_chipify_cmd or "chipify-cli").strip() or "chipify-cli"
+    if cmd.startswith("/"):
+        probe = (
+            f"if [ -x {shlex.quote(cmd)} ]; then "
+            f"echo FOUND: {shlex.quote(cmd)}; uname -srm; "
+            f"else echo MISSING: {shlex.quote(cmd)}; fi"
+        )
+    else:
+        probe = (
+            f"if command -v {shlex.quote(cmd)} >/dev/null 2>&1; then "
+            f"echo FOUND: $(command -v {shlex.quote(cmd)}); uname -srm; "
+            f"else echo MISSING: {shlex.quote(cmd)}; fi"
+        )
+
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -457,15 +479,17 @@ def test_connection(
             key_filename=key_path, timeout=10,
             allow_agent=False, look_for_keys=False,
         )
-        _, stdout, _ = ssh.exec_command(
-            "command -v chipify-cli && uname -srm", timeout=10
-        )
+        _, stdout, _ = ssh.exec_command(probe, timeout=10)
         out = stdout.read().decode("utf-8", errors="replace").strip()
-        rc = stdout.channel.recv_exit_status()
+        stdout.channel.recv_exit_status()
         ssh.close()
-        if rc != 0 or "chipify-cli" not in out:
-            return True, f"Connected, but chipify-cli not on remote PATH.\n{out}"
-        return True, f"OK – {out}"
+        if out.startswith("FOUND:"):
+            return True, f"OK – {out[len('FOUND:'):].strip()}"
+        return True, (
+            f"Connected, but '{cmd}' not found on remote.\n"
+            f"Hints: use the absolute wrapper path (e.g. /usr/local/bin/chipify-cli) "
+            f"or move the wrapper into /usr/bin (always on the non-interactive SSH PATH)."
+        )
     except paramiko.AuthenticationException as exc:
         return False, f"Authentication failed: {exc}"
     except (paramiko.SSHException, OSError) as exc:

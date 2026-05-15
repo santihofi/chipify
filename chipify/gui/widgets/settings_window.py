@@ -1,8 +1,9 @@
 """
 settings_window.py – Modal settings dialog for persistent user preferences.
 
-Extracted verbatim from gui_tk.py (lines 59-256).  The class is referenced
-from gui_tk.py via ``from chipify.gui.widgets.settings_window import SettingsWindow``.
+Layout is a tabbed dialog (CTkTabview): General / Simulator / Performance /
+Remote.  Save / Cancel are pinned at the bottom so they remain reachable on
+small displays no matter how many fields a tab grows.
 """
 from __future__ import annotations
 
@@ -26,14 +27,15 @@ class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk) -> None:
         super().__init__(parent)
         self.title("Global Settings")
-        self.geometry("520x1240")
-        self.resizable(False, False)
+        self.geometry("580x640")
+        self.minsize(540, 560)
 
         # grab_set needs a small delay so the window is fully mapped first
         self.after(50, self.grab_set)
 
         self._main_app = parent
 
+        # ── Load + normalise config ─────────────────────────────────────────
         self._config = app_config.load_config()
         max_cores = os.cpu_count() or 1
         current_cores = int(self._config.get("num_cores") or util.get_num_cores())
@@ -52,9 +54,9 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         remote_port = str(self._config.get("remote_port", 22) or 22)
         remote_chipify_cmd = self._config.get("remote_chipify_cmd", "chipify-cli")
+
         if compute_target not in ("local", "remote"):
             compute_target = "local"
-
         if simulator_engine not in self._VALID_ENGINES:
             simulator_engine = "ngspice"
         if process_mode not in ["auto", "forkserver", "spawn"]:
@@ -66,21 +68,69 @@ class SettingsWindow(ctk.CTkToplevel):
         if current_theme not in ["night", "dark", "light"]:
             current_theme = "night"
 
-        # ── Header ──────────────────────────────────────────────────────────
-        ctk.CTkLabel(
-            self, text="⚙️  Global Settings",
-            font=ctk.CTkFont(size=17, weight="bold")
-        ).pack(pady=(22, 18))
+        # ── Layout skeleton: header / tabview / pinned buttons ──────────────
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)  # tabview expands
 
-        # ── num_cores section ───────────────────────────────────────────────
-        cores_outer = ctk.CTkFrame(self, fg_color="transparent")
-        cores_outer.pack(fill="x", padx=36)
+        header = ctk.CTkLabel(
+            self, text="⚙️  Global Settings",
+            font=ctk.CTkFont(size=17, weight="bold"),
+        )
+        header.grid(row=0, column=0, pady=(18, 8), sticky="n")
+
+        self._tabs = ctk.CTkTabview(self, anchor="nw")
+        self._tabs.grid(row=1, column=0, padx=16, pady=(0, 8), sticky="nsew")
+        for name in ("General", "Simulator", "Performance", "Remote"):
+            self._tabs.add(name)
+        tab_general = self._tabs.tab("General")
+        tab_simulator = self._tabs.tab("Simulator")
+        tab_perf = self._tabs.tab("Performance")
+        tab_remote = self._tabs.tab("Remote")
+
+        # Pinned button row — always visible at the bottom of the window
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.grid(row=2, column=0, padx=24, pady=(4, 16), sticky="ew")
+        btn_row.grid_columnconfigure(0, weight=1)
+        btn_row.grid_columnconfigure(1, weight=1)
+        ctk.CTkButton(
+            btn_row, text="Cancel", command=self.destroy,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE"),
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(
+            btn_row, text="💾  Save", command=self._save,
+            fg_color="#2ecc71", hover_color="#27ae60",
+        ).grid(row=0, column=1, sticky="e")
+
+        self._build_general_tab(
+            tab_general, current_cores, max_cores, current_theme
+        )
+        self._build_simulator_tab(
+            tab_simulator, simulator_engine, vacask_binary, vacask_src
+        )
+        self._build_performance_tab(
+            tab_perf, process_mode, chunk_size_mode
+        )
+        self._build_remote_tab(
+            tab_remote, compute_target, remote_host, remote_port,
+            remote_user, remote_key_path, remote_work_dir, remote_chipify_cmd,
+        )
+
+    # ── General tab ─────────────────────────────────────────────────────────
+
+    def _build_general_tab(self, parent, current_cores: int,
+                           max_cores: int, current_theme: str) -> None:
+        # CPU cores
+        cores_outer = ctk.CTkFrame(parent, fg_color="transparent")
+        cores_outer.pack(fill="x", padx=8, pady=(8, 0))
 
         row = ctk.CTkFrame(cores_outer, fg_color="transparent")
         row.pack(fill="x")
         ctk.CTkLabel(row, text="CPU Cores for Simulation:", anchor="w").pack(side="left")
-        self._cores_lbl = ctk.CTkLabel(row, text=str(current_cores),
-                                       font=ctk.CTkFont(weight="bold"), width=28)
+        self._cores_lbl = ctk.CTkLabel(
+            row, text=str(current_cores),
+            font=ctk.CTkFont(weight="bold"), width=28,
+        )
         self._cores_lbl.pack(side="right")
 
         self._cores_var = ctk.IntVar(value=current_cores)
@@ -92,16 +142,36 @@ class SettingsWindow(ctk.CTkToplevel):
             command=self._on_cores_change,
         )
         self._slider.pack(fill="x", pady=(6, 2))
-
         ctk.CTkLabel(
             cores_outer,
             text=f"Range: 1 – {max_cores} logical cores",
-            text_color="gray", font=ctk.CTkFont(size=11)
+            text_color="gray", font=ctk.CTkFont(size=11),
         ).pack(anchor="w")
 
-        # ── simulator engine section ────────────────────────────────────────
-        self._sim_outer = ctk.CTkFrame(self, fg_color="transparent")
-        self._sim_outer.pack(fill="x", padx=36, pady=(18, 0))
+        # Appearance theme
+        theme_outer = ctk.CTkFrame(parent, fg_color="transparent")
+        theme_outer.pack(fill="x", padx=8, pady=(18, 8))
+        ctk.CTkLabel(theme_outer, text="Appearance Theme:", anchor="w").pack(anchor="w")
+        self._theme_var = ctk.StringVar(value=current_theme)
+        ctk.CTkOptionMenu(
+            theme_outer,
+            variable=self._theme_var,
+            values=["night", "dark", "light"],
+            dynamic_resizing=False,
+            width=180,
+        ).pack(anchor="w", pady=(6, 2))
+        ctk.CTkLabel(
+            theme_outer,
+            text="night: pitch black  •  dark: grey dark  •  light: light mode",
+            text_color="gray", font=ctk.CTkFont(size=11),
+        ).pack(anchor="w")
+
+    # ── Simulator tab ───────────────────────────────────────────────────────
+
+    def _build_simulator_tab(self, parent, simulator_engine: str,
+                             vacask_binary: str, vacask_src: str) -> None:
+        self._sim_outer = ctk.CTkFrame(parent, fg_color="transparent")
+        self._sim_outer.pack(fill="x", padx=8, pady=(8, 0))
         ctk.CTkLabel(self._sim_outer, text="Simulation Engine:", anchor="w").pack(anchor="w")
         self._sim_engine_var = ctk.StringVar(value=simulator_engine)
         self._sim_engine_menu = ctk.CTkOptionMenu(
@@ -116,12 +186,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self._sim_engine_hint = ctk.CTkLabel(
             self._sim_outer,
             text=self._ENGINE_HINTS.get(simulator_engine, ""),
-            text_color="gray", font=ctk.CTkFont(size=11)
+            text_color="gray", font=ctk.CTkFont(size=11),
         )
         self._sim_engine_hint.pack(anchor="w")
 
-        # ── VACASK-specific settings ─────────────────────────────────────────
-        self._vacask_frame = ctk.CTkFrame(self, fg_color="transparent")
+        # VACASK-specific frame
+        self._vacask_frame = ctk.CTkFrame(parent, fg_color="transparent")
 
         vc_bin_row = ctk.CTkFrame(self._vacask_frame, fg_color="transparent")
         vc_bin_row.pack(fill="x")
@@ -147,160 +217,56 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(
             self._vacask_frame,
             text="Requires PyOPUS  (pip install chipify[vacask])  and vacask on PATH",
-            text_color="gray", font=ctk.CTkFont(size=11), wraplength=380,
+            text_color="gray", font=ctk.CTkFont(size=11), wraplength=440,
         ).pack(anchor="w", pady=(6, 0))
 
         if simulator_engine == "vacask":
-            self._vacask_frame.pack(fill="x", padx=36, pady=(8, 0),
+            self._vacask_frame.pack(fill="x", padx=8, pady=(12, 8),
                                     after=self._sim_outer)
 
-        # ── Compute target section ──────────────────────────────────────────
-        self._compute_outer = ctk.CTkFrame(self, fg_color="transparent")
-        self._compute_outer.pack(fill="x", padx=36, pady=(18, 0))
-        ctk.CTkLabel(
-            self._compute_outer, text="Compute Target:", anchor="w"
-        ).pack(anchor="w")
-        self._compute_target_var = ctk.StringVar(value=compute_target)
-        ctk.CTkOptionMenu(
-            self._compute_outer,
-            variable=self._compute_target_var,
-            values=["local", "remote"],
-            dynamic_resizing=False,
-            width=180,
-            command=self._on_compute_target_change,
-        ).pack(anchor="w", pady=(6, 2))
-        ctk.CTkLabel(
-            self._compute_outer,
-            text="local: multiprocessing pool  •  remote: offload via SSH",
-            text_color="gray", font=ctk.CTkFont(size=11),
-        ).pack(anchor="w")
+    # ── Performance tab ─────────────────────────────────────────────────────
 
-        # ── Remote connection settings (shown only when remote selected) ────
-        self._remote_frame = ctk.CTkFrame(self, fg_color="transparent")
-
-        def _row(parent, label_text: str, width_label: int = 130):
-            row = ctk.CTkFrame(parent, fg_color="transparent")
-            row.pack(fill="x", pady=(6, 0))
-            ctk.CTkLabel(
-                row, text=label_text, anchor="w", width=width_label
-            ).pack(side="left")
-            return row
-
-        host_row = _row(self._remote_frame, "Server IP / Host:")
-        self._remote_host_var = ctk.StringVar(value=remote_host)
-        ctk.CTkEntry(
-            host_row, textvariable=self._remote_host_var,
-            placeholder_text="e.g. 10.0.0.5 or sim.example.com", width=260,
-        ).pack(side="left", padx=(8, 0))
-
-        port_row = _row(self._remote_frame, "Port:")
-        self._remote_port_var = ctk.StringVar(value=remote_port)
-        ctk.CTkEntry(
-            port_row, textvariable=self._remote_port_var,
-            placeholder_text="22", width=80,
-        ).pack(side="left", padx=(8, 0))
-
-        user_row = _row(self._remote_frame, "Username:")
-        self._remote_user_var = ctk.StringVar(value=remote_user)
-        ctk.CTkEntry(
-            user_row, textvariable=self._remote_user_var,
-            placeholder_text="ubuntu", width=260,
-        ).pack(side="left", padx=(8, 0))
-
-        key_row = _row(self._remote_frame, "SSH Key Path:")
-        self._remote_key_var = ctk.StringVar(value=remote_key_path)
-        ctk.CTkEntry(
-            key_row, textvariable=self._remote_key_var,
-            placeholder_text="~/.ssh/id_rsa", width=200,
-        ).pack(side="left", padx=(8, 0))
-        ctk.CTkButton(
-            key_row, text="Browse…", width=70,
-            command=self._on_browse_key,
-        ).pack(side="left", padx=(6, 0))
-
-        wd_row = _row(self._remote_frame, "Remote Work Dir:")
-        self._remote_workdir_var = ctk.StringVar(value=remote_work_dir)
-        ctk.CTkEntry(
-            wd_row, textvariable=self._remote_workdir_var,
-            placeholder_text="/tmp/chipify_remote", width=260,
-        ).pack(side="left", padx=(8, 0))
-
-        cmd_row = _row(self._remote_frame, "Remote Command:")
-        self._remote_cmd_var = ctk.StringVar(value=remote_chipify_cmd)
-        ctk.CTkEntry(
-            cmd_row, textvariable=self._remote_cmd_var,
-            placeholder_text="chipify-cli", width=260,
-        ).pack(side="left", padx=(8, 0))
-
-        test_row = ctk.CTkFrame(self._remote_frame, fg_color="transparent")
-        test_row.pack(fill="x", pady=(10, 0))
-        self._remote_test_btn = ctk.CTkButton(
-            test_row, text="🔌  Test Connection", width=170,
-            command=self._on_test_connection,
-        )
-        self._remote_test_btn.pack(side="left")
-        self._remote_test_status = ctk.CTkLabel(
-            test_row, text="", text_color="gray",
-            font=ctk.CTkFont(size=11), wraplength=320, justify="left",
-        )
-        self._remote_test_status.pack(side="left", padx=(10, 0))
-
-        ctk.CTkLabel(
-            self._remote_frame,
-            text=(
-                "Auth: SSH key only (no passwords stored). Remote must have "
-                "chipify-cli + ngspice installed.\n"
-                "Install paramiko on this machine:  pip install chipify[remote]"
-            ),
-            text_color="gray", font=ctk.CTkFont(size=11), wraplength=440,
-            justify="left",
-        ).pack(anchor="w", pady=(8, 0))
-
-        if compute_target == "remote":
-            self._remote_frame.pack(fill="x", padx=36, pady=(8, 0),
-                                    after=self._compute_outer)
-
-        # ── process start method section ────────────────────────────────────
-        proc_outer = ctk.CTkFrame(self, fg_color="transparent")
-        proc_outer.pack(fill="x", padx=36, pady=(18, 0))
+    def _build_performance_tab(self, parent, process_mode: str,
+                               chunk_size_mode: str) -> None:
+        # Process start method
+        proc_outer = ctk.CTkFrame(parent, fg_color="transparent")
+        proc_outer.pack(fill="x", padx=8, pady=(8, 0))
         ctk.CTkLabel(proc_outer, text="Multiprocessing Start Method:", anchor="w").pack(anchor="w")
         self._proc_mode_var = ctk.StringVar(value=process_mode)
-        self._proc_mode_menu = ctk.CTkOptionMenu(
+        ctk.CTkOptionMenu(
             proc_outer,
             variable=self._proc_mode_var,
             values=["auto", "forkserver", "spawn"],
             dynamic_resizing=False,
             width=180,
-        )
-        self._proc_mode_menu.pack(anchor="w", pady=(6, 2))
+        ).pack(anchor="w", pady=(6, 2))
         ctk.CTkLabel(
             proc_outer,
             text="auto = forkserver on Linux, spawn elsewhere",
-            text_color="gray", font=ctk.CTkFont(size=11)
+            text_color="gray", font=ctk.CTkFont(size=11),
         ).pack(anchor="w")
 
-        # ── chunk size section ───────────────────────────────────────────────
-        chunk_outer = ctk.CTkFrame(self, fg_color="transparent")
-        chunk_outer.pack(fill="x", padx=36, pady=(18, 0))
+        # Chunk size
+        chunk_outer = ctk.CTkFrame(parent, fg_color="transparent")
+        chunk_outer.pack(fill="x", padx=8, pady=(18, 0))
         ctk.CTkLabel(chunk_outer, text="Batch Chunk Size:", anchor="w").pack(anchor="w")
         self._chunk_var = ctk.StringVar(value=chunk_size_mode)
-        self._chunk_menu = ctk.CTkOptionMenu(
+        ctk.CTkOptionMenu(
             chunk_outer,
             variable=self._chunk_var,
             values=["auto", "1", "2", "4", "8", "16", "32", "64", "128", "256"],
             dynamic_resizing=False,
             width=180,
-        )
-        self._chunk_menu.pack(anchor="w", pady=(6, 2))
+        ).pack(anchor="w", pady=(6, 2))
         ctk.CTkLabel(
             chunk_outer,
             text="Higher values can improve throughput, lower values improve responsiveness",
-            text_color="gray", font=ctk.CTkFont(size=11)
+            text_color="gray", font=ctk.CTkFont(size=11), wraplength=440,
         ).pack(anchor="w")
 
-        # ── Live plotting ─────────────────────────────────────────────────────
-        live_outer = ctk.CTkFrame(self, fg_color="transparent")
-        live_outer.pack(fill="x", padx=36, pady=(18, 0))
+        # Live plotting
+        live_outer = ctk.CTkFrame(parent, fg_color="transparent")
+        live_outer.pack(fill="x", padx=8, pady=(18, 8))
         ctk.CTkLabel(
             live_outer,
             text="Live plotting during simulation",
@@ -331,38 +297,119 @@ class SettingsWindow(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11),
         ).pack(anchor="w", pady=(4, 0))
 
-        # ── Appearance Theme ─────────────────────────────────────────────────
-        theme_outer = ctk.CTkFrame(self, fg_color="transparent")
-        theme_outer.pack(fill="x", padx=36, pady=(18, 0))
-        ctk.CTkLabel(theme_outer, text="Appearance Theme:", anchor="w").pack(anchor="w")
-        self._theme_var = ctk.StringVar(value=current_theme)
+    # ── Remote tab ──────────────────────────────────────────────────────────
+
+    def _build_remote_tab(self, parent, compute_target: str,
+                          remote_host: str, remote_port: str,
+                          remote_user: str, remote_key_path: str,
+                          remote_work_dir: str,
+                          remote_chipify_cmd: str) -> None:
+        self._compute_outer = ctk.CTkFrame(parent, fg_color="transparent")
+        self._compute_outer.pack(fill="x", padx=8, pady=(8, 0))
+        ctk.CTkLabel(
+            self._compute_outer, text="Compute Target:", anchor="w"
+        ).pack(anchor="w")
+        self._compute_target_var = ctk.StringVar(value=compute_target)
         ctk.CTkOptionMenu(
-            theme_outer,
-            variable=self._theme_var,
-            values=["night", "dark", "light"],
+            self._compute_outer,
+            variable=self._compute_target_var,
+            values=["local", "remote"],
             dynamic_resizing=False,
             width=180,
+            command=self._on_compute_target_change,
         ).pack(anchor="w", pady=(6, 2))
         ctk.CTkLabel(
-            theme_outer,
-            text="night: pitch black  •  dark: grey dark  •  light: light mode",
+            self._compute_outer,
+            text="local: multiprocessing pool  •  remote: offload via SSH",
             text_color="gray", font=ctk.CTkFont(size=11),
         ).pack(anchor="w")
 
-        # ── Buttons ─────────────────────────────────────────────────────────
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=36, pady=(28, 0))
+        # Remote connection settings
+        self._remote_frame = ctk.CTkFrame(parent, fg_color="transparent")
 
-        ctk.CTkButton(
-            btn_row, text="Cancel", command=self.destroy,
-            fg_color="transparent", border_width=1,
-            text_color=("gray10", "#DCE4EE")
-        ).pack(side="left")
+        def _row(parent_, label_text: str, width_label: int = 130):
+            r = ctk.CTkFrame(parent_, fg_color="transparent")
+            r.pack(fill="x", pady=(6, 0))
+            ctk.CTkLabel(
+                r, text=label_text, anchor="w", width=width_label
+            ).pack(side="left")
+            return r
 
+        host_row = _row(self._remote_frame, "Server IP / Host:")
+        self._remote_host_var = ctk.StringVar(value=remote_host)
+        ctk.CTkEntry(
+            host_row, textvariable=self._remote_host_var,
+            placeholder_text="e.g. 10.0.0.5 or sim.example.com", width=300,
+        ).pack(side="left", padx=(8, 0))
+
+        port_row = _row(self._remote_frame, "Port:")
+        self._remote_port_var = ctk.StringVar(value=remote_port)
+        ctk.CTkEntry(
+            port_row, textvariable=self._remote_port_var,
+            placeholder_text="22", width=80,
+        ).pack(side="left", padx=(8, 0))
+
+        user_row = _row(self._remote_frame, "Username:")
+        self._remote_user_var = ctk.StringVar(value=remote_user)
+        ctk.CTkEntry(
+            user_row, textvariable=self._remote_user_var,
+            placeholder_text="ubuntu", width=300,
+        ).pack(side="left", padx=(8, 0))
+
+        key_row = _row(self._remote_frame, "SSH Key Path:")
+        self._remote_key_var = ctk.StringVar(value=remote_key_path)
+        ctk.CTkEntry(
+            key_row, textvariable=self._remote_key_var,
+            placeholder_text="~/.ssh/id_rsa", width=220,
+        ).pack(side="left", padx=(8, 0))
         ctk.CTkButton(
-            btn_row, text="💾  Save", command=self._save,
-            fg_color="#2ecc71", hover_color="#27ae60"
-        ).pack(side="right")
+            key_row, text="Browse…", width=70,
+            command=self._on_browse_key,
+        ).pack(side="left", padx=(6, 0))
+
+        wd_row = _row(self._remote_frame, "Remote Work Dir:")
+        self._remote_workdir_var = ctk.StringVar(value=remote_work_dir)
+        ctk.CTkEntry(
+            wd_row, textvariable=self._remote_workdir_var,
+            placeholder_text="/tmp/chipify_remote", width=300,
+        ).pack(side="left", padx=(8, 0))
+
+        cmd_row = _row(self._remote_frame, "Remote Command:")
+        self._remote_cmd_var = ctk.StringVar(value=remote_chipify_cmd)
+        ctk.CTkEntry(
+            cmd_row, textvariable=self._remote_cmd_var,
+            placeholder_text="chipify-cli", width=300,
+        ).pack(side="left", padx=(8, 0))
+
+        test_row = ctk.CTkFrame(self._remote_frame, fg_color="transparent")
+        test_row.pack(fill="x", pady=(10, 0))
+        self._remote_test_btn = ctk.CTkButton(
+            test_row, text="🔌  Test Connection", width=170,
+            command=self._on_test_connection,
+        )
+        self._remote_test_btn.pack(side="left")
+        self._remote_test_status = ctk.CTkLabel(
+            test_row, text="", text_color="gray",
+            font=ctk.CTkFont(size=11), wraplength=320, justify="left",
+        )
+        self._remote_test_status.pack(side="left", padx=(10, 0))
+
+        ctk.CTkLabel(
+            self._remote_frame,
+            text=(
+                "Auth: SSH key only (no passwords stored). Remote must have "
+                "chipify-cli + ngspice installed.\n"
+                "Install paramiko on this machine:  pip install chipify[remote]"
+            ),
+            text_color="gray", font=ctk.CTkFont(size=11), wraplength=480,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+
+        if compute_target == "remote":
+            self._remote_frame.pack(fill="x", padx=8, pady=(12, 8),
+                                    after=self._compute_outer)
+
+    # ── Callbacks ───────────────────────────────────────────────────────────
 
     def _on_cores_change(self, value: float) -> None:
         self._cores_lbl.configure(text=str(int(value)))
@@ -393,14 +440,14 @@ class SettingsWindow(ctk.CTkToplevel):
     def _on_engine_change(self, choice: str) -> None:
         self._sim_engine_hint.configure(text=self._ENGINE_HINTS.get(choice, ""))
         if choice == "vacask":
-            self._vacask_frame.pack(fill="x", padx=36, pady=(8, 0),
+            self._vacask_frame.pack(fill="x", padx=8, pady=(12, 8),
                                     after=self._sim_outer)
         else:
             self._vacask_frame.pack_forget()
 
     def _on_compute_target_change(self, choice: str) -> None:
         if choice == "remote":
-            self._remote_frame.pack(fill="x", padx=36, pady=(8, 0),
+            self._remote_frame.pack(fill="x", padx=8, pady=(12, 8),
                                     after=self._compute_outer)
         else:
             self._remote_frame.pack_forget()
@@ -422,6 +469,7 @@ class SettingsWindow(ctk.CTkToplevel):
         host = self._remote_host_var.get().strip()
         user = self._remote_user_var.get().strip()
         key = self._remote_key_var.get().strip()
+        cmd = self._remote_cmd_var.get().strip() or "chipify-cli"
         try:
             port = int(self._remote_port_var.get().strip() or "22")
         except (TypeError, ValueError):
@@ -438,7 +486,9 @@ class SettingsWindow(ctk.CTkToplevel):
             except ImportError as exc:
                 self.after(0, self._set_test_status, False, str(exc))
                 return
-            ok, msg = test_connection(host, user, key, port=port)
+            ok, msg = test_connection(
+                host, user, key, port=port, remote_chipify_cmd=cmd,
+            )
             self.after(0, self._set_test_status, ok, msg)
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -448,6 +498,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self._remote_test_status.configure(
             text=msg, text_color=("#2ecc71" if ok else "#e74c3c")
         )
+
+    # ── Save ────────────────────────────────────────────────────────────────
 
     def _save(self) -> None:
         self._config["num_cores"] = int(self._cores_var.get())
