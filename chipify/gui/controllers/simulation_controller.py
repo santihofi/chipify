@@ -30,6 +30,18 @@ if TYPE_CHECKING:
 log = logging.getLogger("chipify.gui.controllers.simulation")
 
 
+def _fmt_eta(sec: float) -> str:
+    sec = max(0.0, float(sec))
+    if sec < 60:
+        return f"{sec:.0f}s"
+    if sec < 3600:
+        m, s = divmod(int(sec), 60)
+        return f"{m}m{s:02d}s"
+    h, rem = divmod(int(sec), 3600)
+    m = rem // 60
+    return f"{h}h{m:02d}m"
+
+
 def _set_btn_start_ready(app: object) -> None:
     """Re-enable the start button after simulation completes or aborts."""
     # Import inside function to avoid early Tk init during import
@@ -182,8 +194,13 @@ class SimulationController:
             pass
         if latest is not None:
             try:
-                cur, tot = latest
-                self._set_progress_ui(cur, tot)
+                # Accept both (cur, tot) and (cur, tot, meta) for back-compat.
+                if len(latest) == 3:
+                    cur, tot, meta = latest
+                else:
+                    cur, tot = latest
+                    meta = None
+                self._set_progress_ui(cur, tot, meta)
             except Exception:
                 log.exception("Progress UI update failed.")
         if self._sim_running.is_set():
@@ -203,23 +220,60 @@ class SimulationController:
         app.lbl_status.configure(text="Status: Canceling simulation…", text_color="orange")
         app.btn_stop.configure(state="disabled")
 
-    def progress_callback_wrapper(self, current: int, total: int) -> None:
-        """Worker-thread callback; raises InterruptedError if stop requested."""
+    def progress_callback_wrapper(
+        self, current: int, total: int, meta: object | None = None
+    ) -> None:
+        """Worker-thread callback; raises InterruptedError if stop requested.
+
+        ``meta`` (when provided by RemoteDispatcher) is a RemoteProgress
+        dataclass carrying the current phase, rate and ETA. Local pool
+        callbacks always pass ``meta=None`` and use the simple counter UI.
+        """
         app = self.app  # type: ignore[attr-defined]
         if app.stop_event.is_set():
             raise InterruptedError("Simulation canceled!")
         try:
-            self._progress_queue.put_nowait((current, total))
+            self._progress_queue.put_nowait((current, total, meta))
         except Exception:
             pass
 
-    def _set_progress_ui(self, current: int, total: int) -> None:
+    def _set_progress_ui(
+        self, current: int, total: int, meta: object | None = None
+    ) -> None:
         """Must be called from the main thread via ``app.after()``."""
         app = self.app  # type: ignore[attr-defined]
-        app.progress_bar.set(current / total)
-        app.lbl_status.configure(
-            text=f"Simulating… {current}/{total}", text_color="#3484F0"
-        )
+        try:
+            app.progress_bar.set(current / total if total else 0)
+        except (ZeroDivisionError, TypeError):
+            app.progress_bar.set(0)
+
+        if meta is None:
+            app.lbl_status.configure(
+                text=f"Simulating… {current}/{total}",
+                text_color="#3484F0",
+            )
+        else:
+            phase = getattr(meta, "phase", "") or ""
+            eta = getattr(meta, "eta_sec", None)
+            rate = getattr(meta, "rate_per_sec", 0.0) or 0.0
+            bits: list[str] = []
+            if phase and phase != "simulating":
+                bits.append(phase.replace("_", " "))
+            if total > 0:
+                bits.append(f"{current}/{total}")
+            if rate and rate > 0:
+                bits.append(f"{rate:.1f}/s")
+            if eta is not None and eta > 0:
+                bits.append(f"ETA {_fmt_eta(eta)}")
+            label = "Remote · " + " · ".join(bits) if bits else "Remote · busy"
+            app.lbl_status.configure(text=label, text_color="#3484F0")
+
+            tail = getattr(meta, "log_tail", None) or []
+            if tail and hasattr(app, "remote_console"):
+                try:
+                    app.remote_console.set_log(tail)
+                except Exception:
+                    log.debug("remote_console.set_log failed", exc_info=True)
 
     def show_error(self, error_msg: str) -> None:
         """Display an error in the status bar and worst-case panel."""

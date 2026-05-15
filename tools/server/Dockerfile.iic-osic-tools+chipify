@@ -1,0 +1,69 @@
+# Derived image: iic-osic-tools + chipify (pre-installed, sshd-enabled).
+#
+# This is an optional convenience layer for users who want a ready-to-run
+# container that the Chipify GUI can SSH into out of the box.
+#
+# Build (from the repo root):
+#   docker build \
+#       -f tools/server/Dockerfile.iic-osic-tools+chipify \
+#       -t chipify-ee:latest .
+#
+# Run:
+#   docker run -d --name chipify-ee \
+#       -p 2222:22 \
+#       -v $HOME/designs:/foss/designs \
+#       -v $HOME/.ssh/id_rsa.pub:/headless/.ssh/authorized_keys:ro \
+#       chipify-ee:latest
+#
+# Then in the Chipify GUI, Remote tab:
+#   Host          : localhost
+#   Port          : 2222
+#   User          : headless
+#   Key Path      : ~/.ssh/id_rsa
+#   Remote Command: /usr/local/bin/chipify-remote
+#
+ARG BASE=hpretl/iic-osic-tools:latest
+FROM ${BASE}
+
+USER root
+
+# Install + harden sshd. Disable password auth and root login;
+# key-only access matches the dispatcher's auth model.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        openssh-server \
+ && mkdir -p /var/run/sshd \
+ && sed -i 's@^#\?PermitRootLogin.*@PermitRootLogin no@'              /etc/ssh/sshd_config \
+ && sed -i 's@^#\?PasswordAuthentication.*@PasswordAuthentication no@' /etc/ssh/sshd_config \
+ && sed -i 's@^#\?ChallengeResponseAuthentication.*@ChallengeResponseAuthentication no@' /etc/ssh/sshd_config \
+ && sed -i 's@^#\?UsePAM.*@UsePAM yes@'                               /etc/ssh/sshd_config \
+ && rm -rf /var/lib/apt/lists/*
+
+# Drop the env-aware wrapper system-wide.
+COPY tools/server/chipify-remote.sh /usr/local/bin/chipify-remote
+RUN chmod 0755 /usr/local/bin/chipify-remote
+
+# Install chipify for the iic-osic-tools default user (headless).
+# Adjust if your base image uses 'designer' or 'foss' as the runtime user.
+ARG REMOTE_USER=headless
+USER ${REMOTE_USER}
+WORKDIR /home/${REMOTE_USER}
+
+# Copy the source in, install, then strip the build context.
+COPY --chown=${REMOTE_USER}:${REMOTE_USER} . /tmp/chipify-src
+RUN python3 -m pip install --user --no-warn-script-location \
+        "/tmp/chipify-src[remote]" \
+ && rm -rf /tmp/chipify-src \
+ && mkdir -p /home/${REMOTE_USER}/.ssh \
+ && chmod 0700 /home/${REMOTE_USER}/.ssh
+
+# Default chipify env (override by mounting a file at the same path).
+RUN printf '%s\n' \
+        'export PDK_ROOT="/foss/pdks"' \
+        'export PDK="ihp-sg13g2"' \
+    > /home/${REMOTE_USER}/.chipify-remote.env \
+ && chmod 0600 /home/${REMOTE_USER}/.chipify-remote.env
+
+USER root
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D", "-e"]

@@ -16,6 +16,20 @@ from chipify import settings
 CONFIG_PATH = os.path.join(settings.PROJECT_ROOT, "settings.json")
 LOG_PATH    = os.path.join(settings.OUT_DIR, "chipify.log")
 
+DEFAULT_REMOTE_PROFILE: dict[str, Any] = {
+    "name": "default",
+    "host": "",
+    "port": 22,
+    "user": "",
+    "key_path": "",
+    "work_dir": "/tmp/chipify_remote",
+    "wrapper": "",                  # blank → auto-detect on remote
+    "ssh_config_alias": "",          # if set, ~/.ssh/config alias overlays settings
+    "use_agent": True,               # also try ssh-agent if key auth fails
+    "keep_on_failure": False,        # leave remote run dir intact on rc!=0
+    "env_file": "",                  # CHIPIFY_REMOTE_ENV path (sourced by wrapper)
+}
+
 DEFAULTS: dict[str, Any] = {
     "num_cores": None,                # None → auto-detect via util.get_num_cores()
     "simulator_engine": "ngspice",    # ngspice|vacask
@@ -33,12 +47,18 @@ DEFAULTS: dict[str, Any] = {
     "theme": "night",                 # appearance theme: night|dark|light
     # ── Remote compute dispatcher ──
     "compute_target": "local",        # local|remote
-    "remote_host": "",                # remote server hostname / IP
-    "remote_user": "",                # remote SSH username
-    "remote_key_path": "",            # absolute path to SSH private key file
-    "remote_work_dir": "/tmp/chipify_remote",  # base directory on remote for per-run subdirs
-    "remote_port": 22,                # SSH port
-    "remote_chipify_cmd": "chipify-cli",  # remote command to invoke
+    # Named profiles + which one is active. Legacy single-host fields below
+    # are still consulted for back-compat and auto-migrated on first save.
+    "remote_profiles": [],            # list of dicts shaped like DEFAULT_REMOTE_PROFILE
+    "active_remote_profile": "default",
+    # Legacy single-host fields (kept for migration; will be removed once
+    # all installations have re-saved through the new Settings dialog).
+    "remote_host": "",
+    "remote_user": "",
+    "remote_key_path": "",
+    "remote_work_dir": "/tmp/chipify_remote",
+    "remote_port": 22,
+    "remote_chipify_cmd": "",
 }
 
 _logging_ready = False
@@ -182,3 +202,115 @@ def get_live_plot_emit_stride() -> int:
         return max(1, min(64, int(raw)))
     except (TypeError, ValueError):
         return 1
+
+
+# ── Remote profile helpers ────────────────────────────────────────────────────
+
+def _legacy_remote_to_profile(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Build a profile dict from the pre-profile flat fields."""
+    profile = DEFAULT_REMOTE_PROFILE.copy()
+    profile.update({
+        "name": "default",
+        "host": cfg.get("remote_host", "") or "",
+        "user": cfg.get("remote_user", "") or "",
+        "key_path": cfg.get("remote_key_path", "") or "",
+        "work_dir": cfg.get("remote_work_dir", "/tmp/chipify_remote")
+                    or "/tmp/chipify_remote",
+        "wrapper": cfg.get("remote_chipify_cmd", "") or "",
+    })
+    try:
+        profile["port"] = int(cfg.get("remote_port", 22) or 22)
+    except (TypeError, ValueError):
+        profile["port"] = 22
+    return profile
+
+
+def get_remote_profiles(cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Return the list of saved remote profiles (auto-migrate legacy fields).
+
+    Always returns at least one profile; the GUI uses
+    ``active_remote_profile`` to choose which one is current.
+    """
+    if cfg is None:
+        cfg = load_config()
+    raw = cfg.get("remote_profiles") or []
+    profiles: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        merged = DEFAULT_REMOTE_PROFILE.copy()
+        for k, v in entry.items():
+            if k in merged:
+                merged[k] = v
+        if not merged.get("name"):
+            merged["name"] = f"profile_{len(profiles) + 1}"
+        profiles.append(merged)
+
+    if not profiles:
+        # Migrate from legacy single-host fields if they have a host set.
+        legacy = _legacy_remote_to_profile(cfg)
+        if legacy.get("host") or legacy.get("user"):
+            profiles.append(legacy)
+        else:
+            profiles.append(DEFAULT_REMOTE_PROFILE.copy())
+
+    return profiles
+
+
+def get_active_profile(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return the currently active remote profile dict."""
+    if cfg is None:
+        cfg = load_config()
+    profiles = get_remote_profiles(cfg)
+    target = (cfg.get("active_remote_profile") or "").strip()
+    for p in profiles:
+        if p.get("name") == target:
+            return p
+    return profiles[0]
+
+
+def save_remote_profiles(
+    profiles: list[dict[str, Any]],
+    active_name: str | None = None,
+) -> None:
+    """Persist *profiles* and (optionally) update the active profile name."""
+    cfg = load_config()
+    clean: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for p in profiles:
+        merged = DEFAULT_REMOTE_PROFILE.copy()
+        for k, v in (p or {}).items():
+            if k in merged:
+                merged[k] = v
+        name = (merged.get("name") or "").strip() or "profile"
+        base = name
+        i = 2
+        while name in seen_names:
+            name = f"{base}_{i}"
+            i += 1
+        merged["name"] = name
+        seen_names.add(name)
+        clean.append(merged)
+
+    cfg["remote_profiles"] = clean
+    if active_name and any(p["name"] == active_name for p in clean):
+        cfg["active_remote_profile"] = active_name
+    elif clean and cfg.get("active_remote_profile") not in {p["name"] for p in clean}:
+        cfg["active_remote_profile"] = clean[0]["name"]
+
+    # Mirror the active profile back to legacy fields so older code paths
+    # (and external scripts) still see something sensible. These mirror
+    # fields are eventually retired.
+    if clean:
+        active = next(
+            (p for p in clean if p["name"] == cfg.get("active_remote_profile")),
+            clean[0],
+        )
+        cfg["remote_host"] = active.get("host", "")
+        cfg["remote_user"] = active.get("user", "")
+        cfg["remote_key_path"] = active.get("key_path", "")
+        cfg["remote_work_dir"] = active.get("work_dir", "/tmp/chipify_remote")
+        cfg["remote_port"] = int(active.get("port", 22) or 22)
+        cfg["remote_chipify_cmd"] = active.get("wrapper", "")
+
+    save_config(cfg)

@@ -167,7 +167,13 @@ class SimifyGUI(ctk.CTk):
         self.progress_bar.set(0)
         
         self.lbl_status = ctk.CTkLabel(self.left_frame, text="Status: Ready", text_color="gray")
-        self.lbl_status.grid(row=13, column=0, padx=20, pady=(5, 20), sticky="w")
+        self.lbl_status.grid(row=13, column=0, padx=20, pady=(5, 8), sticky="w")
+
+        # Remote console (collapsed by default; populated by the dispatcher
+        # during remote runs via the simulation controller's progress meta).
+        from chipify.gui.widgets.remote_console import RemoteConsole
+        self.remote_console = RemoteConsole(self.left_frame, max_lines=200)
+        self.remote_console.grid(row=14, column=0, padx=20, pady=(0, 20), sticky="ew")
         
     def setup_right_panel(self):
         self.right_frame = ctk.CTkFrame(self, fg_color="transparent")

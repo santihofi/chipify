@@ -4,11 +4,17 @@ settings_window.py – Modal settings dialog for persistent user preferences.
 Layout is a tabbed dialog (CTkTabview): General / Simulator / Performance /
 Remote.  Save / Cancel are pinned at the bottom so they remain reachable on
 small displays no matter how many fields a tab grows.
+
+The Remote tab supports multiple named profiles (e.g. lab server, cloud VM)
+plus a structured preflight panel that reports the remote chipify / EDA /
+PDK status. First-time host-key trust is handled by a TOFU dialog rather
+than the silent AutoAddPolicy that earlier versions used.
 """
 from __future__ import annotations
 
 import os
 import threading
+from typing import Any
 
 import customtkinter as ctk
 
@@ -27,8 +33,8 @@ class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk) -> None:
         super().__init__(parent)
         self.title("Global Settings")
-        self.geometry("580x640")
-        self.minsize(540, 560)
+        self.geometry("680x720")
+        self.minsize(640, 600)
 
         # grab_set needs a small delay so the window is fully mapped first
         self.after(50, self.grab_set)
@@ -46,14 +52,18 @@ class SettingsWindow(ctk.CTkToplevel):
         vacask_src = self._config.get("vacask_netlist_source", "xschem")
         current_theme = self._config.get("theme", "night")
         compute_target = self._config.get("compute_target", "local")
-        remote_host = self._config.get("remote_host", "")
-        remote_user = self._config.get("remote_user", "")
-        remote_key_path = self._config.get("remote_key_path", "")
-        remote_work_dir = self._config.get(
-            "remote_work_dir", "/tmp/chipify_remote"
+
+        # Remote profiles: always at least one entry, possibly auto-migrated
+        # from the legacy single-host keys.
+        self._profiles: list[dict[str, Any]] = [
+            dict(p) for p in app_config.get_remote_profiles(self._config)
+        ]
+        self._active_profile_name: str = (
+            self._config.get("active_remote_profile")
+            or self._profiles[0]["name"]
         )
-        remote_port = str(self._config.get("remote_port", 22) or 22)
-        remote_chipify_cmd = self._config.get("remote_chipify_cmd", "chipify-cli")
+        self._profile_dirty: bool = False
+        self._current_preflight_info: dict[str, Any] | None = None
 
         if compute_target not in ("local", "remote"):
             compute_target = "local"
@@ -111,10 +121,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._build_performance_tab(
             tab_perf, process_mode, chunk_size_mode
         )
-        self._build_remote_tab(
-            tab_remote, compute_target, remote_host, remote_port,
-            remote_user, remote_key_path, remote_work_dir, remote_chipify_cmd,
-        )
+        self._build_remote_tab(tab_remote, compute_target)
 
     # ── General tab ─────────────────────────────────────────────────────────
 
@@ -299,11 +306,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
     # ── Remote tab ──────────────────────────────────────────────────────────
 
-    def _build_remote_tab(self, parent, compute_target: str,
-                          remote_host: str, remote_port: str,
-                          remote_user: str, remote_key_path: str,
-                          remote_work_dir: str,
-                          remote_chipify_cmd: str) -> None:
+    def _build_remote_tab(self, parent, compute_target: str) -> None:
         self._compute_outer = ctk.CTkFrame(parent, fg_color="transparent")
         self._compute_outer.pack(fill="x", padx=8, pady=(8, 0))
         ctk.CTkLabel(
@@ -324,90 +327,178 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color="gray", font=ctk.CTkFont(size=11),
         ).pack(anchor="w")
 
-        # Remote connection settings
-        self._remote_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        # Scrollable host so the profile editor can grow.
+        self._remote_frame = ctk.CTkScrollableFrame(
+            parent, fg_color="transparent", label_text="",
+            height=440,
+        )
 
+        # ── Profile selector row ───────────────────────────────────────
+        prof_row = ctk.CTkFrame(self._remote_frame, fg_color="transparent")
+        prof_row.pack(fill="x", pady=(4, 4))
+        ctk.CTkLabel(
+            prof_row, text="Profile:", anchor="w", width=130,
+        ).pack(side="left")
+        self._profile_var = ctk.StringVar(value=self._active_profile_name)
+        self._profile_menu = ctk.CTkOptionMenu(
+            prof_row,
+            variable=self._profile_var,
+            values=[p["name"] for p in self._profiles],
+            dynamic_resizing=False,
+            width=200,
+            command=self._on_profile_select,
+        )
+        self._profile_menu.pack(side="left", padx=(8, 6))
+        ctk.CTkButton(
+            prof_row, text="+ Add", width=60,
+            command=self._on_profile_add,
+        ).pack(side="left", padx=(2, 4))
+        ctk.CTkButton(
+            prof_row, text="Rename…", width=80,
+            command=self._on_profile_rename,
+        ).pack(side="left", padx=(2, 4))
+        self._profile_del_btn = ctk.CTkButton(
+            prof_row, text="Delete", width=70,
+            fg_color="#a93226", hover_color="#7b241c",
+            command=self._on_profile_delete,
+        )
+        self._profile_del_btn.pack(side="left", padx=(2, 4))
+
+        # ── Editable profile fields ────────────────────────────────────
+        self._build_profile_fields(self._remote_frame)
+
+        # ── Preflight panel ────────────────────────────────────────────
+        action_row = ctk.CTkFrame(self._remote_frame, fg_color="transparent")
+        action_row.pack(fill="x", pady=(12, 4))
+        self._remote_test_btn = ctk.CTkButton(
+            action_row, text="🔌  Test Connection", width=180,
+            command=self._on_test_connection,
+        )
+        self._remote_test_btn.pack(side="left")
+        self._remote_busy_lbl = ctk.CTkLabel(
+            action_row, text="", text_color="orange",
+            font=ctk.CTkFont(size=11),
+        )
+        self._remote_busy_lbl.pack(side="left", padx=(10, 0))
+
+        self._preflight_box = ctk.CTkTextbox(
+            self._remote_frame, height=180, wrap="none",
+            font=ctk.CTkFont(family="Consolas", size=11),
+        )
+        self._preflight_box.pack(fill="both", expand=False, pady=(6, 6))
+        self._preflight_box.insert("end", "(no preflight result yet)")
+        self._preflight_box.configure(state="disabled")
+
+        ctk.CTkLabel(
+            self._remote_frame,
+            text=(
+                "Auth: SSH key (no passwords stored). On first connection the\n"
+                "host fingerprint is shown for you to trust. Server side, run\n"
+                "tools/server/bootstrap.sh inside the iic-osic-tools container\n"
+                "to install chipify-cli and the env-aware wrapper."
+            ),
+            text_color="gray", font=ctk.CTkFont(size=11), wraplength=560,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 4))
+
+        # Load fields from the currently-active profile.
+        self._load_profile_into_fields(self._active_profile_name)
+        self._update_profile_delete_state()
+
+        if compute_target == "remote":
+            self._remote_frame.pack(
+                fill="both", expand=True, padx=8, pady=(12, 8),
+                after=self._compute_outer,
+            )
+
+    def _build_profile_fields(self, parent) -> None:
+        """Create the entry widgets that bind to the currently-selected profile."""
         def _row(parent_, label_text: str, width_label: int = 130):
             r = ctk.CTkFrame(parent_, fg_color="transparent")
-            r.pack(fill="x", pady=(6, 0))
+            r.pack(fill="x", pady=(4, 0))
             ctk.CTkLabel(
                 r, text=label_text, anchor="w", width=width_label
             ).pack(side="left")
             return r
 
-        host_row = _row(self._remote_frame, "Server IP / Host:")
-        self._remote_host_var = ctk.StringVar(value=remote_host)
+        host_row = _row(parent, "Server IP / Host:")
+        self._remote_host_var = ctk.StringVar()
         ctk.CTkEntry(
             host_row, textvariable=self._remote_host_var,
-            placeholder_text="e.g. 10.0.0.5 or sim.example.com", width=300,
+            placeholder_text="e.g. 10.0.0.5 or sim.example.com", width=320,
         ).pack(side="left", padx=(8, 0))
 
-        port_row = _row(self._remote_frame, "Port:")
-        self._remote_port_var = ctk.StringVar(value=remote_port)
+        port_row = _row(parent, "Port:")
+        self._remote_port_var = ctk.StringVar()
         ctk.CTkEntry(
             port_row, textvariable=self._remote_port_var,
             placeholder_text="22", width=80,
         ).pack(side="left", padx=(8, 0))
 
-        user_row = _row(self._remote_frame, "Username:")
-        self._remote_user_var = ctk.StringVar(value=remote_user)
+        user_row = _row(parent, "Username:")
+        self._remote_user_var = ctk.StringVar()
         ctk.CTkEntry(
             user_row, textvariable=self._remote_user_var,
-            placeholder_text="ubuntu", width=300,
+            placeholder_text="designer / headless / ubuntu", width=320,
         ).pack(side="left", padx=(8, 0))
 
-        key_row = _row(self._remote_frame, "SSH Key Path:")
-        self._remote_key_var = ctk.StringVar(value=remote_key_path)
+        key_row = _row(parent, "SSH Key Path:")
+        self._remote_key_var = ctk.StringVar()
         ctk.CTkEntry(
             key_row, textvariable=self._remote_key_var,
-            placeholder_text="~/.ssh/id_rsa", width=220,
+            placeholder_text="~/.ssh/id_ed25519 (blank = use ssh-agent)", width=240,
         ).pack(side="left", padx=(8, 0))
         ctk.CTkButton(
             key_row, text="Browse…", width=70,
             command=self._on_browse_key,
         ).pack(side="left", padx=(6, 0))
 
-        wd_row = _row(self._remote_frame, "Remote Work Dir:")
-        self._remote_workdir_var = ctk.StringVar(value=remote_work_dir)
+        agent_row = _row(parent, "")
+        self._use_agent_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            agent_row,
+            text="Also try ssh-agent / ~/.ssh defaults if key auth fails",
+            variable=self._use_agent_var,
+        ).pack(side="left", padx=(8, 0))
+
+        alias_row = _row(parent, "SSH-config alias:")
+        self._ssh_config_alias_var = ctk.StringVar()
+        ctk.CTkEntry(
+            alias_row, textvariable=self._ssh_config_alias_var,
+            placeholder_text="(optional) name from ~/.ssh/config — enables ProxyJump",
+            width=320,
+        ).pack(side="left", padx=(8, 0))
+
+        wd_row = _row(parent, "Remote Work Dir:")
+        self._remote_workdir_var = ctk.StringVar()
         ctk.CTkEntry(
             wd_row, textvariable=self._remote_workdir_var,
-            placeholder_text="/tmp/chipify_remote", width=300,
+            placeholder_text="/tmp/chipify_remote", width=320,
         ).pack(side="left", padx=(8, 0))
 
-        cmd_row = _row(self._remote_frame, "Remote Command:")
-        self._remote_cmd_var = ctk.StringVar(value=remote_chipify_cmd)
+        cmd_row = _row(parent, "Remote Command:")
+        self._remote_cmd_var = ctk.StringVar()
         ctk.CTkEntry(
             cmd_row, textvariable=self._remote_cmd_var,
-            placeholder_text="chipify-cli", width=300,
+            placeholder_text="(blank = auto-detect /usr/local/bin/chipify-remote, ~/.local/bin/chipify-remote, …)",
+            width=320,
         ).pack(side="left", padx=(8, 0))
 
-        test_row = ctk.CTkFrame(self._remote_frame, fg_color="transparent")
-        test_row.pack(fill="x", pady=(10, 0))
-        self._remote_test_btn = ctk.CTkButton(
-            test_row, text="🔌  Test Connection", width=170,
-            command=self._on_test_connection,
-        )
-        self._remote_test_btn.pack(side="left")
-        self._remote_test_status = ctk.CTkLabel(
-            test_row, text="", text_color="gray",
-            font=ctk.CTkFont(size=11), wraplength=320, justify="left",
-        )
-        self._remote_test_status.pack(side="left", padx=(10, 0))
+        env_row = _row(parent, "Env file (remote):")
+        self._remote_env_var = ctk.StringVar()
+        ctk.CTkEntry(
+            env_row, textvariable=self._remote_env_var,
+            placeholder_text="(optional) e.g. ~/.chipify-remote.env",
+            width=320,
+        ).pack(side="left", padx=(8, 0))
 
-        ctk.CTkLabel(
-            self._remote_frame,
-            text=(
-                "Auth: SSH key only (no passwords stored). Remote must have "
-                "chipify-cli + ngspice installed.\n"
-                "Install paramiko on this machine:  pip install chipify[remote]"
-            ),
-            text_color="gray", font=ctk.CTkFont(size=11), wraplength=480,
-            justify="left",
-        ).pack(anchor="w", pady=(8, 0))
-
-        if compute_target == "remote":
-            self._remote_frame.pack(fill="x", padx=8, pady=(12, 8),
-                                    after=self._compute_outer)
+        flags_row = _row(parent, "")
+        self._keep_on_fail_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            flags_row,
+            text="Keep remote run dir on failure (for ssh-in debugging)",
+            variable=self._keep_on_fail_var,
+        ).pack(side="left", padx=(8, 0))
 
     # ── Callbacks ───────────────────────────────────────────────────────────
 
@@ -447,8 +538,10 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def _on_compute_target_change(self, choice: str) -> None:
         if choice == "remote":
-            self._remote_frame.pack(fill="x", padx=8, pady=(12, 8),
-                                    after=self._compute_outer)
+            self._remote_frame.pack(
+                fill="both", expand=True, padx=8, pady=(12, 8),
+                after=self._compute_outer,
+            )
         else:
             self._remote_frame.pack_forget()
 
@@ -465,39 +558,280 @@ class SettingsWindow(ctk.CTkToplevel):
         if path:
             self._remote_key_var.set(path)
 
-    def _on_test_connection(self) -> None:
-        host = self._remote_host_var.get().strip()
-        user = self._remote_user_var.get().strip()
-        key = self._remote_key_var.get().strip()
-        cmd = self._remote_cmd_var.get().strip() or "chipify-cli"
+    # ── Profile editing helpers ─────────────────────────────────────────
+
+    def _current_profile_dict(self) -> dict[str, Any]:
+        """Snapshot the entry fields into a profile dict."""
         try:
             port = int(self._remote_port_var.get().strip() or "22")
         except (TypeError, ValueError):
             port = 22
+        return {
+            "name": self._active_profile_name,
+            "host": self._remote_host_var.get().strip(),
+            "port": port,
+            "user": self._remote_user_var.get().strip(),
+            "key_path": self._remote_key_var.get().strip(),
+            "work_dir": (self._remote_workdir_var.get().strip()
+                         or "/tmp/chipify_remote"),
+            "wrapper": self._remote_cmd_var.get().strip(),
+            "ssh_config_alias": self._ssh_config_alias_var.get().strip(),
+            "use_agent": bool(self._use_agent_var.get()),
+            "keep_on_failure": bool(self._keep_on_fail_var.get()),
+            "env_file": self._remote_env_var.get().strip(),
+        }
+
+    def _commit_current_profile(self) -> None:
+        """Write the current fields back into ``self._profiles`` in place."""
+        snapshot = self._current_profile_dict()
+        for i, p in enumerate(self._profiles):
+            if p["name"] == self._active_profile_name:
+                self._profiles[i] = snapshot
+                return
+        self._profiles.append(snapshot)
+
+    def _load_profile_into_fields(self, name: str) -> None:
+        for p in self._profiles:
+            if p["name"] == name:
+                break
+        else:
+            return
+        self._remote_host_var.set(p.get("host", "") or "")
+        self._remote_port_var.set(str(p.get("port", 22) or 22))
+        self._remote_user_var.set(p.get("user", "") or "")
+        self._remote_key_var.set(p.get("key_path", "") or "")
+        self._remote_workdir_var.set(
+            p.get("work_dir", "/tmp/chipify_remote") or "/tmp/chipify_remote"
+        )
+        self._remote_cmd_var.set(p.get("wrapper", "") or "")
+        self._ssh_config_alias_var.set(p.get("ssh_config_alias", "") or "")
+        self._remote_env_var.set(p.get("env_file", "") or "")
+        self._use_agent_var.set(bool(p.get("use_agent", True)))
+        self._keep_on_fail_var.set(bool(p.get("keep_on_failure", False)))
+        self._active_profile_name = name
+        self._set_preflight_message("(no preflight result yet)", color=None)
+
+    def _refresh_profile_menu(self, select: str | None = None) -> None:
+        names = [p["name"] for p in self._profiles] or ["default"]
+        self._profile_menu.configure(values=names)
+        if select and select in names:
+            self._profile_var.set(select)
+        elif self._profile_var.get() not in names:
+            self._profile_var.set(names[0])
+        self._update_profile_delete_state()
+
+    def _update_profile_delete_state(self) -> None:
+        self._profile_del_btn.configure(
+            state="disabled" if len(self._profiles) <= 1 else "normal"
+        )
+
+    def _on_profile_select(self, choice: str) -> None:
+        if choice == self._active_profile_name:
+            return
+        self._commit_current_profile()
+        self._load_profile_into_fields(choice)
+
+    def _on_profile_add(self) -> None:
+        self._commit_current_profile()
+        existing = {p["name"] for p in self._profiles}
+        base = "profile"
+        i = 1
+        while f"{base}_{i}" in existing:
+            i += 1
+        new_name = f"{base}_{i}"
+        new = dict(app_config.DEFAULT_REMOTE_PROFILE)
+        new["name"] = new_name
+        self._profiles.append(new)
+        self._refresh_profile_menu(select=new_name)
+        self._load_profile_into_fields(new_name)
+
+    def _on_profile_rename(self) -> None:
+        dialog = ctk.CTkInputDialog(
+            text=f"New name for profile '{self._active_profile_name}':",
+            title="Rename profile",
+        )
+        new_name = (dialog.get_input() or "").strip()
+        if not new_name or new_name == self._active_profile_name:
+            return
+        if any(p["name"] == new_name for p in self._profiles):
+            self._set_preflight_message(
+                f"A profile named '{new_name}' already exists.",
+                color="#e74c3c",
+            )
+            return
+        for p in self._profiles:
+            if p["name"] == self._active_profile_name:
+                p["name"] = new_name
+                break
+        self._active_profile_name = new_name
+        self._refresh_profile_menu(select=new_name)
+
+    def _on_profile_delete(self) -> None:
+        if len(self._profiles) <= 1:
+            return
+        target = self._active_profile_name
+        self._profiles = [
+            p for p in self._profiles if p["name"] != target
+        ]
+        new_active = self._profiles[0]["name"]
+        self._refresh_profile_menu(select=new_active)
+        self._load_profile_into_fields(new_active)
+
+    # ── Preflight + TOFU ────────────────────────────────────────────────
+
+    def _set_preflight_message(self, msg: str, color: str | None = None) -> None:
+        self._preflight_box.configure(state="normal")
+        self._preflight_box.delete("1.0", "end")
+        self._preflight_box.insert("end", msg)
+        self._preflight_box.configure(state="disabled")
+        if color:
+            self._remote_busy_lbl.configure(text="", text_color=color)
+
+    def _on_test_connection(self) -> None:
+        # Commit current entry fields into the active profile so the worker
+        # operates on the same dict the user is staring at.
+        self._commit_current_profile()
+        profile_dict = self._current_profile_dict()
 
         self._remote_test_btn.configure(state="disabled")
-        self._remote_test_status.configure(
-            text="Connecting…", text_color="orange"
+        self._remote_busy_lbl.configure(
+            text="Connecting…", text_color="orange",
         )
+        self._set_preflight_message("Running preflight on remote…")
 
         def _worker() -> None:
             try:
-                from chipify.remote_dispatcher import test_connection
+                from chipify.remote_dispatcher import (
+                    RemoteProfile, test_connection,
+                )
             except ImportError as exc:
-                self.after(0, self._set_test_status, False, str(exc))
+                self.after(0, self._set_preflight_result,
+                           False, f"paramiko missing: {exc}", {})
                 return
-            ok, msg = test_connection(
-                host, user, key, port=port, remote_chipify_cmd=cmd,
-            )
-            self.after(0, self._set_test_status, ok, msg)
+            profile = RemoteProfile.from_dict(profile_dict)
+            ok, msg, info = test_connection(profile=profile)
+            self.after(0, self._set_preflight_result, ok, msg, info)
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _set_test_status(self, ok: bool, msg: str) -> None:
+    def _set_preflight_result(
+        self, ok: bool, msg: str, info: dict[str, Any]
+    ) -> None:
         self._remote_test_btn.configure(state="normal")
-        self._remote_test_status.configure(
-            text=msg, text_color=("#2ecc71" if ok else "#e74c3c")
+        self._current_preflight_info = info or {}
+        if not ok and info and info.get("needs_trust"):
+            self._remote_busy_lbl.configure(
+                text="Host key needs to be trusted.",
+                text_color="orange",
+            )
+            self._set_preflight_message(msg)
+            self._show_trust_dialog(info)
+            return
+        if ok:
+            self._remote_busy_lbl.configure(
+                text="OK", text_color="#2ecc71",
+            )
+        else:
+            self._remote_busy_lbl.configure(
+                text="Failed", text_color="#e74c3c",
+            )
+        self._set_preflight_message(msg)
+
+    def _show_trust_dialog(self, info: dict[str, Any]) -> None:
+        host = info.get("host", "")
+        port = int(info.get("port") or 22)
+        fp = info.get("fingerprint_sha256", "")
+        key_type = info.get("key_type", "ssh-key")
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Trust remote host?")
+        dlg.geometry("520x260")
+        dlg.transient(self)
+        dlg.after(50, dlg.grab_set)
+
+        ctk.CTkLabel(
+            dlg,
+            text=f"Unknown host: {host}:{port}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(pady=(18, 4))
+        ctk.CTkLabel(
+            dlg,
+            text=f"{key_type} fingerprint",
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+        ).pack()
+        ctk.CTkLabel(
+            dlg,
+            text=f"SHA256:{fp}",
+            font=ctk.CTkFont(family="Consolas", size=12),
+        ).pack(pady=(2, 14))
+        ctk.CTkLabel(
+            dlg,
+            text=(
+                "If this matches the value printed by `ssh-keygen -lf` on the\n"
+                "server, click Trust. Otherwise abort and verify out-of-band."
+            ),
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+            justify="center",
+        ).pack(pady=(0, 12))
+
+        btns = ctk.CTkFrame(dlg, fg_color="transparent")
+        btns.pack(pady=(6, 12))
+
+        def _trust() -> None:
+            dlg.destroy()
+            self._do_trust_then_retest(info)
+
+        def _abort() -> None:
+            dlg.destroy()
+            self._remote_busy_lbl.configure(
+                text="Host not trusted; connection canceled.",
+                text_color="#e74c3c",
+            )
+
+        ctk.CTkButton(
+            btns, text="Abort", fg_color="transparent", border_width=1,
+            command=_abort,
+        ).pack(side="left", padx=8)
+        ctk.CTkButton(
+            btns, text="Trust this fingerprint",
+            fg_color="#2ecc71", hover_color="#27ae60",
+            command=_trust,
+        ).pack(side="left", padx=8)
+
+    def _do_trust_then_retest(self, info: dict[str, Any]) -> None:
+        self._remote_test_btn.configure(state="disabled")
+        self._remote_busy_lbl.configure(
+            text="Persisting host key…", text_color="orange",
         )
+
+        profile_dict = self._current_profile_dict()
+        host = info.get("host", "") or profile_dict.get("host", "")
+        port = int(info.get("port") or profile_dict.get("port", 22))
+        fp = info.get("fingerprint_sha256", "")
+        key_type = info.get("key_type", "")
+
+        def _worker() -> None:
+            from chipify.remote_dispatcher import (
+                RemoteProfile, test_connection, trust_host_fingerprint,
+            )
+            try:
+                trust_host_fingerprint(
+                    host=host, port=port, key_type=key_type,
+                    fingerprint_sha256=fp,
+                    username=profile_dict.get("user", ""),
+                    key_path=profile_dict.get("key_path", ""),
+                )
+            except Exception:
+                pass
+            profile = RemoteProfile.from_dict(profile_dict)
+            ok, msg, info2 = test_connection(
+                profile=profile, trust_new_hostkey=True,
+            )
+            self.after(0, self._set_preflight_result, ok, msg, info2)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     # ── Save ────────────────────────────────────────────────────────────────
 
@@ -518,25 +852,16 @@ class SettingsWindow(ctk.CTkToplevel):
         new_theme = self._theme_var.get()
         self._config["theme"] = new_theme
 
-        # Remote compute settings
+        # Compute target + named profiles. The single-host legacy fields
+        # are mirrored from the active profile inside save_remote_profiles().
         self._config["compute_target"] = self._compute_target_var.get()
-        self._config["remote_host"] = self._remote_host_var.get().strip()
-        self._config["remote_user"] = self._remote_user_var.get().strip()
-        self._config["remote_key_path"] = self._remote_key_var.get().strip()
-        self._config["remote_work_dir"] = (
-            self._remote_workdir_var.get().strip() or "/tmp/chipify_remote"
-        )
-        self._config["remote_chipify_cmd"] = (
-            self._remote_cmd_var.get().strip() or "chipify-cli"
-        )
-        try:
-            self._config["remote_port"] = int(
-                self._remote_port_var.get().strip() or "22"
-            )
-        except (TypeError, ValueError):
-            self._config["remote_port"] = 22
+        self._commit_current_profile()
 
         app_config.save_config(self._config)
+        app_config.save_remote_profiles(
+            self._profiles, active_name=self._active_profile_name,
+        )
+
         if hasattr(self._main_app, "change_theme"):
             self._main_app.change_theme(new_theme)
         self.destroy()

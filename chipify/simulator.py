@@ -1164,24 +1164,20 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
                 return None
             try:
                 from chipify.remote_dispatcher import (
-                    RemoteDispatcher, RemoteDispatcherError,
+                    RemoteDispatcher, RemoteDispatcherError, RemoteProfile,
                 )
             except ImportError as exc:
                 log.error("Remote dispatcher unavailable: %s", exc)
                 return None
             try:
-                with RemoteDispatcher(
-                    host=cfg.get("remote_host", ""),
-                    username=cfg.get("remote_user", ""),
-                    key_path=cfg.get("remote_key_path", ""),
-                    remote_work_dir=cfg.get(
-                        "remote_work_dir", "/tmp/chipify_remote"
-                    ),
-                    port=int(cfg.get("remote_port", 22) or 22),
-                    remote_chipify_cmd=cfg.get(
-                        "remote_chipify_cmd", "chipify-cli"
-                    ),
-                ) as disp:
+                profile = RemoteProfile.from_dict(
+                    app_config.get_active_profile(cfg)
+                )
+            except Exception as exc:
+                log.error("Could not resolve active remote profile: %s", exc)
+                return None
+            try:
+                with RemoteDispatcher(profile=profile) as disp:
                     return disp.run(
                         stim,
                         yaml_path=yaml_path,

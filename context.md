@@ -41,10 +41,46 @@ gui/
 ├── tabs/
 │   └── base.py             – TabFrame ABC (.build() / .on_state_change())
 └── widgets/
-    ├── settings_window.py  – Modal settings dialog (CTkToplevel)
+    ├── settings_window.py  – Modal settings dialog (CTkToplevel) — Remote tab supports
+    │                         named profiles, rich preflight panel, TOFU host-key prompt
+    ├── remote_console.py   – Collapsible tail viewer for the remote chipify-cli log
+    │                         (populated by RemoteDispatcher via progress meta)
     ├── treeview_styling.py – apply_dark_style(tree) for ttk.Treeview
     └── yaml_dumper.py      – QuotedString + inline-list YAML representers
 ```
+
+### Remote compute (`chipify/remote_dispatcher.py`, `chipify/preflight.py`, `tools/server/`)
+
+`compute_target = "remote"` in `settings.json` offloads every sweep over SSH
+to a Linux host — typically the `iic-osic-tools` Docker container.
+
+```
+tools/server/
+├── chipify-remote.sh                – env-aware wrapper (PATH, PDK, LANG) that
+│                                      sshd-non-interactive invocations call.
+├── bootstrap.sh                     – one-shot installer inside the container:
+│                                      pip install chipify[remote], drop the
+│                                      wrapper, write ~/.chipify-remote.env,
+│                                      verify with --preflight.
+└── Dockerfile.iic-osic-tools+chipify – optional derived image with sshd + the
+                                       wrapper preinstalled.
+```
+
+Wire protocol when `chipify-cli` is invoked over SSH with `--progress-stream`:
+
+- `READY <pid>`  — session-leader pgid (also persisted to a `pgid.txt` sentinel
+  inside the run dir so abort works even when stdout is buffered).
+- `PHASE: <name>` — phase markers (`load_config`, `templates`, `simulating`,
+  `postprocess`, `results_write`, `complete`).
+- `PROGRESS: <done> <total>` — per-batch counters.
+
+Settings are stored as named remote profiles under `remote_profiles[]` in
+`settings.json`; the legacy flat `remote_host` / `remote_user` / … keys are
+auto-migrated into a `"default"` profile on first save.
+
+Host keys are persisted to `~/.chipify/known_hosts` after a one-time TOFU
+prompt; per-host SHA-256 lib caches live under `~/.chipify/lib_cache/<host>/`
+so unchanged `.lib/.mod/.inc` files are skipped from `bundle.zip`.
 
 **`gui_tk.py`** — backward-compatibility shim (`from chipify.gui.main_window import main, SimifyGUI`).
 
@@ -104,6 +140,9 @@ pip install -e .
 # Install with optional fast vectorised evaluation
 pip install -e ".[fast]"
 
+# Install with the SSH remote dispatcher (paramiko)
+pip install -e ".[remote]"
+
 # Run tests
 pytest
 
@@ -114,4 +153,11 @@ python -m mypy chipify/expression.py chipify/schema.py chipify/gui/state.py \
 
 # Launch GUI
 chipify gui
+
+# Server side: install chipify into an iic-osic-tools container
+bash tools/server/bootstrap.sh           # per-user install (default)
+bash tools/server/bootstrap.sh --system  # /usr/local/bin/chipify-remote
+
+# Probe the local environment exactly like the GUI Test Connection panel
+chipify-cli --preflight
 ```

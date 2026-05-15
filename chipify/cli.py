@@ -36,6 +36,16 @@ def _json_summary(df, stim, yaml_name: str, duration_s: float) -> dict:
     }
 
 
+def _emit_phase(name: str) -> None:
+    """Print a 'PHASE: <name>' marker on stdout (no-op if not in stream mode).
+
+    Phases (chronological): startup, load_config, templates, ram_stage,
+    simulating, postprocess, results_write, history_write, complete.
+    The local RemoteDispatcher uses these for the GUI status label.
+    """
+    print(f"PHASE: {name}", flush=True)
+
+
 def _make_progress_stream_cb():
     """Return a progress_callback that emits 'PROGRESS: <done> <total>' to stdout.
 
@@ -54,10 +64,14 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
                 progress_stream: bool = False) -> dict | None:
     """Run simulation for one yaml file. Returns summary dict or None on failure."""
     import time
+    if progress_stream:
+        _emit_phase("load_config")
     print(f"[*] Loading configuration: {os.path.basename(yaml_path)}")
     stim = util.Stimuli(yaml_path)
     t0 = time.perf_counter()
     progress_cb = _make_progress_stream_cb() if progress_stream else None
+    if progress_stream:
+        _emit_phase("simulating")
     df = simulator.run_sim(
         stim,
         simulator=simulator_override,
@@ -71,8 +85,12 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
         print(f"[-] Simulation returned no data for {yaml_path}")
         return None
 
+    if progress_stream:
+        _emit_phase("postprocess")
     csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
     df.to_csv(csv_out, index=False)
+    if progress_stream:
+        _emit_phase("results_write")
     print(f"[+] Results saved to {csv_out}")
 
     # Save history copy + sidecar metadata
@@ -104,6 +122,8 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
     summary = _json_summary(df, stim, os.path.basename(yaml_path), duration_s)
     if json_out:
         print(json.dumps(summary))
+    if progress_stream:
+        _emit_phase("complete")
     return summary
 
 
@@ -168,13 +188,28 @@ def main():
         action="store_true",
         default=False,
         help=(
-            "Emit 'PROGRESS: <done> <total>' lines to stdout for each batch\n"
-            "completion. Used by RemoteDispatcher to drive the GUI progress\n"
-            "bar over SSH; harmless if grep'd out otherwise."
+            "Emit 'PROGRESS: <done> <total>' and 'PHASE: <name>' lines to\n"
+            "stdout. Used by RemoteDispatcher to drive the GUI progress\n"
+            "bar + phase indicator over SSH; harmless otherwise."
+        ),
+    )
+
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        default=False,
+        help=(
+            "Print a single JSON line describing this host's chipify /\n"
+            "Python / ngspice / xschem / PDK / disk state, then exit.\n"
+            "Used by the GUI's 'Test Connection' button."
         ),
     )
 
     args = parser.parse_args()
+
+    if args.preflight:
+        from chipify.preflight import emit_json
+        sys.exit(emit_json())
 
     # ── Batch mode ────────────────────────────────────────────────────────────
     if args.batch:
