@@ -55,15 +55,27 @@ gui/
 to a Linux host — typically the `iic-osic-tools` Docker container.
 
 ```
+chipify/_server/
+├── __init__.py             – wrapper_path() resolves the bundled script.
+└── chipify-remote.sh       – canonical env-aware wrapper (PATH, PDK, LANG)
+                              shipped inside the wheel as package_data.
+
 tools/server/
-├── chipify-remote.sh                – env-aware wrapper (PATH, PDK, LANG) that
-│                                      sshd-non-interactive invocations call.
-├── bootstrap.sh                     – one-shot installer inside the container:
-│                                      pip install chipify[remote], drop the
-│                                      wrapper, write ~/.chipify-remote.env,
-│                                      verify with --preflight.
+├── bootstrap.sh                     – convenience for source-checkout users:
+│                                      runs `pip install --user .[remote]`
+│                                      then `chipify-cli install-server`.
 └── Dockerfile.iic-osic-tools+chipify – optional derived image with sshd + the
                                        wrapper preinstalled.
+```
+
+Recommended server-side install (works for both pip and source-checkout):
+
+```bash
+python3 -m pip install --user "chipify[remote]"   # or `pip install .` from a clone
+chipify-cli install-server                        # drops ~/.local/bin/chipify-remote
+                                                  # writes ~/.chipify-remote.env
+                                                  # runs preflight + prints
+                                                  # the path to paste in the GUI
 ```
 
 Wire protocol when `chipify-cli` is invoked over SSH with `--progress-stream`:
@@ -154,9 +166,10 @@ python -m mypy chipify/expression.py chipify/schema.py chipify/gui/state.py \
 # Launch GUI
 chipify gui
 
-# Server side: install chipify into an iic-osic-tools container
-bash tools/server/bootstrap.sh           # per-user install (default)
-bash tools/server/bootstrap.sh --system  # /usr/local/bin/chipify-remote
+# Server side (inside the iic-osic-tools container): install chipify-remote
+pip install --user "chipify[remote]"     # or `pip install .` from a clone
+chipify-cli install-server               # per-user, ~/.local/bin/chipify-remote
+chipify-cli install-server --system      # sudo path, /usr/local/bin/chipify-remote
 
 # Probe the local environment exactly like the GUI Test Connection panel
 chipify-cli --preflight

@@ -5,7 +5,14 @@ setup(
     version="0.2.0",
     description="High-Performance Mismatch Simulation Wrapper",
     author="Santiago Hofwimmer",
-    packages=find_packages(), 
+    packages=find_packages(),
+    include_package_data=True,
+    package_data={
+        # Shipped with the wheel so `chipify-cli install-server` can drop the
+        # env-aware wrapper onto an iic-osic-tools container without needing
+        # a source checkout there.
+        "chipify._server": ["chipify-remote.sh"],
+    },
     install_requires=[
         "pandas",
         "numpy",
@@ -27,8 +34,8 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "chipify-cli=chipify.cli:main", 
-            "chipify=chipify.cli:run_gui", 
+            "chipify-cli=chipify.cli:main",
+            "chipify=chipify.cli:run_gui",
         ]
     }
 )

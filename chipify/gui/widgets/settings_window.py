@@ -393,9 +393,10 @@ class SettingsWindow(ctk.CTkToplevel):
             self._remote_frame,
             text=(
                 "Auth: SSH key (no passwords stored). On first connection the\n"
-                "host fingerprint is shown for you to trust. Server side, run\n"
-                "tools/server/bootstrap.sh inside the iic-osic-tools container\n"
-                "to install chipify-cli and the env-aware wrapper."
+                "host fingerprint is shown for you to trust.\n\n"
+                "Server side, inside the iic-osic-tools container:\n"
+                "    pip install --user 'chipify[remote]'\n"
+                "    chipify-cli install-server"
             ),
             text_color="gray", font=ctk.CTkFont(size=11), wraplength=560,
             justify="left",

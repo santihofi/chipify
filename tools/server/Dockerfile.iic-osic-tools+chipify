@@ -39,8 +39,10 @@ RUN apt-get update \
  && sed -i 's@^#\?UsePAM.*@UsePAM yes@'                               /etc/ssh/sshd_config \
  && rm -rf /var/lib/apt/lists/*
 
-# Drop the env-aware wrapper system-wide.
-COPY tools/server/chipify-remote.sh /usr/local/bin/chipify-remote
+# Drop the env-aware wrapper system-wide. The canonical copy lives inside
+# the chipify wheel (chipify/_server/chipify-remote.sh); we copy from there
+# so the image stays in sync with whatever `pip install` would deposit.
+COPY chipify/_server/chipify-remote.sh /usr/local/bin/chipify-remote
 RUN chmod 0755 /usr/local/bin/chipify-remote
 
 # Install chipify for the iic-osic-tools default user (headless).

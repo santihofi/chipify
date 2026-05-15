@@ -164,10 +164,8 @@ def collect(work_dir: str | None = None) -> dict[str, Any]:
     }
 
     try:
-        info["paramiko"] = _probe_version(
-            ["python3", "-c",
-             "import paramiko, sys; sys.stdout.write(paramiko.__version__)"]
-        )
+        import paramiko as _pk
+        info["paramiko"] = str(getattr(_pk, "__version__", "")) or ""
     except Exception:
         info["paramiko"] = ""
 

@@ -2,7 +2,8 @@
 # chipify-remote — env-aware wrapper for chipify-cli inside an
 # iic-osic-tools container.
 #
-# Installed by tools/server/bootstrap.sh to one of:
+# Installed by `chipify-cli install-server` (or tools/server/bootstrap.sh
+# for source-checkout users) to one of:
 #   ~/.local/bin/chipify-remote   (per-user, default)
 #   /usr/local/bin/chipify-remote (system, --system mode)
 #
@@ -30,7 +31,7 @@ export PATH
 # ── 2. PDK environment ────────────────────────────────────────────
 # Honour an explicit env file if present. Search order:
 #   $CHIPIFY_REMOTE_ENV   (explicit override)
-#   ~/.chipify-remote.env (per-user, written by bootstrap.sh)
+#   ~/.chipify-remote.env (per-user, written by install-server)
 #   /etc/chipify-remote.env (system-wide)
 #   /headless/.chipify-remote.env (iic-osic-tools default home)
 _chipify_env_loaded=""
@@ -67,9 +68,9 @@ chipify-remote: chipify-cli not found after env setup.
   PATH=${PATH}
   loaded env file: ${_chipify_env_loaded:-<none>}
 
-Re-run tools/server/bootstrap.sh inside the container, or install
-chipify manually:
+Reinstall chipify on this host:
   python3 -m pip install --user "chipify[remote]"
+  chipify-cli install-server
 EOF
     exit 127
 fi
