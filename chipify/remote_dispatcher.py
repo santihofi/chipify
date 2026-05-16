@@ -70,6 +70,10 @@ LOCAL_LIB_CACHE_DIR = os.path.join(LOCAL_CONFIG_DIR, "lib_cache")
 # Wrapper candidate paths probed on the remote (in order) when the user-
 # configured command is missing or empty.
 _WRAPPER_CANDIDATES: tuple[str, ...] = (
+    # Typical iic-osic-tools SSH user HOME (explicit — ``~'' may expand in
+    # unexpected ways depending on how ``sshd`` sets HOME for the login).
+    "/headless/.local/bin/chipify-remote",
+    "/headless/.local/bin/chipify-cli",
     "/usr/local/bin/chipify-remote",
     "~/.local/bin/chipify-remote",
     "/usr/local/bin/chipify-cli",
@@ -609,29 +613,79 @@ class RemoteDispatcher:
             if cand not in candidates:
                 candidates.append(cand)
 
-        # One round-trip: ask the shell to expand and test each candidate.
-        shell_expr = " || ".join(
-            f"(p={shlex.quote(c)}; "
-            f"q=$(eval echo \"$p\"); "
-            f"if [ -x \"$q\" ] || command -v \"$q\" >/dev/null 2>&1; then "
-            f"echo FOUND $q; exit 0; fi)"
-            for c in candidates
-        )
+        # Single ``bash -ec`` loop — the old ``( ... ) || ( ... )`` pattern never
+        # advanced past candidate 1: in bash ``if LIST; fi`` exits status 0 when
+        # the guard is false (empty ``then'' block), so every OR-clause exited 0.
+        raw_list = " ".join(shlex.quote(c) for c in candidates)
+        probe_script = (
+            "for raw in {}; do "
+            "  q=$(eval echo \"$raw\"); "
+            "  if [ -x \"$q\" ]; then echo FOUND \"$q\"; exit 0; "
+            "  elif command -v \"$q\" >/dev/null 2>&1; then "
+            "    wp=$(command -v \"$q\"); echo FOUND \"$wp\"; exit 0; "
+            "  fi; "
+            "done; echo NONE"
+        ).format(raw_list)
+
         out = self._exec_blocking(
-            f"set -e; ({shell_expr}) || echo NONE",
+            f"bash -ec {shlex.quote(probe_script)}",
             timeout=20,
         ).strip()
+
+        resolved = self._parse_found_wrappers(out)
+        if resolved is not None:
+            return resolved
+
+        # Fallback 1 — ``pip install --user`` puts scripts under the user-base bin
+        # regardless of HOME; sshd-non-interactive PATH often omits ``~/.local/bin``.
+        out_site = self._exec_blocking(
+            "set +e; "
+            "py=$(command -v python3 2>/dev/null || command -v python 2>/dev/null); "
+            "if [ -n \"$py\" ]; then "
+            "  base=$($py -m site --user-base 2>/dev/null); "
+            "  if [ -n \"$base\" ]; then "
+            "    for n in chipify-remote chipify-cli; do "
+            "      p=\"$base/bin/$n\"; "
+            "      [ -x \"$p\" ] && echo FOUND \"$p\" && exit 0; "
+            "    done; "
+            "  fi; "
+            "fi; echo NONE",
+            timeout=15,
+        ).strip()
+        resolved = self._parse_found_wrappers(out_site)
+        if resolved is not None:
+            return resolved
+
+        # Fallback 2 — login shell pulls in ``~/.profile`` / distro PATH tweaks.
+        out_login = self._exec_blocking(
+            "bash -lc 'for n in chipify-remote chipify-cli; do "
+            "  p=$(command -v \"$n\" 2>/dev/null); "
+            "  [ -n \"$p\" ] && echo FOUND \"$p\" && exit 0; "
+            "done; echo NONE'",
+            timeout=25,
+        ).strip()
+        resolved = self._parse_found_wrappers(out_login)
+        if resolved is not None:
+            return resolved
+
+        raise RemoteDispatcherError(
+            "No chipify-cli wrapper found on remote. Tried explicit paths "
+            f"({', '.join(candidates)}), Python user-base scripts, "
+            "and `bash -lc` discovery. Fix on the server (same SSH user as in "
+            "Settings): pip install `.[remote]` from the repo, then run "
+            "`chipify-cli install-server`; or paste the full path under "
+            "Remote Command."
+        )
+
+    @staticmethod
+    def _parse_found_wrappers(out: str) -> Optional[str]:
         for line in out.splitlines():
             line = line.strip()
             if line.startswith("FOUND "):
-                resolved = line[len("FOUND "):].strip()
-                log.info("Resolved remote wrapper: %s", resolved)
-                return resolved
-        raise RemoteDispatcherError(
-            "No chipify-cli wrapper found on remote. Tried: "
-            + ", ".join(candidates)
-            + ". Install with tools/server/bootstrap.sh inside the container."
-        )
+                cand = line[len("FOUND ") :].strip()
+                log.info("Resolved remote wrapper: %s", cand)
+                return cand
+        return None
 
     # ── Bundle build + upload (with per-host lib cache) ─────────────────
 
