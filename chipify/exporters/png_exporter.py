@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from chipify.exporters._white_bg import save_with_white_bg
 from chipify.plugin_loader import ExporterPlugin
 
 if TYPE_CHECKING:
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 class PNGExporter(ExporterPlugin):
     name: str = "PNG Image"
     extension: str = "png"
-    description: str = "Raster PNG, 200 DPI, preserves the plot's background colour."
+    description: str = "Raster PNG, 200 DPI, white background."
 
     def export(
         self,
@@ -22,11 +23,7 @@ class PNGExporter(ExporterPlugin):
         *,
         theme: dict[str, Any] | None = None,
     ) -> str:
-        fig.savefig(
-            out_path,
-            format="png",
-            dpi=200,
-            bbox_inches="tight",
-            facecolor=fig.get_facecolor(),
+        return save_with_white_bg(
+            fig, out_path,
+            format="png", dpi=200, bbox_inches="tight",
         )
-        return out_path

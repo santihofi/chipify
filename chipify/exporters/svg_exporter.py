@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from chipify.exporters._white_bg import save_with_white_bg
 from chipify.plugin_loader import ExporterPlugin
 
 if TYPE_CHECKING:
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 class SVGExporter(ExporterPlugin):
     name: str = "SVG Vector"
     extension: str = "svg"
-    description: str = "Scalable vector SVG; best for slides, papers, and re-styling."
+    description: str = "Scalable vector SVG, white background; ideal for slides and papers."
 
     def export(
         self,
@@ -22,10 +23,7 @@ class SVGExporter(ExporterPlugin):
         *,
         theme: dict[str, Any] | None = None,
     ) -> str:
-        fig.savefig(
-            out_path,
-            format="svg",
-            bbox_inches="tight",
-            facecolor=fig.get_facecolor(),
+        return save_with_white_bg(
+            fig, out_path,
+            format="svg", bbox_inches="tight",
         )
-        return out_path
