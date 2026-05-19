@@ -19,6 +19,7 @@ from chipify.plot_manager import PlotManager
 from chipify import app_config as _app_config
 from chipify.gui.services import data_loader as _dl_mp
 from chipify.gui.services.throttled_redraw import ThrottledRedraw
+from chipify.gui.widgets.export_button import attach_export_button
 
 # ── Shared style ──────────────────────────────────────────────────────────────
 # These remain as fallback defaults; live colours come from `_theme_colors()`
@@ -113,13 +114,22 @@ class PlotCell(ctk.CTkFrame):
         )
         self._mode_menu.grid(row=0, column=0, sticky="w")
 
+        attach_export_button(
+            hdr,
+            get_fig=lambda: self._fig,
+            suggested_name=lambda: self._mode.get(),
+            get_theme=_plot_theme,
+            width=90, height=28,
+            grid_kwargs={"row": 0, "column": 1, "padx": (6, 0)},
+        )
+
         self._btn_close = ctk.CTkButton(
             hdr, text="✕", width=28, height=28,
             fg_color="transparent", border_width=1,
             text_color="gray", hover_color="#3a0000",
             command=self._remove_cb,
         )
-        self._btn_close.grid(row=0, column=1, padx=(6, 0))
+        self._btn_close.grid(row=0, column=2, padx=(6, 0))
 
     def _build_controls(self):
         self._ctrl = ctk.CTkFrame(self, fg_color="transparent")

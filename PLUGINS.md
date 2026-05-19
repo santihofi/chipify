@@ -10,11 +10,12 @@ Chipify supports user plugins that extend the GUI and report output without modi
 2. [PlotPlugin](#plotplugin)
 3. [ReportPlugin](#reportplugin)
 4. [ExpressionPlugin](#expressionplugin)
-5. [Data reference](#data-reference)
-6. [API versioning](#api-versioning)
-7. [Error behaviour](#error-behaviour)
-8. [Diagnostics](#diagnostics)
-9. [Security note](#security-note)
+5. [ExporterPlugin](#exporterplugin)
+6. [Data reference](#data-reference)
+7. [API versioning](#api-versioning)
+8. [Error behaviour](#error-behaviour)
+9. [Diagnostics](#diagnostics)
+10. [Security note](#security-note)
 
 ---
 
@@ -216,6 +217,67 @@ class PowerEfficiency(ExpressionPlugin):
 
 ---
 
+## ExporterPlugin
+
+`ExporterPlugin` adds a new file format to the "💾 Export" menu attached to every plot (histograms, advanced analytics, transient, and each cell in the Multi-Plot Dashboard).
+
+PNG and SVG ship as built-in exporters. To support a new format — TIFF, EPS, WebP, JPG, PDF-per-plot, anything Matplotlib's `savefig()` understands — drop one of these plugins into the plugin directory.
+
+### Class attributes
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | `str` | **Yes** | Label shown in the per-plot Export menu. Must be unique across all loaded exporters. A user plugin whose `name` matches a built-in (`"PNG Image"`, `"SVG Vector"`) **overrides** the built-in. |
+| `extension` | `str` | **Yes** | File extension without a leading dot, e.g. `"png"`, `"svg"`, `"tiff"`. Used by the save dialog. |
+| `description` | `str` | No | Optional one-line description. Reserved for future tooltips. |
+| `api_version` | `str` | No | Plugin API version. Default `"1"`. |
+
+### Method
+
+```python
+def export(self, fig, out_path, *, theme=None) -> str:
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `fig` | `matplotlib.figure.Figure` | The live figure the user wants to save. Do **not** call `plt.close(fig)` — the GUI is still showing it. |
+| `out_path` | `str` | Absolute path chosen via the file dialog. Write here. |
+| `theme` | `dict \| None` | Active plot palette (`bg`, `fg`, `grid`, `spine`, `accent`, …). Built-in exporters preserve `fig.get_facecolor()` and ignore it; custom exporters may consult it for re-theming on save. |
+
+Return the path actually written (almost always the same as `out_path`).
+
+### Lifecycle
+
+`export()` is called once per click. The exporter class is instantiated fresh each time, so per-instance caches do not persist across saves. If your exporter raises, the error is caught and shown to the user via a message box — no crash.
+
+### Example
+
+```python
+# ~/.chipify/plugins/extra_exporters.py
+from chipify.plugin_loader import ExporterPlugin
+
+class WebPExporter(ExporterPlugin):
+    name      = "WebP Image"
+    extension = "webp"
+
+    def export(self, fig, out_path, *, theme=None):
+        fig.savefig(out_path, format="webp", dpi=200, bbox_inches="tight")
+        return out_path
+
+class TIFFExporter(ExporterPlugin):
+    name      = "TIFF (300 DPI)"
+    extension = "tiff"
+
+    def export(self, fig, out_path, *, theme=None):
+        fig.savefig(out_path, format="tiff", dpi=300, bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
+        return out_path
+```
+
+After restarting Chipify both formats appear in the Export menu of every plot.
+
+---
+
 ## Data reference
 
 ### `valid_df` — result DataFrame
@@ -271,7 +333,8 @@ There is no hard rejection based on `api_version` — warnings only.
 | `render_md()` raises | Section skipped. Error logged. Rest of the report is unaffected. |
 | `render_pdf()` raises | PDF page skipped. Error logged. |
 | `ExpressionPlugin` expression fails | Column set to `NaN` for all rows. Warning logged. |
-| Two plugins with the same `name` | Second plugin is skipped. Warning logged. |
+| `ExporterPlugin.export()` raises | Save is cancelled; error message shown in a dialog. App remains running. |
+| Two plugins with the same `name` | Second plugin is skipped. Warning logged. For exporters, a user plugin overrides a built-in of the same name. |
 
 Chipify never crashes due to a bad plugin.
 
@@ -290,6 +353,9 @@ Output example:
 {
     'expression': [{'api_version': '1', 'name': 'snr_db'},
                    {'api_version': '1', 'name': 'efficiency_pct'}],
+    'exporter':   [{'api_version': '1', 'name': 'PNG Image'},
+                   {'api_version': '1', 'name': 'SVG Vector'},
+                   {'api_version': '1', 'name': 'WebP Image'}],
     'plot':       [{'api_version': '1', 'name': 'Gain Histogram'}],
     'report':     [{'api_version': '1', 'name': 'Extended Yield Summary'}],
 }

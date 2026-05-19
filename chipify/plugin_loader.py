@@ -43,12 +43,29 @@ Expression plugin
         name = "snr_db"
         expression = "20 * log10(abs(signal / noise))"
 
+Exporter plugin
+^^^^^^^^^^^^^^^
+    from chipify.plugin_loader import ExporterPlugin
+
+    class MyExporter(ExporterPlugin):
+        name      = "TIFF Image"   # shown in the per-plot Export menu
+        extension = "tiff"         # file extension (no leading dot)
+
+        def export(self, fig, out_path, *, theme=None):
+            '''Write `fig` (matplotlib Figure) to `out_path`.'''
+            fig.savefig(out_path, format="tiff", dpi=200, bbox_inches="tight")
+            return out_path
+
+    PNG and SVG ship as built-in exporters; user plugins of the same
+    ``name`` override the built-in.
+
 Discovery
 ---------
 Plugins are loaded lazily on first call to ``get_plot_plugins()`` /
-``get_report_plugins()`` / ``get_expression_plugins()``.  Errors in
-individual plugin files are logged with full tracebacks and silently
-skipped so a bad plugin never crashes the main app.
+``get_report_plugins()`` / ``get_expression_plugins()`` /
+``get_exporter_plugins()``.  Errors in individual plugin files are
+logged with full tracebacks and silently skipped so a bad plugin
+never crashes the main app.
 
 If two plugins of the same type share the same ``name``, the second is
 skipped and a warning is logged.
@@ -89,6 +106,7 @@ _CURRENT_API_VERSION = "1"
 _plot_plugins:       list[Type["PlotPlugin"]]       | None = None
 _report_plugins:     list[Type["ReportPlugin"]]     | None = None
 _expression_plugins: list[Type["ExpressionPlugin"]] | None = None
+_exporter_plugins:   list[Type["ExporterPlugin"]]   | None = None
 
 
 # ── Base classes ──────────────────────────────────────────────────────────────
@@ -205,6 +223,66 @@ class ExpressionPlugin:
     expression: str = ""
 
 
+class ExporterPlugin:
+    """
+    Base class for plugins that save a Matplotlib figure to a single file
+    in a particular image format (PNG, SVG, TIFF, EPS, WebP, …).
+
+    Each plot in the UI grows a "💾 Export" button whose menu is built
+    dynamically from every registered exporter. PNG and SVG ship as
+    built-in exporters; users add formats by dropping a Python file
+    into ``~/.chipify/plugins/`` (or the ``CHIPIFY_PLUGINS`` directory).
+
+    Example
+    -------
+    ::
+
+        class WebPExporter(ExporterPlugin):
+            name      = "WebP Image"
+            extension = "webp"
+
+            def export(self, fig, out_path, *, theme=None):
+                fig.savefig(out_path, format="webp", dpi=200,
+                            bbox_inches="tight")
+                return out_path
+    """
+
+    #: Display name shown in the per-plot Export menu (must be unique).
+    name: str = "Unnamed Exporter"
+
+    #: File extension without a leading dot, e.g. ``"png"``, ``"svg"``.
+    extension: str = ""
+
+    #: Optional one-line description (reserved for future tooltips).
+    description: str = ""
+
+    #: Chipify plugin API version this plugin was written for.
+    api_version: str = "1"
+
+    def export(
+        self,
+        fig: "Figure",
+        out_path: str,
+        *,
+        theme: dict | None = None,
+    ) -> str:
+        """
+        Write *fig* to *out_path* and return the path actually written.
+
+        Parameters
+        ----------
+        fig:
+            ``matplotlib.figure.Figure`` to save.
+        out_path:
+            Absolute filesystem path the exporter must write to.
+        theme:
+            Optional active palette dict (same keys as in :class:`PlotPlugin`).
+            Built-in exporters preserve ``fig.get_facecolor()`` and ignore
+            this; custom exporters may consult it for re-theming on save.
+        """
+        raise NotImplementedError
+
+
 # ── Discovery ────────────────────────────────────────────────────────────────
 
 def _plugin_dir() -> str:
@@ -294,12 +372,31 @@ def get_expression_plugins() -> list[Type[ExpressionPlugin]]:
     return _expression_plugins  # type: ignore[return-value]
 
 
+def get_exporter_plugins() -> list[Type[ExporterPlugin]]:
+    """
+    Return every available ExporterPlugin: built-in PNG/SVG first, then
+    user-supplied plugins discovered in the plugin directory. If a user
+    plugin uses the same ``name`` as a built-in, the user plugin wins.
+
+    Cached after the first call; clear via :func:`reload_plugins`.
+    """
+    global _exporter_plugins
+    if _exporter_plugins is None:
+        from chipify.exporters import BUILTIN_EXPORTERS
+        discovered: list[Type[ExporterPlugin]] = _discover(ExporterPlugin)  # type: ignore[assignment]
+        discovered_names = {p.name for p in discovered}
+        builtins = [p for p in BUILTIN_EXPORTERS if p.name not in discovered_names]
+        _exporter_plugins = builtins + discovered
+    return _exporter_plugins  # type: ignore[return-value]
+
+
 def reload_plugins() -> None:
     """Force re-discovery of all plugins on the next call."""
-    global _plot_plugins, _report_plugins, _expression_plugins
+    global _plot_plugins, _report_plugins, _expression_plugins, _exporter_plugins
     _plot_plugins        = None
     _report_plugins      = None
     _expression_plugins  = None
+    _exporter_plugins    = None
     log.info("Plugin cache cleared; plugins will reload on next access.")
 
 
@@ -335,4 +432,5 @@ def list_plugins() -> dict[str, list[dict[str, str]]]:
         "plot":       _describe(get_plot_plugins()),
         "report":     _describe(get_report_plugins()),
         "expression": _describe(get_expression_plugins()),
+        "exporter":   _describe(get_exporter_plugins()),
     }

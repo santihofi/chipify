@@ -30,6 +30,7 @@ from chipify.gui.widgets.settings_window import SettingsWindow  # noqa: F401
 from chipify.gui.widgets import yaml_dumper as _yaml_dumper
 from chipify.gui.widgets.yaml_dumper import QuotedString
 from chipify.gui.widgets.treeview_styling import apply_dark_style as _apply_dark_style, apply_treeview_style as _apply_treeview_style
+from chipify.gui.widgets.export_button import attach_export_button
 from chipify.gui.services import data_loader as _dl
 from chipify.gui.services import equation_service as _eq_svc
 from chipify.gui.services import yaml_editor_service as _ye_svc
@@ -541,6 +542,22 @@ class SimifyGUI(ctk.CTk):
 
     def on_history_select(self, selection, switch_tab=True):
         self._hist_ctrl.on_history_select(selection, switch_tab=switch_tab)
+
+    # ==========================================
+    # PLOT-EXPORT HELPERS (shared with attach_export_button)
+    # ==========================================
+    def _current_plot_theme(self) -> dict | None:
+        try:
+            from chipify.gui import theme as _theme_mod
+            return _theme_mod.plot_theme()
+        except Exception:
+            return None
+
+    def _set_export_status(self, message: str, color: str) -> None:
+        try:
+            self.lbl_status.configure(text=message, text_color=color)
+        except Exception:
+            pass
 
     # ==========================================
     # PDF EXPORT
@@ -1458,9 +1475,18 @@ class SimifyGUI(ctk.CTk):
         self.btn_latex = ctk.CTkButton(row2, text="TeX Export", command=self.action_export_latex, fg_color="#27ae60", hover_color="#2ecc71", width=90)
         self.btn_latex.pack(side=tk.LEFT)
 
+        attach_export_button(
+            row2,
+            get_fig=lambda: self.fig,
+            suggested_name=lambda: f"histogram_{self.plot_param_var.get()}",
+            get_theme=self._current_plot_theme,
+            on_status=self._set_export_status,
+            pack_kwargs={"side": tk.LEFT, "padx": (8, 0)},
+        )
+
         plt.style.use('dark_background')
         self.fig, self.ax = plt.subplots(figsize=(6, 4))
-        self.fig.patch.set_facecolor(panel_color) 
+        self.fig.patch.set_facecolor(panel_color)
         self.ax.set_facecolor(panel_color)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.tab_hist)
         self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
@@ -1598,6 +1624,15 @@ class SimifyGUI(ctk.CTk):
         
         self.lbl_tornado = ctk.CTkLabel(self.adv_controls_frame, text="Target Measurement:")
         self.tornado_target_dropdown = ctk.CTkOptionMenu(self.adv_controls_frame, variable=self.tornado_target_var, command=self.update_adv_plots, dynamic_resizing=False)
+
+        attach_export_button(
+            control_frame,
+            get_fig=lambda: self.adv_fig,
+            suggested_name=lambda: self.adv_mode_var.get(),
+            get_theme=self._current_plot_theme,
+            on_status=self._set_export_status,
+            pack_kwargs={"side": tk.RIGHT},
+        )
 
         self.adv_fig = plt.figure(figsize=(8, 5))
         self.adv_fig.patch.set_facecolor(panel_color)
@@ -1760,6 +1795,15 @@ class SimifyGUI(ctk.CTk):
             command=self.update_transient_plot,
             fg_color="#3484F0", hover_color="#1a6fc4",
         ).pack(side=tk.RIGHT, padx=(8, 0))
+
+        attach_export_button(
+            ctrl,
+            get_fig=lambda: self.tran_fig,
+            suggested_name="transient",
+            get_theme=self._current_plot_theme,
+            on_status=self._set_export_status,
+            pack_kwargs={"side": tk.RIGHT, "padx": (8, 0)},
+        )
 
         # ── Body: signals selector (left) + plot (right) ─────────────────────
         body = ctk.CTkFrame(self.tab_tran, fg_color="transparent")
