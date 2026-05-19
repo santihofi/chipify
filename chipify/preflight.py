@@ -3,10 +3,9 @@ preflight.py – Structured environment probe for the chipify-cli host.
 
 Used in two ways:
 
-1. ``chipify-cli --preflight`` (invoked over SSH by RemoteDispatcher) prints
-   one JSON line to stdout describing the remote's Python, EDA tooling, PDK
-   and disk situation. The GUI displays this as a rich "Test Connection"
-   result.
+1. ``GET /preflight`` on the chipify HTTPS server returns this JSON
+   describing the server's Python, EDA tooling, PDK and disk situation.
+   The GUI displays it as the "Test Connection" result panel.
 
 2. Locally on the client, only as a helper to render the JSON returned by
    the remote into a human-readable summary string.
@@ -163,12 +162,6 @@ def collect(work_dir: str | None = None) -> dict[str, Any]:
                           and os.path.exists("/foss/pdks"),
     }
 
-    try:
-        import paramiko as _pk
-        info["paramiko"] = str(getattr(_pk, "__version__", "")) or ""
-    except Exception:
-        info["paramiko"] = ""
-
     warnings: list[str] = []
     errors: list[str] = []
 
@@ -182,11 +175,11 @@ def collect(work_dir: str | None = None) -> dict[str, Any]:
             "templates on the remote — usually they are uploaded)."
         )
     if not pdk_root:
-        warnings.append("PDK_ROOT not set; the wrapper defaults to /foss/pdks.")
+        warnings.append("PDK_ROOT not set; defaulting to /foss/pdks.")
     elif not os.path.isdir(pdk_root):
         errors.append(f"PDK_ROOT={pdk_root!r} does not exist.")
     if not active_pdk:
-        warnings.append("PDK env var not set; pick one in ~/.chipify-remote.env.")
+        warnings.append("PDK env var not set; export PDK before launching the server.")
     if info["work_dir_free_gb"] is not None and info["work_dir_free_gb"] < 1.0:
         warnings.append(
             f"Only {info['work_dir_free_gb']} GB free on {work_dir}."

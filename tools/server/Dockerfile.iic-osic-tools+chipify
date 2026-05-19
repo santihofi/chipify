@@ -1,7 +1,8 @@
-# Derived image: iic-osic-tools + chipify (pre-installed, sshd-enabled).
+# Derived image: iic-osic-tools + chipify (HTTPS server pre-installed).
 #
-# This is an optional convenience layer for users who want a ready-to-run
-# container that the Chipify GUI can SSH into out of the box.
+# This image lets users `docker run` it and have the Chipify GUI offload
+# sweeps to it over HTTPS. The container speaks HTTPS itself; the host
+# needs no extra configuration beyond a `docker run -p` port mapping.
 #
 # Build (from the repo root):
 #   docker build \
@@ -10,62 +11,49 @@
 #
 # Run:
 #   docker run -d --name chipify-ee \
-#       -p 2222:22 \
+#       -p 8443:8443 \
 #       -v $HOME/designs:/foss/designs \
-#       -v $HOME/.ssh/id_rsa.pub:/headless/.ssh/authorized_keys:ro \
 #       chipify-ee:latest
 #
-# Then in the Chipify GUI, Remote tab:
-#   Host          : localhost
-#   Port          : 2222
-#   User          : headless
-#   Key Path      : ~/.ssh/id_rsa
-#   Remote Command: /usr/local/bin/chipify-remote
+# First start auto-generates a self-signed TLS cert at
+# /home/headless/.chipify/server-{cert,key}.pem and a bearer token at
+# /home/headless/.chipify/server-token. Read both with:
+#   docker exec chipify-ee cat /home/headless/.chipify/server-token
+#   docker exec chipify-ee openssl x509 \
+#       -in /home/headless/.chipify/server-cert.pem \
+#       -noout -fingerprint -sha256
+# and paste them into the Chipify GUI's Remote tab.
 #
 ARG BASE=hpretl/iic-osic-tools:latest
 FROM ${BASE}
 
-USER root
-
-# Install + harden sshd. Disable password auth and root login;
-# key-only access matches the dispatcher's auth model.
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        openssh-server \
- && mkdir -p /var/run/sshd \
- && sed -i 's@^#\?PermitRootLogin.*@PermitRootLogin no@'              /etc/ssh/sshd_config \
- && sed -i 's@^#\?PasswordAuthentication.*@PasswordAuthentication no@' /etc/ssh/sshd_config \
- && sed -i 's@^#\?ChallengeResponseAuthentication.*@ChallengeResponseAuthentication no@' /etc/ssh/sshd_config \
- && sed -i 's@^#\?UsePAM.*@UsePAM yes@'                               /etc/ssh/sshd_config \
- && rm -rf /var/lib/apt/lists/*
-
-# Drop the env-aware wrapper system-wide. The canonical copy lives inside
-# the chipify wheel (chipify/_server/chipify-remote.sh); we copy from there
-# so the image stays in sync with whatever `pip install` would deposit.
-COPY chipify/_server/chipify-remote.sh /usr/local/bin/chipify-remote
-RUN chmod 0755 /usr/local/bin/chipify-remote
-
-# Install chipify for the iic-osic-tools default user (headless).
-# Adjust if your base image uses 'designer' or 'foss' as the runtime user.
 ARG REMOTE_USER=headless
 USER ${REMOTE_USER}
 WORKDIR /home/${REMOTE_USER}
 
-# Copy the source in, install, then strip the build context.
+# Install chipify with both client and server extras. The server extra
+# pulls in fastapi / uvicorn / python-multipart / cryptography.
 COPY --chown=${REMOTE_USER}:${REMOTE_USER} . /tmp/chipify-src
 RUN python3 -m pip install --user --no-warn-script-location \
-        "/tmp/chipify-src[remote]" \
+        "/tmp/chipify-src[remote,server]" \
  && rm -rf /tmp/chipify-src \
- && mkdir -p /home/${REMOTE_USER}/.ssh \
- && chmod 0700 /home/${REMOTE_USER}/.ssh
+ && mkdir -p /home/${REMOTE_USER}/.chipify
 
 # Default chipify env (override by mounting a file at the same path).
 RUN printf '%s\n' \
         'export PDK_ROOT="/foss/pdks"' \
         'export PDK="ihp-sg13g2"' \
-    > /home/${REMOTE_USER}/.chipify-remote.env \
- && chmod 0600 /home/${REMOTE_USER}/.chipify-remote.env
+    > /home/${REMOTE_USER}/.chipify-env \
+ && chmod 0600 /home/${REMOTE_USER}/.chipify-env
 
-USER root
-EXPOSE 22
-CMD ["/usr/sbin/sshd", "-D", "-e"]
+ENV CHIPIFY_WORK_DIR=/tmp/chipify_remote
+EXPOSE 8443
+
+# Source the env file so PDK_ROOT/PDK are visible to chipify-cli's
+# subprocesses, then exec the server. uvicorn logs to stdout which
+# `docker logs` captures.
+CMD ["/bin/bash", "-lc", \
+     ". /home/headless/.chipify-env && \
+      exec /home/headless/.local/bin/chipify-cli serve \
+          --host 0.0.0.0 --port 8443 \
+          --work-dir ${CHIPIFY_WORK_DIR}"]

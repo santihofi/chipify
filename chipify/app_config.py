@@ -18,16 +18,13 @@ LOG_PATH    = os.path.join(settings.OUT_DIR, "chipify.log")
 
 DEFAULT_REMOTE_PROFILE: dict[str, Any] = {
     "name": "default",
-    "host": "",
-    "port": 22,
-    "user": "",
-    "key_path": "",
+    "base_url": "",                  # e.g. https://host:8443
+    "token": "",                     # bearer token literal
+    "token_file": "",                # optional path read at run time; wins over `token`
     "work_dir": "/tmp/chipify_remote",
-    "wrapper": "",                  # blank → auto-detect on remote
-    "ssh_config_alias": "",          # if set, ~/.ssh/config alias overlays settings
-    "use_agent": True,               # also try ssh-agent if key auth fails
+    "verify_tls": True,              # False = skip TLS fingerprint pin (dev only)
+    "cert_fingerprint_sha256": "",   # populated by the GUI TOFU dialog
     "keep_on_failure": False,        # leave remote run dir intact on rc!=0
-    "env_file": "",                  # CHIPIFY_REMOTE_ENV path (sourced by wrapper)
 }
 
 DEFAULTS: dict[str, Any] = {
@@ -47,18 +44,9 @@ DEFAULTS: dict[str, Any] = {
     "theme": "night",                 # appearance theme: night|dark|light
     # ── Remote compute dispatcher ──
     "compute_target": "local",        # local|remote
-    # Named profiles + which one is active. Legacy single-host fields below
-    # are still consulted for back-compat and auto-migrated on first save.
+    # Named HTTPS server profiles + which one is active.
     "remote_profiles": [],            # list of dicts shaped like DEFAULT_REMOTE_PROFILE
     "active_remote_profile": "default",
-    # Legacy single-host fields (kept for migration; will be removed once
-    # all installations have re-saved through the new Settings dialog).
-    "remote_host": "",
-    "remote_user": "",
-    "remote_key_path": "",
-    "remote_work_dir": "/tmp/chipify_remote",
-    "remote_port": 22,
-    "remote_chipify_cmd": "",
 }
 
 _logging_ready = False
@@ -207,22 +195,14 @@ def get_live_plot_emit_stride() -> int:
 # ── Remote profile helpers ────────────────────────────────────────────────────
 
 def _legacy_remote_to_profile(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Build a profile dict from the pre-profile flat fields."""
-    profile = DEFAULT_REMOTE_PROFILE.copy()
-    profile.update({
-        "name": "default",
-        "host": cfg.get("remote_host", "") or "",
-        "user": cfg.get("remote_user", "") or "",
-        "key_path": cfg.get("remote_key_path", "") or "",
-        "work_dir": cfg.get("remote_work_dir", "/tmp/chipify_remote")
-                    or "/tmp/chipify_remote",
-        "wrapper": cfg.get("remote_chipify_cmd", "") or "",
-    })
-    try:
-        profile["port"] = int(cfg.get("remote_port", 22) or 22)
-    except (TypeError, ValueError):
-        profile["port"] = 22
-    return profile
+    """Stub kept for callers that still reach for it.
+
+    The previous SSH-shaped fields (remote_host / remote_user / remote_key_path
+    / remote_port / remote_chipify_cmd) have no HTTPS analogue, so we return
+    a fresh default profile and let the user fill in base_url + token via
+    the Settings dialog.
+    """
+    return DEFAULT_REMOTE_PROFILE.copy()
 
 
 def get_remote_profiles(cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -247,12 +227,7 @@ def get_remote_profiles(cfg: dict[str, Any] | None = None) -> list[dict[str, Any
         profiles.append(merged)
 
     if not profiles:
-        # Migrate from legacy single-host fields if they have a host set.
-        legacy = _legacy_remote_to_profile(cfg)
-        if legacy.get("host") or legacy.get("user"):
-            profiles.append(legacy)
-        else:
-            profiles.append(DEFAULT_REMOTE_PROFILE.copy())
+        profiles.append(DEFAULT_REMOTE_PROFILE.copy())
 
     return profiles
 
@@ -298,19 +273,12 @@ def save_remote_profiles(
     elif clean and cfg.get("active_remote_profile") not in {p["name"] for p in clean}:
         cfg["active_remote_profile"] = clean[0]["name"]
 
-    # Mirror the active profile back to legacy fields so older code paths
-    # (and external scripts) still see something sensible. These mirror
-    # fields are eventually retired.
-    if clean:
-        active = next(
-            (p for p in clean if p["name"] == cfg.get("active_remote_profile")),
-            clean[0],
-        )
-        cfg["remote_host"] = active.get("host", "")
-        cfg["remote_user"] = active.get("user", "")
-        cfg["remote_key_path"] = active.get("key_path", "")
-        cfg["remote_work_dir"] = active.get("work_dir", "/tmp/chipify_remote")
-        cfg["remote_port"] = int(active.get("port", 22) or 22)
-        cfg["remote_chipify_cmd"] = active.get("wrapper", "")
+    # Drop any orphaned legacy SSH keys that might be sitting in
+    # settings.json from a previous version. They have no HTTPS analogue.
+    for legacy in (
+        "remote_host", "remote_user", "remote_key_path",
+        "remote_work_dir", "remote_port", "remote_chipify_cmd",
+    ):
+        cfg.pop(legacy, None)
 
     save_config(cfg)

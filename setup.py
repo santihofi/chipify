@@ -6,13 +6,6 @@ setup(
     description="High-Performance Mismatch Simulation Wrapper",
     author="Santiago Hofwimmer",
     packages=find_packages(),
-    include_package_data=True,
-    package_data={
-        # Shipped with the wheel so `chipify-cli install-server` can drop the
-        # env-aware wrapper onto an iic-osic-tools container without needing
-        # a source checkout there.
-        "chipify._server": ["chipify-remote.sh"],
-    },
     install_requires=[
         "pandas",
         "numpy",
@@ -29,8 +22,18 @@ setup(
         "vacask": ["PyOPUS>=0.11"],
         # pip install chipify[fast]  → numexpr accelerates transient equation eval
         "fast": ["numexpr"],
-        # pip install chipify[remote] → paramiko for SSH/SFTP remote dispatcher
-        "remote": ["paramiko>=3.0"],
+        # pip install chipify[remote] → httpx client for the HTTPS dispatcher
+        # (TLS fingerprint pinning uses stdlib ssl/hashlib — no extra deps).
+        "remote": ["httpx>=0.27"],
+        # pip install chipify[server] → FastAPI + uvicorn + multipart + cryptography
+        # for the `chipify-cli serve` HTTPS server (installed inside the
+        # iic-osic-tools container).
+        "server": [
+            "fastapi>=0.110",
+            "uvicorn[standard]>=0.27",
+            "python-multipart>=0.0.9",
+            "cryptography>=42",
+        ],
     },
     entry_points={
         "console_scripts": [

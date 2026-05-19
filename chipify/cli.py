@@ -5,8 +5,8 @@ import sys
 import json
 
 # Only the lightest imports happen at module level so subcommands like
-# `chipify-cli install-server` and `chipify-cli --preflight` work on a
-# minimal install (e.g. before pandas / tqdm have been installed).
+# `chipify-cli serve` and `chipify-cli --preflight` work on a minimal
+# install (e.g. before pandas / tqdm have been installed).
 from chipify import settings
 
 
@@ -46,194 +46,113 @@ def _emit_phase(name: str) -> None:
     print(f"PHASE: {name}", flush=True)
 
 
-# ── install-server subcommand ──────────────────────────────────────────────
+# ── serve subcommand ───────────────────────────────────────────────────────
 
-_INSTALL_SERVER_HELP = """\
-Usage: chipify-cli install-server [options]
+_SERVE_HELP = """\
+Usage: chipify-cli serve [options]
 
-Drop the env-aware wrapper that the Chipify GUI's RemoteDispatcher invokes
-over SSH onto this host. Intended for the remote side of a remote-compute
-setup (typically inside an iic-osic-tools container).
+Start the chipify HTTPS server on this host. Intended for the remote side of
+a remote-compute setup (typically inside an iic-osic-tools container). On
+first start, a self-signed TLS certificate and a bearer token are generated
+under ~/.chipify/ — copy the printed fingerprint and token into the GUI's
+Remote Settings tab.
 
 Options:
-  --system              Install to /usr/local/bin/chipify-remote (root required).
-                        Default: per-user at ~/.local/bin/chipify-remote.
-  --pdk NAME            PDK value to bake into ~/.chipify-remote.env
-                        (default: ihp-sg13g2). Ignored with --no-env.
-  --no-env              Do not write a default ~/.chipify-remote.env.
-  --force               Overwrite an existing wrapper / env file.
-  --no-verify           Skip the post-install preflight check.
+  --host HOST           Bind address (default: 0.0.0.0).
+  --port PORT           TCP port (default: 8443).
+  --cert PATH           TLS cert PEM. Default: ~/.chipify/server-cert.pem
+                        (auto-generated self-signed if missing).
+  --key PATH            TLS key PEM. Default: ~/.chipify/server-key.pem.
+  --token-file PATH     File holding the bearer token. Default precedence:
+                        $CHIPIFY_TOKEN, then ~/.chipify/server-token
+                        (auto-generated and printed if missing).
+  --work-dir PATH       Per-job staging root (default: /tmp/chipify_remote).
   -h, --help            Show this help.
-
-After install, paste the printed path into the Chipify GUI's Remote tab as
-the 'Remote Command' field (or leave that field blank to auto-detect).
 """
 
 
-def _install_server_main(argv: list[str]) -> int:
-    """Implement ``chipify-cli install-server`` – drops the wrapper + env file."""
-    import shutil
+def _serve_main(argv: list[str]) -> int:
+    """Implement ``chipify-cli serve`` – start the HTTPS server."""
     from pathlib import Path
 
-    install_system = False
-    write_env = True
-    do_verify = True
-    force = False
-    pdk = "ihp-sg13g2"
-
-    it = iter(argv)
-    for arg in it:
-        if arg in ("-h", "--help"):
-            print(_INSTALL_SERVER_HELP)
-            return 0
-        elif arg == "--system":
-            install_system = True
-        elif arg == "--no-env":
-            write_env = False
-        elif arg == "--no-verify":
-            do_verify = False
-        elif arg == "--force":
-            force = True
-        elif arg == "--pdk":
-            try:
-                pdk = next(it)
-            except StopIteration:
-                print("error: --pdk requires an argument.", file=sys.stderr)
-                return 2
-        elif arg.startswith("--pdk="):
-            pdk = arg.split("=", 1)[1]
-        else:
-            print(f"error: unknown option: {arg}", file=sys.stderr)
-            print(_INSTALL_SERVER_HELP, file=sys.stderr)
-            return 2
-
-    if os.name != "posix":
-        print(
-            "error: `chipify-cli install-server` targets a POSIX host "
-            "(typically the iic-osic-tools Linux container). Run it on the "
-            "remote, not on your Windows / macOS laptop.",
-            file=sys.stderr,
-        )
-        return 1
+    parser = argparse.ArgumentParser(
+        prog="chipify-cli serve",
+        add_help=False,
+    )
+    parser.add_argument("-h", "--help", action="store_true")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8443)
+    parser.add_argument("--cert", type=Path, default=None)
+    parser.add_argument("--key", type=Path, default=None)
+    parser.add_argument("--token-file", type=Path, default=None)
+    parser.add_argument(
+        "--work-dir", type=Path, default=Path("/tmp/chipify_remote"),
+    )
 
     try:
-        from chipify._server import wrapper_path
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return int(exc.code or 2)
+
+    if args.help:
+        print(_SERVE_HELP)
+        return 0
+
+    try:
+        from chipify._server import run as _serve_run
+        from chipify._server.auth import load_or_create_token
+        from chipify._server.tls import ensure_self_signed_cert, fingerprint_sha256
     except ImportError as exc:
         print(
-            f"error: chipify._server is missing from the installed package "
-            f"({exc}). Reinstall with: pip install --upgrade 'chipify[remote]'",
+            f"error: chipify[server] extras are not installed ({exc}). "
+            f"Run: pip install --upgrade 'chipify[server]'",
             file=sys.stderr,
         )
         return 1
 
-    src = wrapper_path()
-    if not src.is_file():
-        print(
-            f"error: bundled wrapper not found at {src}. "
-            f"This usually means setup.py package_data did not include it.",
-            file=sys.stderr,
-        )
-        return 1
+    cfg_dir = Path.home() / ".chipify"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cert = args.cert or (cfg_dir / "server-cert.pem")
+    key  = args.key  or (cfg_dir / "server-key.pem")
+    ensure_self_signed_cert(cert, key)
 
-    if install_system:
-        dst = Path("/usr/local/bin/chipify-remote")
-        if hasattr(os, "geteuid") and os.geteuid() != 0:  # type: ignore[attr-defined]
-            print(
-                "error: --system installs to /usr/local/bin which requires "
-                "root. Re-run as 'sudo chipify-cli install-server --system' "
-                "or drop --system for a per-user install at "
-                "~/.local/bin/chipify-remote.",
-                file=sys.stderr,
-            )
-            return 1
-    else:
-        dst = Path.home() / ".local" / "bin" / "chipify-remote"
+    token = load_or_create_token(args.token_file)
 
-    if dst.exists() and not force:
-        print(
-            f"error: {dst} already exists. Pass --force to overwrite.",
-            file=sys.stderr,
-        )
-        return 1
+    args.work_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(str(src), str(dst))
-        dst.chmod(0o755)
-    except OSError as exc:
-        print(f"error: could not install wrapper to {dst}: {exc}", file=sys.stderr)
-        return 1
-    print(f"[+] Installed wrapper: {dst}")
-
-    env_file = Path.home() / ".chipify-remote.env"
-    if write_env:
-        if env_file.exists() and not force:
-            print(f"[=] Env file already present, leaving it alone: {env_file}")
-        else:
-            try:
-                env_file.write_text(
-                    "# Sourced by chipify-remote before exec'ing chipify-cli.\n"
-                    "# Edit to point at your active PDK / extra tool paths.\n"
-                    'export PDK_ROOT="/foss/pdks"\n'
-                    f'export PDK="{pdk}"\n'
-                    "\n"
-                    "# Optional standard cell selection (sky130 example):\n"
-                    "# export STD_CELL_LIBRARY=\"sky130_fd_sc_hd\"\n"
-                    "\n"
-                    "# Optional extra PATH entries (xschem libs, custom binaries):\n"
-                    '# export PATH="$PATH:/foss/designs/mytools/bin"\n',
-                    encoding="utf-8",
-                )
-                env_file.chmod(0o600)
-                print(f"[+] Wrote default env file: {env_file} (pdk={pdk})")
-            except OSError as exc:
-                print(f"[!] Could not write {env_file}: {exc}")
-    else:
-        print("[=] --no-env: skipping ~/.chipify-remote.env")
-
-    info: dict = {"ok": True}
-    if do_verify:
-        from chipify.preflight import collect, format_summary
-        info = collect()
-        print()
-        print("─" * 60)
-        print(" Preflight on this host")
-        print("─" * 60)
-        print(format_summary(info))
-        print()
-        if not info.get("ok"):
-            print(
-                "[!] Preflight reported errors (see above). Fix them, then\n"
-                "    re-run `chipify-cli --preflight` to verify.",
-                file=sys.stderr,
-            )
-
-    print()
     print("─" * 60)
-    print(" Ready. In the Chipify GUI on your laptop:")
-    print()
-    print("   Settings → Remote → Profile")
-    print(f"     Host          : <this host's address>")
-    try:
-        import getpass
-        user = getpass.getuser()
-    except Exception:
-        user = "<your-user>"
-    print(f"     Username      : {user}")
-    print(f"     SSH Key Path  : <path to your private key on the laptop>")
-    print(f"     Remote Command: {dst}")
-    print()
-    print(" Then click 'Test Connection'.")
+    print(" chipify HTTPS server starting")
     print("─" * 60)
-    return 0 if info.get("ok") else 3
+    print(f"   listen        : https://{args.host}:{args.port}")
+    print(f"   cert          : {cert}")
+    print(f"   key           : {key}")
+    try:
+        fp = fingerprint_sha256(cert.read_bytes())
+        print(f"   fingerprint   : {fp}")
+    except OSError:
+        pass
+    print(f"   work_dir      : {args.work_dir}")
+    print(f"   token (first 8): {token[:8]}…   (paste the full value into "
+          f"the GUI)")
+    print("─" * 60)
+    sys.stdout.flush()
+
+    return _serve_run(
+        host=args.host,
+        port=args.port,
+        cert=cert,
+        key=key,
+        token=token,
+        work_dir=args.work_dir,
+    )
 
 
 def _make_progress_stream_cb():
     """Return a progress_callback that emits 'PROGRESS: <done> <total>' to stdout.
 
-    Used by --progress-stream when chipify-cli is invoked over SSH by
-    RemoteDispatcher; the local side tails stdout for these lines to drive
-    the GUI progress bar.
+    Used by --progress-stream when chipify-cli is run inside the chipify
+    server's job manager; the server forwards each line over SSE so the
+    local GUI's RemoteDispatcher can drive the progress bar.
     """
     def _cb(current: int, total: int) -> None:
         print(f"PROGRESS: {current} {total}", flush=True)
@@ -312,20 +231,20 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
 
 
 def main():
-    # Lightweight subcommand routing: `chipify-cli install-server [...]` is
-    # peeled off before argparse so existing flag-based usage stays intact.
+    # Lightweight subcommand routing: `chipify-cli serve [...]` is peeled
+    # off before argparse so existing flag-based usage stays intact.
     argv = sys.argv[1:]
-    if argv and argv[0] == "install-server":
-        sys.exit(_install_server_main(argv[1:]))
+    if argv and argv[0] == "serve":
+        sys.exit(_serve_main(argv[1:]))
 
     parser = argparse.ArgumentParser(
         description=(
             "Chipify: High-Performance Mismatch Simulation Wrapper for "
             "Xschem and Ngspice.\n\n"
             "Subcommands:\n"
-            "  install-server   Drop the chipify-remote wrapper on this host\n"
+            "  serve            Start the chipify HTTPS server on this host\n"
             "                   (typically inside an iic-osic-tools container).\n"
-            "                   See `chipify-cli install-server --help`."
+            "                   See `chipify-cli serve --help`."
         ),
         formatter_class=argparse.RawTextHelpFormatter
     )

@@ -3,11 +3,8 @@ include context.md
 include PLUGINS.md
 include LICENSE
 
-# Shell wrapper shipped with the wheel and used by `chipify-cli install-server`.
-recursive-include chipify/_server *.sh
-
-# Server-side helper scripts kept in the repo for source-checkout users.
-recursive-include tools/server *.sh Dockerfile.*
+# Container recipe shipped with source distributions.
+recursive-include tools/server Dockerfile.*
 
 global-exclude __pycache__
 global-exclude *.py[cod]

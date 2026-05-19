@@ -7,8 +7,9 @@ small displays no matter how many fields a tab grows.
 
 The Remote tab supports multiple named profiles (e.g. lab server, cloud VM)
 plus a structured preflight panel that reports the remote chipify / EDA /
-PDK status. First-time host-key trust is handled by a TOFU dialog rather
-than the silent AutoAddPolicy that earlier versions used.
+PDK status. The chipify HTTPS server uses a self-signed TLS certificate;
+the first time the GUI connects to a new server, it shows a TOFU dialog so
+the user can pin the cert's SHA-256 fingerprint.
 """
 from __future__ import annotations
 
@@ -53,8 +54,7 @@ class SettingsWindow(ctk.CTkToplevel):
         current_theme = self._config.get("theme", "night")
         compute_target = self._config.get("compute_target", "local")
 
-        # Remote profiles: always at least one entry, possibly auto-migrated
-        # from the legacy single-host keys.
+        # Remote HTTPS server profiles: always at least one entry.
         self._profiles: list[dict[str, Any]] = [
             dict(p) for p in app_config.get_remote_profiles(self._config)
         ]
@@ -323,7 +323,7 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(anchor="w", pady=(6, 2))
         ctk.CTkLabel(
             self._compute_outer,
-            text="local: multiprocessing pool  •  remote: offload via SSH",
+            text="local: multiprocessing pool  •  remote: offload to chipify HTTPS server",
             text_color="gray", font=ctk.CTkFont(size=11),
         ).pack(anchor="w")
 
@@ -392,11 +392,11 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(
             self._remote_frame,
             text=(
-                "Auth: SSH key (no passwords stored). On first connection the\n"
-                "host fingerprint is shown for you to trust.\n\n"
+                "Auth: bearer token over HTTPS. On first connection the TLS\n"
+                "certificate fingerprint is shown for you to pin (TOFU).\n\n"
                 "Server side, inside the iic-osic-tools container:\n"
-                "    pip install --user 'chipify[remote]'\n"
-                "    chipify-cli install-server"
+                "    pip install --user 'chipify[remote,server]'\n"
+                "    chipify-cli serve --host 0.0.0.0 --port 8443"
             ),
             text_color="gray", font=ctk.CTkFont(size=11), wraplength=560,
             justify="left",
@@ -414,7 +414,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def _build_profile_fields(self, parent) -> None:
         """Create the entry widgets that bind to the currently-selected profile."""
-        def _row(parent_, label_text: str, width_label: int = 130):
+        def _row(parent_, label_text: str, width_label: int = 140):
             r = ctk.CTkFrame(parent_, fg_color="transparent")
             r.pack(fill="x", pady=(4, 0))
             ctk.CTkLabel(
@@ -422,53 +422,32 @@ class SettingsWindow(ctk.CTkToplevel):
             ).pack(side="left")
             return r
 
-        host_row = _row(parent, "Server IP / Host:")
-        self._remote_host_var = ctk.StringVar()
+        url_row = _row(parent, "Base URL:")
+        self._remote_base_url_var = ctk.StringVar()
         ctk.CTkEntry(
-            host_row, textvariable=self._remote_host_var,
-            placeholder_text="e.g. 10.0.0.5 or sim.example.com", width=320,
+            url_row, textvariable=self._remote_base_url_var,
+            placeholder_text="https://10.0.0.5:8443", width=320,
         ).pack(side="left", padx=(8, 0))
 
-        port_row = _row(parent, "Port:")
-        self._remote_port_var = ctk.StringVar()
+        tok_row = _row(parent, "Bearer Token:")
+        self._remote_token_var = ctk.StringVar()
         ctk.CTkEntry(
-            port_row, textvariable=self._remote_port_var,
-            placeholder_text="22", width=80,
+            tok_row, textvariable=self._remote_token_var,
+            placeholder_text="paste the token from `chipify-cli serve`",
+            show="*", width=320,
         ).pack(side="left", padx=(8, 0))
 
-        user_row = _row(parent, "Username:")
-        self._remote_user_var = ctk.StringVar()
+        tokf_row = _row(parent, "Token File (optional):")
+        self._remote_token_file_var = ctk.StringVar()
         ctk.CTkEntry(
-            user_row, textvariable=self._remote_user_var,
-            placeholder_text="designer / headless / ubuntu", width=320,
-        ).pack(side="left", padx=(8, 0))
-
-        key_row = _row(parent, "SSH Key Path:")
-        self._remote_key_var = ctk.StringVar()
-        ctk.CTkEntry(
-            key_row, textvariable=self._remote_key_var,
-            placeholder_text="~/.ssh/id_ed25519 (blank = use ssh-agent)", width=240,
+            tokf_row, textvariable=self._remote_token_file_var,
+            placeholder_text="(optional) path read at run time, wins over token",
+            width=240,
         ).pack(side="left", padx=(8, 0))
         ctk.CTkButton(
-            key_row, text="Browse…", width=70,
-            command=self._on_browse_key,
+            tokf_row, text="Browse…", width=70,
+            command=self._on_browse_token_file,
         ).pack(side="left", padx=(6, 0))
-
-        agent_row = _row(parent, "")
-        self._use_agent_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            agent_row,
-            text="Also try ssh-agent / ~/.ssh defaults if key auth fails",
-            variable=self._use_agent_var,
-        ).pack(side="left", padx=(8, 0))
-
-        alias_row = _row(parent, "SSH-config alias:")
-        self._ssh_config_alias_var = ctk.StringVar()
-        ctk.CTkEntry(
-            alias_row, textvariable=self._ssh_config_alias_var,
-            placeholder_text="(optional) name from ~/.ssh/config — enables ProxyJump",
-            width=320,
-        ).pack(side="left", padx=(8, 0))
 
         wd_row = _row(parent, "Remote Work Dir:")
         self._remote_workdir_var = ctk.StringVar()
@@ -477,27 +456,32 @@ class SettingsWindow(ctk.CTkToplevel):
             placeholder_text="/tmp/chipify_remote", width=320,
         ).pack(side="left", padx=(8, 0))
 
-        cmd_row = _row(parent, "Remote Command:")
-        self._remote_cmd_var = ctk.StringVar()
-        ctk.CTkEntry(
-            cmd_row, textvariable=self._remote_cmd_var,
-            placeholder_text="(blank = auto-detect /usr/local/bin/chipify-remote, ~/.local/bin/chipify-remote, …)",
-            width=320,
-        ).pack(side="left", padx=(8, 0))
+        fp_row = _row(parent, "TLS Fingerprint:")
+        self._remote_fp_var = ctk.StringVar()
+        self._remote_fp_entry = ctk.CTkEntry(
+            fp_row, textvariable=self._remote_fp_var,
+            placeholder_text="(populated after you click Trust)",
+            state="readonly", width=260,
+        )
+        self._remote_fp_entry.pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            fp_row, text="Clear", width=70,
+            command=self._on_clear_fingerprint,
+        ).pack(side="left", padx=(6, 0))
 
-        env_row = _row(parent, "Env file (remote):")
-        self._remote_env_var = ctk.StringVar()
-        ctk.CTkEntry(
-            env_row, textvariable=self._remote_env_var,
-            placeholder_text="(optional) e.g. ~/.chipify-remote.env",
-            width=320,
+        verify_row = _row(parent, "")
+        self._verify_tls_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            verify_row,
+            text="Verify server certificate against pinned fingerprint",
+            variable=self._verify_tls_var,
         ).pack(side="left", padx=(8, 0))
 
         flags_row = _row(parent, "")
         self._keep_on_fail_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             flags_row,
-            text="Keep remote run dir on failure (for ssh-in debugging)",
+            text="Keep remote run dir on failure (for debugging)",
             variable=self._keep_on_fail_var,
         ).pack(side="left", padx=(8, 0))
 
@@ -546,40 +530,39 @@ class SettingsWindow(ctk.CTkToplevel):
         else:
             self._remote_frame.pack_forget()
 
-    def _on_browse_key(self) -> None:
+    def _on_browse_token_file(self) -> None:
         from tkinter import filedialog
-        initial = self._remote_key_var.get() or os.path.expanduser("~/.ssh")
+        initial = self._remote_token_file_var.get() or os.path.expanduser("~")
         if not os.path.isdir(initial):
             initial = os.path.dirname(initial) or os.path.expanduser("~")
         path = filedialog.askopenfilename(
             parent=self,
-            title="Select SSH private key",
+            title="Select chipify server token file",
             initialdir=initial,
         )
         if path:
-            self._remote_key_var.set(path)
+            self._remote_token_file_var.set(path)
+
+    def _on_clear_fingerprint(self) -> None:
+        """Forget the pinned TLS fingerprint so the next test triggers TOFU."""
+        self._remote_fp_entry.configure(state="normal")
+        self._remote_fp_var.set("")
+        self._remote_fp_entry.configure(state="readonly")
 
     # ── Profile editing helpers ─────────────────────────────────────────
 
     def _current_profile_dict(self) -> dict[str, Any]:
         """Snapshot the entry fields into a profile dict."""
-        try:
-            port = int(self._remote_port_var.get().strip() or "22")
-        except (TypeError, ValueError):
-            port = 22
         return {
             "name": self._active_profile_name,
-            "host": self._remote_host_var.get().strip(),
-            "port": port,
-            "user": self._remote_user_var.get().strip(),
-            "key_path": self._remote_key_var.get().strip(),
+            "base_url": self._remote_base_url_var.get().strip(),
+            "token": self._remote_token_var.get().strip(),
+            "token_file": self._remote_token_file_var.get().strip(),
             "work_dir": (self._remote_workdir_var.get().strip()
                          or "/tmp/chipify_remote"),
-            "wrapper": self._remote_cmd_var.get().strip(),
-            "ssh_config_alias": self._ssh_config_alias_var.get().strip(),
-            "use_agent": bool(self._use_agent_var.get()),
+            "verify_tls": bool(self._verify_tls_var.get()),
+            "cert_fingerprint_sha256": self._remote_fp_var.get().strip(),
             "keep_on_failure": bool(self._keep_on_fail_var.get()),
-            "env_file": self._remote_env_var.get().strip(),
         }
 
     def _commit_current_profile(self) -> None:
@@ -597,17 +580,17 @@ class SettingsWindow(ctk.CTkToplevel):
                 break
         else:
             return
-        self._remote_host_var.set(p.get("host", "") or "")
-        self._remote_port_var.set(str(p.get("port", 22) or 22))
-        self._remote_user_var.set(p.get("user", "") or "")
-        self._remote_key_var.set(p.get("key_path", "") or "")
+        self._remote_base_url_var.set(p.get("base_url", "") or "")
+        self._remote_token_var.set(p.get("token", "") or "")
+        self._remote_token_file_var.set(p.get("token_file", "") or "")
         self._remote_workdir_var.set(
             p.get("work_dir", "/tmp/chipify_remote") or "/tmp/chipify_remote"
         )
-        self._remote_cmd_var.set(p.get("wrapper", "") or "")
-        self._ssh_config_alias_var.set(p.get("ssh_config_alias", "") or "")
-        self._remote_env_var.set(p.get("env_file", "") or "")
-        self._use_agent_var.set(bool(p.get("use_agent", True)))
+        # Fingerprint entry is read-only; toggle state to mutate it.
+        self._remote_fp_entry.configure(state="normal")
+        self._remote_fp_var.set(p.get("cert_fingerprint_sha256", "") or "")
+        self._remote_fp_entry.configure(state="readonly")
+        self._verify_tls_var.set(bool(p.get("verify_tls", True)))
         self._keep_on_fail_var.set(bool(p.get("keep_on_failure", False)))
         self._active_profile_name = name
         self._set_preflight_message("(no preflight result yet)", color=None)
@@ -707,7 +690,7 @@ class SettingsWindow(ctk.CTkToplevel):
                 )
             except ImportError as exc:
                 self.after(0, self._set_preflight_result,
-                           False, f"paramiko missing: {exc}", {})
+                           False, f"httpx missing: {exc}", {})
                 return
             profile = RemoteProfile.from_dict(profile_dict)
             ok, msg, info = test_connection(profile=profile)
@@ -722,7 +705,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._current_preflight_info = info or {}
         if not ok and info and info.get("needs_trust"):
             self._remote_busy_lbl.configure(
-                text="Host key needs to be trusted.",
+                text="TLS certificate needs to be trusted.",
                 text_color="orange",
             )
             self._set_preflight_message(msg)
@@ -739,38 +722,46 @@ class SettingsWindow(ctk.CTkToplevel):
         self._set_preflight_message(msg)
 
     def _show_trust_dialog(self, info: dict[str, Any]) -> None:
-        host = info.get("host", "")
-        port = int(info.get("port") or 22)
+        base_url = info.get("base_url", "")
         fp = info.get("fingerprint_sha256", "")
-        key_type = info.get("key_type", "ssh-key")
+        subject = info.get("subject", "")
 
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Trust remote host?")
-        dlg.geometry("520x260")
+        dlg.title("Trust server certificate?")
+        dlg.geometry("560x280")
         dlg.transient(self)
         dlg.after(50, dlg.grab_set)
 
         ctk.CTkLabel(
             dlg,
-            text=f"Unknown host: {host}:{port}",
+            text=f"Unknown server: {base_url}",
             font=ctk.CTkFont(size=14, weight="bold"),
         ).pack(pady=(18, 4))
         ctk.CTkLabel(
             dlg,
-            text=f"{key_type} fingerprint",
+            text="TLS certificate fingerprint",
             text_color="gray",
             font=ctk.CTkFont(size=11),
         ).pack()
         ctk.CTkLabel(
             dlg,
-            text=f"SHA256:{fp}",
+            text=fp,
             font=ctk.CTkFont(family="Consolas", size=12),
-        ).pack(pady=(2, 14))
+        ).pack(pady=(2, 8))
+        if subject:
+            ctk.CTkLabel(
+                dlg,
+                text=f"Subject: {subject}",
+                text_color="gray",
+                font=ctk.CTkFont(family="Consolas", size=11),
+                wraplength=520,
+            ).pack(pady=(0, 6))
         ctk.CTkLabel(
             dlg,
             text=(
-                "If this matches the value printed by `ssh-keygen -lf` on the\n"
-                "server, click Trust. Otherwise abort and verify out-of-band."
+                "If this matches the value printed by `chipify-cli serve` on\n"
+                "the server (or `openssl x509 -fingerprint -sha256`), click\n"
+                "Trust. Otherwise abort and verify out-of-band."
             ),
             text_color="gray",
             font=ctk.CTkFont(size=11),
@@ -787,7 +778,7 @@ class SettingsWindow(ctk.CTkToplevel):
         def _abort() -> None:
             dlg.destroy()
             self._remote_busy_lbl.configure(
-                text="Host not trusted; connection canceled.",
+                text="Certificate not trusted; connection canceled.",
                 text_color="#e74c3c",
             )
 
@@ -804,31 +795,35 @@ class SettingsWindow(ctk.CTkToplevel):
     def _do_trust_then_retest(self, info: dict[str, Any]) -> None:
         self._remote_test_btn.configure(state="disabled")
         self._remote_busy_lbl.configure(
-            text="Persisting host key…", text_color="orange",
+            text="Persisting fingerprint…", text_color="orange",
         )
 
-        profile_dict = self._current_profile_dict()
-        host = info.get("host", "") or profile_dict.get("host", "")
-        port = int(info.get("port") or profile_dict.get("port", 22))
+        # Stamp the fingerprint onto the active profile so the next
+        # connection passes the pin check.
         fp = info.get("fingerprint_sha256", "")
-        key_type = info.get("key_type", "")
+        self._remote_fp_entry.configure(state="normal")
+        self._remote_fp_var.set(fp)
+        self._remote_fp_entry.configure(state="readonly")
+        self._commit_current_profile()
+        profile_dict = self._current_profile_dict()
+        base_url = info.get("base_url", "") or profile_dict.get("base_url", "")
+        subject = info.get("subject", "")
 
         def _worker() -> None:
             from chipify.remote_dispatcher import (
-                RemoteProfile, test_connection, trust_host_fingerprint,
+                RemoteProfile, test_connection, trust_server_fingerprint,
             )
             try:
-                trust_host_fingerprint(
-                    host=host, port=port, key_type=key_type,
+                trust_server_fingerprint(
+                    base_url=base_url,
                     fingerprint_sha256=fp,
-                    username=profile_dict.get("user", ""),
-                    key_path=profile_dict.get("key_path", ""),
+                    subject=subject,
                 )
             except Exception:
                 pass
             profile = RemoteProfile.from_dict(profile_dict)
             ok, msg, info2 = test_connection(
-                profile=profile, trust_new_hostkey=True,
+                profile=profile, trust_new_cert=True,
             )
             self.after(0, self._set_preflight_result, ok, msg, info2)
 
@@ -853,8 +848,7 @@ class SettingsWindow(ctk.CTkToplevel):
         new_theme = self._theme_var.get()
         self._config["theme"] = new_theme
 
-        # Compute target + named profiles. The single-host legacy fields
-        # are mirrored from the active profile inside save_remote_profiles().
+        # Compute target + named HTTPS profiles.
         self._config["compute_target"] = self._compute_target_var.get()
         self._commit_current_profile()
 
