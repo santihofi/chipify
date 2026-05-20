@@ -89,6 +89,21 @@ def stage_files_to_ram(engine=None) -> None:
                 except Exception as exc:
                     log.warning("Could not stage %s: %s", filename, exc)
 
+    # Stage tb/xschemrc (project-local xschem rc, no leading dot) so xschem
+    # picks up XSCHEM_LIBRARY_PATH etc. and can resolve the DUT during
+    # netlisting. Overwrite each run — FAST_TMP isn't cleaned between runs,
+    # so a stale cached copy would mask edits.
+    xschemrc_src = os.path.join(settings.TB_DIR, "xschemrc")
+    if os.path.isfile(xschemrc_src):
+        xschemrc_dest = os.path.join(settings.FAST_TMP, "xschemrc")
+        try:
+            shutil.copy2(xschemrc_src, xschemrc_dest)
+            log.info("Staged tb/xschemrc → %s", xschemrc_dest)
+        except Exception as exc:
+            log.warning("Could not stage tb/xschemrc: %s", exc)
+    else:
+        log.debug("No tb/xschemrc to stage (looked at %s)", xschemrc_src)
+
     if engine is not None and hasattr(engine, "stage_extra_files"):
         engine.stage_extra_files()
 
