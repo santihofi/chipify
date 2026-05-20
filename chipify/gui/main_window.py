@@ -1505,7 +1505,7 @@ class SimifyGUI(ctk.CTk):
         data = valid_df[param].dropna()
         if len(data) == 0: return
 
-        from simify import export_latex
+        from chipify import export_latex
         out_dir = os.path.join(settings.OUT_DIR, "latex")
         
         try:
@@ -1770,6 +1770,19 @@ class SimifyGUI(ctk.CTk):
         ctrl = ctk.CTkFrame(self.tab_tran, fg_color="transparent")
         ctrl.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
+        # Analysis kind (Transient / DC sweep / Bode) – picks which set of
+        # CSVs and which plotter we use. Default to Transient for back-compat.
+        ctk.CTkLabel(ctrl, text="Mode:").pack(side=tk.LEFT, padx=(0, 4))
+        self._tran_kind_var = ctk.StringVar(value="Transient")
+        self._tran_kind_menu = ctk.CTkOptionMenu(
+            ctrl,
+            values=["Transient", "DC Sweep", "Bode"],
+            variable=self._tran_kind_var,
+            command=self._on_tran_kind_change,
+            width=130,
+        )
+        self._tran_kind_menu.pack(side=tk.LEFT, padx=(0, 12))
+
         # Run-selection mode
         ctk.CTkLabel(ctrl, text="Runs:").pack(side=tk.LEFT, padx=(0, 4))
         self._tran_mode_var = ctk.StringVar(value="All Valid")
@@ -1869,70 +1882,132 @@ class SimifyGUI(ctk.CTk):
         else:
             self._tran_n_entry.pack_forget()
 
+    # Map UI label → Analysis.kind used in df.attrs["analysis_dirs"] and on disk.
+    _TRAN_KIND_LABELS = {"Transient": "transient", "DC Sweep": "dc", "Bode": "ac"}
+
+    def _current_tran_kind(self) -> str:
+        """Return the Analysis.kind matching the current Mode selector value."""
+        label = self._tran_kind_var.get() if hasattr(self, "_tran_kind_var") else "Transient"
+        return self._TRAN_KIND_LABELS.get(label, "transient")
+
+    def _on_tran_kind_change(self, _label=None):
+        """Mode selector callback: refresh signal list and replot."""
+        self._refresh_transient_signal_list()
+        self.update_transient_plot()
+
     def _resolve_tran_dir(self) -> str:
         """
-        Map the currently loaded run → its tran_data directory.
+        Map the currently loaded run → the per-run CSV directory for the
+        active analysis kind (transient / dc / ac).
 
-        Priority:
-        1. df.attrs['tran_dir']     — freshly simulated run (in-process)
-        2. run_meta sidecar         — history run with .meta.json
-        3. Newest out/tran_data/*/  — fallback glob
+        Priority for the active kind:
+        1. df.attrs["analysis_dirs"][kind]      — freshly simulated run
+        2. df.attrs["tran_dir"]                 — legacy alias (transient only)
+        3. run_meta sidecar (analysis_dirs)
+        4. Newest out/analysis_data/<kind>/*/
+        5. (transient only) newest legacy out/tran_data/*/
         """
-        # 1. In-memory attr (set by run_sim on a fresh result)
-        if self.app_state.active_df is not None:
-            td = self.app_state.active_df.attrs.get("tran_dir", "")
-            if td and os.path.isdir(td):
-                return td
+        kind = self._current_tran_kind()
 
-        # 2a. Latest pointer file (written next to simulation_results.csv on each sim)
-        pointer = os.path.join(settings.OUT_DIR, "tran_data", ".latest")
+        # 1. In-memory analysis_dirs attr
+        if self.app_state.active_df is not None:
+            attrs = self.app_state.active_df.attrs
+            adirs = attrs.get("analysis_dirs", {}) if isinstance(attrs, dict) else {}
+            d = adirs.get(kind, "") if isinstance(adirs, dict) else ""
+            if d and os.path.isdir(d):
+                return d
+            # 2. Legacy single-kind attr
+            if kind == "transient":
+                d = attrs.get("tran_dir", "")
+                if d and os.path.isdir(d):
+                    return d
+
+        # 3a. Pointer file under analysis_data/<kind>/
+        pointer = os.path.join(settings.OUT_DIR, "analysis_data", kind, ".latest")
         if os.path.exists(pointer):
             try:
                 with open(pointer, "r", encoding="utf-8") as _f:
-                    td = _f.read().strip()
-                if td and os.path.isdir(td):
-                    return td
+                    d = _f.read().strip()
+                if d and os.path.isdir(d):
+                    return d
             except Exception:
                 pass
 
-        # 2b. History meta sidecar
+        # 3b. Legacy pointer for transient.
+        if kind == "transient":
+            legacy_ptr = os.path.join(settings.OUT_DIR, "tran_data", ".latest")
+            if os.path.exists(legacy_ptr):
+                try:
+                    with open(legacy_ptr, "r", encoding="utf-8") as _f:
+                        d = _f.read().strip()
+                    if d and os.path.isdir(d):
+                        return d
+                except Exception:
+                    pass
+
+        # 4. History meta sidecar
         selection = self.history_dropdown.get() if hasattr(self, "history_dropdown") else ""
         if selection and selection not in ("No runs found", "Latest (simulation_results)"):
             csv_path = os.path.join(settings.OUT_DIR, "history", selection)
             from chipify import run_meta as _rm
             meta = _rm.read_meta(csv_path)
-            td = meta.get("tran_dir", "")
-            if td and os.path.isdir(td):
-                return td
+            meta_adirs = meta.get("analysis_dirs", {}) if isinstance(meta, dict) else {}
+            d = meta_adirs.get(kind, "") if isinstance(meta_adirs, dict) else ""
+            if d and os.path.isdir(d):
+                return d
+            if kind == "transient":
+                d = meta.get("tran_dir", "") if isinstance(meta, dict) else ""
+                if d and os.path.isdir(d):
+                    return d
 
-        # 3. Newest tran_data sub-directory
-        tran_base = os.path.join(settings.OUT_DIR, "tran_data")
-        if os.path.isdir(tran_base):
+        # 5. Newest sub-directory under analysis_data/<kind>/
+        base = os.path.join(settings.OUT_DIR, "analysis_data", kind)
+        if os.path.isdir(base):
             subdirs = sorted(
-                (d for d in glob.glob(os.path.join(tran_base, "*")) if os.path.isdir(d)),
+                (d for d in glob.glob(os.path.join(base, "*")) if os.path.isdir(d)),
                 reverse=True,
             )
             if subdirs:
                 return subdirs[0]
 
+        # 6. Legacy transient location.
+        if kind == "transient":
+            tran_base = os.path.join(settings.OUT_DIR, "tran_data")
+            if os.path.isdir(tran_base):
+                subdirs = sorted(
+                    (d for d in glob.glob(os.path.join(tran_base, "*"))
+                     if os.path.isdir(d)),
+                    reverse=True,
+                )
+                if subdirs:
+                    return subdirs[0]
+
         return ""
 
     def _refresh_transient_signal_list(self):
-        """Re-populate the signals listbox from Stimuli + active custom equations."""
+        """Re-populate the signals listbox from the active analysis kind +
+        custom equations."""
         self._tran_sig_lb.delete(0, tk.END)
         seen: list = []
+        kind = self._current_tran_kind()
 
         if self.current_stim is not None:
             for test in self.current_stim.tests:
-                for sig in getattr(test, "transient_signals", []):
-                    if sig not in seen:
-                        seen.append(sig)
+                for an in getattr(test, "analyses", []) or []:
+                    if an.kind != kind:
+                        continue
+                    for sig in an.signals:
+                        if sig not in seen:
+                            seen.append(sig)
 
-        # Also expose active transient equations as derived waveform signals.
-        for eq in app_config.load_config().get("transient_equations", []):
-            name = eq.get("name", "").strip()
-            if name and name not in seen:
-                seen.append(name)
+        # Also expose active transient equations as derived waveform signals,
+        # but only on the transient view — DC/AC plots wouldn't have these
+        # columns in their CSVs.
+        if kind == "transient":
+            for eq in app_config.load_config().get("transient_equations", []):
+                name = eq.get("name", "").strip()
+                if name and name not in seen:
+                    seen.append(name)
 
         for sig in seen:
             self._tran_sig_lb.insert(tk.END, sig)
@@ -1940,16 +2015,24 @@ class SimifyGUI(ctk.CTk):
             self._tran_sig_lb.select_set(0, tk.END)
 
     def update_transient_plot(self, *_args):
-        """Build run_ids list, resolve signals, delegate to PlotManager."""
+        """Build run_ids list, resolve signals, delegate to the right plotter
+        for the currently selected analysis kind (Transient / DC / Bode)."""
         if self.app_state.active_df is None:
             return
 
         from chipify.gui import theme as _theme_mod
         _pt = _theme_mod.plot_theme()
 
+        kind = self._current_tran_kind()
+        draw_fn = {
+            "transient": PlotManager.draw_transient_plot,
+            "dc":        PlotManager.draw_dc_sweep,
+            "ac":        PlotManager.draw_bode_plot,
+        }[kind]
+
         tran_dir = self._resolve_tran_dir()
         if not tran_dir:
-            self._tran_line_map = PlotManager.draw_transient_plot(
+            self._tran_line_map = draw_fn(
                 self.tran_fig, self.tran_canvas, "", [], [],
                 bg_color=_pt["bg"], theme=_pt,
             )
@@ -1962,7 +2045,7 @@ class SimifyGUI(ctk.CTk):
             for i in self._tran_sig_lb.curselection()
         ]
         if not selected_signals:
-            self._tran_line_map = PlotManager.draw_transient_plot(
+            self._tran_line_map = draw_fn(
                 self.tran_fig, self.tran_canvas, tran_dir, [], [],
                 bg_color=_pt["bg"], theme=_pt,
             )
@@ -2004,8 +2087,11 @@ class SimifyGUI(ctk.CTk):
             for _, row in df[['run_id', 'global_pass']].dropna(subset=['run_id']).iterrows():
                 pass_map[str(row['run_id']).zfill(6)] = bool(row['global_pass'])
 
-        equations = app_config.load_config().get("transient_equations", [])
-        self._tran_line_map = PlotManager.draw_transient_plot(
+        # Equations are transient-only — applying them to DC/AC CSVs would
+        # reference non-existent columns. Skip for those modes.
+        equations = (app_config.load_config().get("transient_equations", [])
+                     if kind == "transient" else [])
+        self._tran_line_map = draw_fn(
             self.tran_fig, self.tran_canvas, tran_dir,
             run_ids, selected_signals,
             pass_map=pass_map,

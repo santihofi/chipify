@@ -1,8 +1,19 @@
 """
-transient_loader.py – Helpers for loading transient waveform CSV files.
+transient_loader.py – Helpers for loading analysis-result CSV files.
 
-No tkinter imports.  The transient tab calls these to resolve directory paths
-and build the combined waveform DataFrame used for plotting and hover events.
+Historically this module was transient-only. It now serves all three analysis
+kinds (transient / dc / ac) via the generic ``resolve_analysis_dir`` and
+``load_analysis_df`` helpers. The transient-specific wrappers below keep the
+old public API working so callers don't all need updating at once.
+
+The on-disk layout is::
+
+    {OUT_DIR}/analysis_data/{kind}/{timestamp}/run_<id>__<tb>.csv
+
+with a fallback to the legacy ``{OUT_DIR}/tran_data/{timestamp}/`` location
+for transient when no ``analysis_data`` directory exists.
+
+No tkinter imports.
 """
 from __future__ import annotations
 
@@ -17,97 +28,118 @@ from chipify.gui.services.equation_service import apply_transient_equations
 log = logging.getLogger("chipify.gui.services.transient")
 
 
-def resolve_tran_dir(df: pd.DataFrame, out_dir: str) -> str:
+# ── Generic helpers ──────────────────────────────────────────────────────────
+
+def resolve_analysis_dir(df: pd.DataFrame, out_dir: str, kind: str) -> str:
     """
-    Find the transient waveform directory for the current run.
+    Find the per-run CSV directory for ``kind`` (transient/dc/ac).
 
     Strategy (first match wins):
-    1. ``df.attrs["tran_dir"]`` — set by ``run_sim_thread`` when the sim writes CSVs.
-    2. ``{out_dir}/tran_data/.latest`` pointer file written by ``run_sim_thread``.
-    3. Newest sub-directory under ``{out_dir}/tran_data/``.
-
-    Returns an empty string if no directory is found.
+    1. ``df.attrs["analysis_dirs"][kind]`` — set by run_sim when CSVs are written.
+    2. ``df.attrs["tran_dir"]`` — back-compat alias for kind="transient".
+    3. ``{out_dir}/analysis_data/{kind}/.latest`` pointer file.
+    4. Newest sub-directory under ``{out_dir}/analysis_data/{kind}/``.
+    5. (transient only) newest sub-directory under the legacy ``{out_dir}/tran_data/``.
     """
-    # 1. DataFrame attribute set by the live simulation run
-    tran_dir: str = df.attrs.get("tran_dir", "") if hasattr(df, "attrs") else ""
-    if tran_dir and os.path.isdir(tran_dir):
-        return tran_dir
+    # 1. DataFrame attribute set by the live simulation run.
+    if hasattr(df, "attrs"):
+        adirs = df.attrs.get("analysis_dirs", {})
+        if isinstance(adirs, dict):
+            d = adirs.get(kind, "")
+            if d and os.path.isdir(d):
+                return d
+        # 2. Back-compat alias for transient.
+        if kind == "transient":
+            d = df.attrs.get("tran_dir", "")
+            if d and os.path.isdir(d):
+                return d
 
-    # 2. Pointer file written by run_sim_thread
-    ptr = os.path.join(out_dir, "tran_data", ".latest")
+    # 3. Pointer file (if anything writes one).
+    ptr = os.path.join(out_dir, "analysis_data", kind, ".latest")
     if os.path.exists(ptr):
         try:
             with open(ptr, encoding="utf-8") as fh:
-                tran_dir = fh.read().strip()
-            if tran_dir and os.path.isdir(tran_dir):
-                return tran_dir
+                d = fh.read().strip()
+            if d and os.path.isdir(d):
+                return d
         except Exception:
             pass
 
-    # 3. Newest sub-directory under tran_data/
-    tran_base = os.path.join(out_dir, "tran_data")
-    if os.path.isdir(tran_base):
-        subdirs = [
-            d for d in os.listdir(tran_base)
-            if os.path.isdir(os.path.join(tran_base, d)) and not d.startswith(".")
-        ]
-        if subdirs:
-            subdirs.sort(reverse=True)
-            return os.path.join(tran_base, subdirs[0])
+    # 4. Newest timestamped subdir under analysis_data/<kind>/.
+    base = os.path.join(out_dir, "analysis_data", kind)
+    newest = _newest_subdir(base)
+    if newest:
+        return newest
+
+    # 5. Legacy transient location.
+    if kind == "transient":
+        legacy = _newest_subdir(os.path.join(out_dir, "tran_data"))
+        if legacy:
+            return legacy
 
     return ""
 
 
-def list_available_signals(tran_dir: str) -> list[str]:
-    """
-    Return the union of all signal column names found in any waveform CSV.
+def _newest_subdir(base: str) -> str:
+    if not os.path.isdir(base):
+        return ""
+    subdirs = [
+        d for d in os.listdir(base)
+        if os.path.isdir(os.path.join(base, d)) and not d.startswith(".")
+    ]
+    if not subdirs:
+        return ""
+    subdirs.sort(reverse=True)
+    return os.path.join(base, subdirs[0])
 
-    Excludes ``time`` and ``run_id`` (internal columns).
+
+def list_analysis_signals(adir: str, kind: str) -> list[str]:
     """
-    if not tran_dir or not os.path.isdir(tran_dir):
+    Return the union of plottable signal names found in CSVs under *adir*.
+
+    For ac data, signals come paired as ``<sig>_mag`` / ``<sig>_phase``; this
+    helper collapses them back to ``<sig>`` so the GUI picker shows one entry
+    per requested signal. The Bode plotter then reads both columns by suffix.
+    """
+    if not adir or not os.path.isdir(adir):
         return []
 
+    x_cols = {"time", "frequency", "sweep", "run_id"}
     signals: set[str] = set()
-    for fname in glob.glob(os.path.join(tran_dir, "run_*.csv")):
+    for fname in glob.glob(os.path.join(adir, "run_*.csv")):
         try:
             header = pd.read_csv(fname, nrows=0)
-            for col in header.columns:
-                if col not in ("time", "run_id"):
-                    signals.add(str(col))
         except Exception:
-            pass
+            continue
+        for col in header.columns:
+            cs = str(col)
+            if cs in x_cols:
+                continue
+            if kind == "ac" and cs.endswith(("_mag", "_phase")):
+                signals.add(cs.rsplit("_", 1)[0])
+            else:
+                signals.add(cs)
     return sorted(signals)
 
 
-def load_tran_df(
-    tran_dir: str,
+def load_analysis_df(
+    adir: str,
     run_ids: list[str],
     equations: list[dict[str, str]] | None = None,
 ) -> pd.DataFrame:
     """
-    Load selected waveform CSVs into a combined ``(run_id, time, …)`` DataFrame.
+    Load selected per-run CSVs into a combined ``(run_id, …)`` DataFrame.
 
-    Parameters
-    ----------
-    tran_dir:
-        Directory containing ``run_<id>__<tb>.csv`` files.
-    run_ids:
-        Zero-padded run ID strings to include (e.g. ``["000001", "000002"]``).
-    equations:
-        Optional transient equations applied per chunk before concatenation.
-
-    Returns
-    -------
-    pd.DataFrame
-        Empty DataFrame if no matching files are found.
+    The X column name (``time`` / ``sweep`` / ``frequency``) is preserved
+    as-is; consumers can read ``df.columns`` to discover it.
     """
-    if not tran_dir or not run_ids:
+    if not adir or not run_ids:
         return pd.DataFrame()
 
     run_id_set = set(run_ids)
     chunks: list[pd.DataFrame] = []
 
-    for fname in glob.glob(os.path.join(tran_dir, "run_*.csv")):
+    for fname in glob.glob(os.path.join(adir, "run_*.csv")):
         rid = os.path.basename(fname)[4:].split("__", 1)[0]
         if rid not in run_id_set:
             continue
@@ -121,3 +153,21 @@ def load_tran_df(
             log.debug("Skipping %s: %s", fname, exc)
 
     return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+
+
+# ── Back-compat transient-specific wrappers ──────────────────────────────────
+
+def resolve_tran_dir(df: pd.DataFrame, out_dir: str) -> str:
+    return resolve_analysis_dir(df, out_dir, "transient")
+
+
+def list_available_signals(tran_dir: str) -> list[str]:
+    return list_analysis_signals(tran_dir, "transient")
+
+
+def load_tran_df(
+    tran_dir: str,
+    run_ids: list[str],
+    equations: list[dict[str, str]] | None = None,
+) -> pd.DataFrame:
+    return load_analysis_df(tran_dir, run_ids, equations)

@@ -227,18 +227,21 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
             tests_raw = data[key]
             break
 
+    from chipify.analyses import SCHEMA_KEY_TO_CLASS, Analysis
+
     for tb_path, measurements in tests_raw.items():
         if not isinstance(measurements, dict):
             continue
 
-        transient_signals: list[str] = []
+        analyses: list[Analysis] = []
         measure: dict[str, str] = {}
         value_lst: list[Value] = []
 
         for val_name, bounds in measurements.items():
-            if val_name == "transient_signals":
-                if isinstance(bounds, list):
-                    transient_signals = [str(s) for s in bounds]
+            if val_name in SCHEMA_KEY_TO_CLASS:
+                if isinstance(bounds, list) and bounds:
+                    cls = SCHEMA_KEY_TO_CLASS[val_name]
+                    analyses.append(cls(signals=[str(s) for s in bounds]))
                 continue
 
             if val_name == "measure":
@@ -255,7 +258,7 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
             value_lst.append(Value(name=str(val_name), vmin=vmin, vmax=vmax, vtyp=vtyp))
 
         t = Test(tb_path, value_lst)
-        t.transient_signals = transient_signals
+        t.analyses = analyses
         t.measure = measure
         stim.addTest(t)
 

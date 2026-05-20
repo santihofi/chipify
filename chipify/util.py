@@ -59,8 +59,18 @@ class Test:
         self.tb_path: str = tb_path
         self.value_lst: list[Value] = value_lst
         self.template: str = ""
-        self.transient_signals: list[str] = []
+        # One Analysis instance per kind captured from this testbench.
+        # Populated by schema.validate_datasheet() from transient_signals /
+        # dc_signals / ac_signals YAML keys.
+        from chipify.analyses import Analysis  # local import: avoid cycle
+        self.analyses: list[Analysis] = []
         self.measure: dict[str, str] = {}
+
+    @property
+    def transient_signals(self) -> list[str]:
+        """Back-compat shim: signals of the TransientAnalysis if present."""
+        return next((a.signals for a in self.analyses
+                     if a.kind == "transient"), [])
 
 
 class Value:

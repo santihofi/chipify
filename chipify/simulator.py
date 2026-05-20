@@ -318,14 +318,18 @@ class BaseSimulator(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def run(self, netlist: str, timeout_sec: int = 10, test=None, tran_out_path: str = ""):
+    def run(self, netlist: str, timeout_sec: int = 10, test=None,
+            analysis_tab_paths: dict | None = None):
         """Execute one netlist and return (output_line, error_message).
 
-        test          – the Test object for the current testbench (optional; used by
-                        VacaskSimulator to evaluate measure expressions).
-        tran_out_path – path where the engine should write transient waveform data in
-                        ngspice wrdata .tab column layout (optional; used by
-                        VacaskSimulator to persist waveforms without a .control block).
+        test                – the Test object for the current testbench (optional;
+                              used by VacaskSimulator to evaluate measure
+                              expressions and to know which analyses to extract).
+        analysis_tab_paths  – ``{Analysis.kind: tab_path}`` mapping where the
+                              engine should write per-analysis waveform data.
+                              ngspice ignores this (paths are baked into the
+                              rendered netlist via Jinja2); VacaskSimulator
+                              uses it to dump signals from the .raw file.
         """
         raise NotImplementedError
 
@@ -345,16 +349,19 @@ class NgspiceSimulator(BaseSimulator):
             else:
                 netlist += "\n.control\nset num_threads=1\n.endc\n"
 
-            # Inject wrdata command for transient signal capture.
-            # {{ tran_out_path }} is a Jinja2 placeholder filled per worker call.
-            if getattr(test, "transient_signals", []):
-                signals_str = " ".join(test.transient_signals)
-                wrdata_line = f"wrdata {{{{ tran_out_path }}}} {signals_str}"
-                netlist = netlist.replace(".endc", f"{wrdata_line}\n.endc", 1)
+            # Inject wrdata / setplot commands for each declared analysis.
+            # The Jinja2 placeholders (tran_out_path / dc_out_path / ac_out_path)
+            # are filled per worker call. setplot ensures wrdata pulls from the
+            # right vector store when multiple analyses run in the same .control.
+            analyses = getattr(test, "analyses", []) or []
+            if analyses:
+                injection = "\n".join(a.ngspice_inject() for a in analyses)
+                netlist = netlist.replace(".endc", f"{injection}\n.endc", 1)
 
             return netlist
 
-    def run(self, netlist: str, timeout_sec: int = 10, test=None, tran_out_path: str = ""):
+    def run(self, netlist: str, timeout_sec: int = 10, test=None,
+            analysis_tab_paths: dict | None = None):
         custom_env = os.environ.copy()
         custom_env["OMP_NUM_THREADS"] = "1"
 
@@ -556,8 +563,27 @@ def _parse_ascii_raw(raw_file: str) -> dict:
     return {}
 
 
+def _classify_analysis_kind(xlabel: str, plotname: str = "") -> str:
+    """Map a raw-file xlabel / plotname to one of our Analysis.kind values."""
+    xl = (xlabel or "").lower()
+    pn = (plotname or "").lower()
+    if "freq" in xl or "ac" in pn:
+        return "ac"
+    if "time" in xl or "tran" in pn:
+        return "transient"
+    return "dc"
+
+
 def _read_raw_file(raw_file: str) -> "dict | None":
-    """Read a VACASK/SPICE .raw output file → {signal_name_lower: np.ndarray}."""
+    """Read a SPICE-format .raw → {analysis_kind: {signal_name_lower: np.ndarray}}.
+
+    The bucket for each analysis kind also contains a sentinel ``"__x__"`` key
+    holding the X-axis vector (time / frequency / sweep parameter) so callers
+    don't need to know the X variable's name.
+
+    Returns None if no analyses could be parsed at all. Empty dict on parse
+    failure with no error.
+    """
     # Preferred: PyOPUS rawfile reader (handles binary + ASCII)
     try:
         from pyopus.simulator.rawfile import RawFile  # type: ignore[import]
@@ -571,23 +597,32 @@ def _read_raw_file(raw_file: str) -> "dict | None":
     else:
         try:
             rf = RawFile(raw_file)
-            out: dict = {}
+            buckets: dict[str, dict] = {}
             analyses = getattr(rf, "analyses", None) or [rf]
             for an in analyses:
                 xvec = getattr(an, "xvec", None)
-                xlabel = getattr(an, "xlabel", "time") or "time"
+                xlabel = getattr(an, "xlabel", "") or ""
+                plotname = (getattr(an, "name", "")
+                            or getattr(an, "plotname", "")
+                            or "")
+                kind = _classify_analysis_kind(xlabel, plotname)
+                bucket = buckets.setdefault(kind, {})
                 if xvec is not None:
-                    out[xlabel.lower()] = xvec
+                    bucket["__x__"] = xvec
+                    if xlabel:
+                        bucket[xlabel.lower()] = xvec
                 for sv in getattr(an, "yvec", []):
-                    out[sv.name.lower()] = sv.data
-            if out:
-                return out
+                    bucket[sv.name.lower()] = sv.data
+            if buckets:
+                return buckets
             log.warning("pyopus parsed %s but produced no signals.", raw_file)
         except Exception:
             log.warning("pyopus failed to parse %s; trying ASCII fallback.",
                         raw_file, exc_info=True)
 
     # Fallback: built-in SPICE-format parser (handles binary + ASCII).
+    # The ASCII fallback can only see one analysis at a time; classify by
+    # looking for time / frequency in the column names.
     try:
         parsed = _parse_ascii_raw(raw_file)
     except Exception:
@@ -598,7 +633,21 @@ def _read_raw_file(raw_file: str) -> "dict | None":
                     "Expected ngspice/vacask SPICE rawfile (Title/Variables/Binary).",
                     raw_file)
         return None
-    return parsed
+
+    # Detect X-axis column and classify
+    xlabel = ""
+    for cand in ("time", "frequency", "freq"):
+        if cand in parsed:
+            xlabel = cand
+            break
+    if not xlabel:
+        # First inserted column is the X axis for sweep analyses
+        xlabel = next(iter(parsed), "")
+    kind = _classify_analysis_kind(xlabel)
+    bucket = dict(parsed)
+    if xlabel and xlabel in bucket:
+        bucket["__x__"] = bucket[xlabel]
+    return {kind: bucket}
 
 
 def _eval_measure_expr(expr: str, results: dict):
@@ -613,42 +662,31 @@ def _eval_measure_expr(expr: str, results: dict):
     return default_evaluator.evaluate_spice_measure(expr, results)
 
 
-def _write_transient_tab(results: dict, signals: list, out_path: str) -> None:
-    """Write transient signal vectors to a .tab file readable by _persist_transient().
+def _vacask_write_analysis_tabs(buckets: dict, test, analysis_tab_paths: dict) -> None:
+    """For every declared analysis on *test*, ask it to serialise its signals
+    from the matching .raw bucket into the worker-private tab file path.
 
-    Uses the single-time-column layout that _persist_transient() handles:
-        time  sig0  sig1  …
+    *buckets* is the per-kind dict returned by ``_read_raw_file``.
+    *analysis_tab_paths* is ``{kind: tab_path}`` from the worker driver.
     """
-    import numpy as np
-
-    x_key = next((k for k in ("time", "frequency") if k in results),
-                 next(iter(results), None))
-    if x_key is None:
+    if not buckets or not analysis_tab_paths:
         return
-    x_vec = np.asarray(results[x_key], dtype=float)
-    cols = [x_vec]
-    for sig in signals:
-        vec = results.get(sig.lower(),
-               results.get(_sanitise_key(sig.lower()),
-               np.zeros_like(x_vec)))
-        cols.append(np.asarray(vec, dtype=float))
-
-    n = min(len(c) for c in cols) if cols else 0
-    try:
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as fh:
-            for i in range(n):
-                fh.write("  ".join(f"{c[i]:.6e}" for c in cols) + "\n")
-    except Exception as exc:
-        log.warning("Could not write transient tab %s: %s", out_path, exc)
+    for an in getattr(test, "analyses", []) or []:
+        tab = analysis_tab_paths.get(an.kind, "")
+        bucket = buckets.get(an.kind)
+        if tab and bucket:
+            try:
+                an.write_tab_from_raw(bucket, tab)
+            except Exception as exc:
+                log.warning("write_tab_from_raw failed for %s: %s", an.kind, exc)
 
 
-def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
+def _vacask_extract_results(raw_file: str, test, analysis_tab_paths: dict):
     """Read VACASK .raw output, extract scalars, return (MY_DATA line, error).
 
     Scalar extraction order (first match wins for each value):
-    1. Named signal in .raw matching the value name exactly — covers testbenches
-       that use VACASK ``meas`` statements (same YAML format as ngspice).
+    1. Named signal in the transient bucket matching the value name exactly —
+       covers testbenches that use VACASK ``meas`` statements.
     2. Explicit ``measure:`` expression in datasheet.yaml — for computed metrics.
     3. Neither → nan with a warning.
     """
@@ -657,20 +695,22 @@ def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
     if not os.path.exists(raw_file):
         return None, "NO_RAW_FILE"
 
-    results = _read_raw_file(raw_file)
-    if results is None:
+    buckets = _read_raw_file(raw_file)
+    if buckets is None:
         return None, "RAW_PARSE_ERROR"
 
-    tran_signals = getattr(test, "transient_signals", []) if test else []
     measure_exprs = getattr(test, "measure", {}) if test else {}
     value_lst = test.value_lst if test else []
 
-    log.info("vacask .raw signals: %s", sorted(results.keys()))
+    log.info("vacask .raw analyses: %s",
+             {k: sorted(v.keys()) for k, v in buckets.items()})
 
-    # Persist transient waveforms so _persist_transient() can convert them to CSV
-    x_present = any(k in results for k in ("time", "frequency"))
-    if tran_signals and tran_out_path and x_present:
-        _write_transient_tab(results, tran_signals, tran_out_path)
+    # Persist every declared analysis to its worker-private tab file.
+    _vacask_write_analysis_tabs(buckets, test, analysis_tab_paths or {})
+
+    # Scalar values are evaluated against the transient bucket only.
+    # (matches the "Transient only" measure-source choice in the design.)
+    scalar_bucket = buckets.get("transient") or next(iter(buckets.values()), {})
 
     # Transient-only testbench
     if not value_lst:
@@ -692,7 +732,7 @@ def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
             _sanitise_key(f"i({name})"),
         )
         raw_val = next(
-            (results[c] for c in candidates if c in results),
+            (scalar_bucket[c] for c in candidates if c in scalar_bucket),
             None,
         )
         if raw_val is not None:
@@ -705,7 +745,7 @@ def _vacask_extract_results(raw_file: str, test, tran_out_path: str):
         expr = measure_exprs.get(val_obj.name, "")
         if expr:
             try:
-                val = _eval_measure_expr(expr, results)
+                val = _eval_measure_expr(expr, scalar_bucket)
                 scalar_strs.append(str(float(val)))
                 continue
             except Exception as exc:
@@ -792,8 +832,9 @@ class VacaskSimulator(BaseSimulator):
         return netlist
 
     def run(self, netlist: str, timeout_sec: int = 10,
-            test=None, tran_out_path: str = "") -> tuple:
+            test=None, analysis_tab_paths: dict | None = None) -> tuple:
         cfg = app_config.load_config()
+        analysis_tab_paths = analysis_tab_paths or {}
         vacask_binary = cfg.get("vacask_binary") or "vacask"
         custom_env = os.environ.copy()
         custom_env["OMP_NUM_THREADS"] = "1"
@@ -879,21 +920,20 @@ class VacaskSimulator(BaseSimulator):
                             my_data_line = line.strip()
                             break
 
-            tran_signals = getattr(test, "transient_signals", []) if test else []
-            if tran_signals and tran_out_path and os.path.exists(temp_raw_file):
-                results = _read_raw_file(temp_raw_file)
-                if results:
-                    x_present = any(k in results for k in ("time", "frequency"))
-                    if x_present:
-                        _write_transient_tab(results, tran_signals, tran_out_path)
-
+            # When a MY_DATA: line is present we still need to write the per-
+            # analysis tab files so the GUI sees the waveforms. Without it we
+            # also need to extract scalars from the .raw — done in one call.
             if my_data_line:
+                if analysis_tab_paths and os.path.exists(temp_raw_file):
+                    buckets = _read_raw_file(temp_raw_file)
+                    _vacask_write_analysis_tabs(buckets or {}, test,
+                                                analysis_tab_paths)
                 return my_data_line, None
 
             # ── Fallback: extract scalars from .raw file ──────────────────────
             # Used when the testbench saves named meas results or the YAML
             # defines explicit measure: expressions.
-            return _vacask_extract_results(temp_raw_file, test, tran_out_path)
+            return _vacask_extract_results(temp_raw_file, test, analysis_tab_paths)
 
         except subprocess.CalledProcessError:
             err_msg = "CRASH"
@@ -945,69 +985,39 @@ class VacaskSimulator(BaseSimulator):
             return ""
 
 
-def _persist_transient(tab_path: str, signals: list, dest_csv: str) -> None:
-    """
-    Convert an ngspice wrdata .tab file into a clean time-indexed CSV.
-
-    ngspice wrdata writes 2*N columns for N signals:
-      time_0 sig0_0  time_1 sig1_0  ...   (paired columns)
-
-    If the file has N+1 columns instead (single time column), that layout
-    is handled as the fallback.
-    """
-    try:
-        df = pd.read_csv(tab_path, sep=r"\s+", header=None, comment="*")
-        if df.empty:
-            return
-        ncols = len(df.columns)
-        n_sigs = len(signals)
-        result = pd.DataFrame()
-        if ncols >= 2 * n_sigs and n_sigs > 0:
-            # Paired layout: col 0=time, col 1=sig0, col 2=time(dup), col 3=sig1 …
-            result["time"] = df.iloc[:, 0]
-            for i, sig in enumerate(signals):
-                col_idx = 2 * i + 1
-                if col_idx < ncols:
-                    result[sig] = df.iloc[:, col_idx]
-        else:
-            # Single time column layout
-            cols = min(ncols - 1, n_sigs)
-            result["time"] = df.iloc[:, 0]
-            for i in range(cols):
-                result[signals[i]] = df.iloc[:, i + 1]
-        os.makedirs(os.path.dirname(dest_csv), exist_ok=True)
-        result.to_csv(dest_csv, index=False)
-    except Exception as exc:
-        log.warning("Could not persist transient data %s → %s: %s", tab_path, dest_csv, exc)
-    finally:
-        try:
-            os.remove(tab_path)
-        except OSError:
-            pass
-
-
 def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
-                                      run_id: str = "", tran_dir: str = ""):
+                                      run_id: str = "",
+                                      analysis_dirs: dict | None = None):
+    analysis_dirs = analysis_dirs or {}
     sample = params.copy()
     sample['sim_error'] = "None"
     sample['run_id'] = run_id
 
     for test in tests:
-        tran_signals = getattr(test, "transient_signals", [])
+        analyses = getattr(test, "analyses", []) or []
         pid = os.getpid()
         tb_safe = test.tb_path.replace("/", "__").replace("\\", "__")
 
+        # One worker-private tab file per declared analysis. The Jinja
+        # variable name (tran_out_path / dc_out_path / ac_out_path) tells the
+        # rendered ngspice template where to wrdata; VacaskSimulator also
+        # uses this mapping to dump signals from the .raw file.
         render_kwargs = dict(params)
-        if tran_signals and tran_dir:
-            tran_out_path = os.path.join(
-                settings.FAST_TMP, f"sim_{pid}_{run_id}_{tb_safe}.tab"
+        analysis_tab_paths: dict[str, str] = {}
+        for an in analyses:
+            if not analysis_dirs.get(an.kind):
+                continue
+            tab = os.path.join(
+                settings.FAST_TMP,
+                f"sim_{pid}_{run_id}_{tb_safe}_{an.kind}.tab",
             )
-            render_kwargs["tran_out_path"] = tran_out_path
-        else:
-            tran_out_path = ""
+            render_kwargs[an.jinja_var()] = tab
+            analysis_tab_paths[an.kind] = tab
 
         rendering = Template(test.template_str, undefined=StrictUndefined).render(**render_kwargs)
-        sim_output, error_msg = engine.run(rendering, test=test, tran_out_path=tran_out_path)
+        sim_output, error_msg = engine.run(
+            rendering, test=test, analysis_tab_paths=analysis_tab_paths,
+        )
 
         if error_msg:
             sample['sim_error'] = f"{test.tb_path}: {error_msg}"
@@ -1017,10 +1027,13 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
                 sample[f"{val_obj.name}_pass"] = False
             continue
 
-        # Persist transient waveform data when available.
-        if tran_signals and tran_dir and tran_out_path and os.path.exists(tran_out_path):
-            dest_csv = os.path.join(tran_dir, f"run_{run_id}__{tb_safe}.csv")
-            _persist_transient(tran_out_path, tran_signals, dest_csv)
+        # Persist every analysis's tab file into its destination CSV.
+        for an in analyses:
+            tab = analysis_tab_paths.get(an.kind, "")
+            dest_dir = analysis_dirs.get(an.kind, "")
+            if tab and dest_dir and os.path.exists(tab):
+                dest_csv = os.path.join(dest_dir, f"run_{run_id}__{tb_safe}.csv")
+                an.persist_to_csv(tab, dest_csv)
 
         # Transient-only testbench: no scalar measurements defined → skip MY_DATA.
         if not test.value_lst:
@@ -1055,17 +1068,21 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
 
 
 def simulate_single_case(args):
-    params, tests, simulator_name, run_id, tran_dir = args
+    params, tests, simulator_name, run_id, analysis_dirs = args
     engine = get_simulator_engine(simulator_name)
-    return _simulate_single_case_with_engine(params, tests, engine, run_id, tran_dir)
+    return _simulate_single_case_with_engine(
+        params, tests, engine, run_id, analysis_dirs,
+    )
 
 
 def simulate_case_batch(batch_args):
     """Worker helper: process a batch of cases to reduce IPC overhead."""
-    param_id_batch, tests, simulator_name, tran_dir = batch_args
+    param_id_batch, tests, simulator_name, analysis_dirs = batch_args
     engine = get_simulator_engine(simulator_name)
     return [
-        _simulate_single_case_with_engine(params, tests, engine, run_id, tran_dir)
+        _simulate_single_case_with_engine(
+            params, tests, engine, run_id, analysis_dirs,
+        )
         for params, run_id in param_id_batch
     ]
 
@@ -1116,15 +1133,23 @@ def generate_cases(stim) -> list:
     return [dict(zip(param_names, combo)) for combo in itertools.product(*param_values)]
 
 
-def _assemble_result_df(rows: list, tran_dir: str) -> pd.DataFrame:
-    """Build a normalized results DataFrame (matches GUI / CSV load semantics)."""
+def _assemble_result_df(rows: list, analysis_dirs: dict) -> pd.DataFrame:
+    """Build a normalized results DataFrame (matches GUI / CSV load semantics).
+
+    The per-analysis directories are stored under ``df.attrs["analysis_dirs"]``
+    so the GUI can locate transient / DC / AC CSVs by kind. ``df.attrs["tran_dir"]``
+    is also set for backward compatibility with consumers that only know about
+    transient.
+    """
     from chipify.gui.services import data_loader as _dl
 
     df = pd.DataFrame(rows)
     df = _dl.normalise_sim_error(df)
     df = _dl.compute_global_pass(df)
-    if tran_dir:
-        df.attrs["tran_dir"] = tran_dir
+    if analysis_dirs:
+        df.attrs["analysis_dirs"] = dict(analysis_dirs)
+        if analysis_dirs.get("transient"):
+            df.attrs["tran_dir"] = analysis_dirs["transient"]
     return df
 
 
@@ -1226,15 +1251,21 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
         # Assign a stable zero-padded run_id to every parameter case.
         run_ids = [f"{i:06d}" for i in range(len(param_sets))]
 
-        # Create the per-simulation transient store directory.
+        # Create one per-analysis directory under analysis_data/<kind>/<ts>/.
+        # Only kinds actually used by at least one test get a directory.
         sim_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        has_tran = any(getattr(t, "transient_signals", []) for t in stim.tests)
-        if has_tran:
-            tran_dir = os.path.join(settings.OUT_DIR, "tran_data", sim_timestamp)
-            os.makedirs(tran_dir, exist_ok=True)
-            log.info("Transient store: %s", tran_dir)
-        else:
-            tran_dir = ""
+        analysis_dirs: dict[str, str] = {}
+        for kind in ("transient", "dc", "ac"):
+            if any(
+                any(a.kind == kind for a in getattr(t, "analyses", []) or [])
+                for t in stim.tests
+            ):
+                d = os.path.join(
+                    settings.OUT_DIR, "analysis_data", kind, sim_timestamp,
+                )
+                os.makedirs(d, exist_ok=True)
+                analysis_dirs[kind] = d
+                log.info("%s store: %s", kind, d)
 
         results = []
         num_cores = cfg.get("num_cores") or util.get_num_cores()
@@ -1259,12 +1290,15 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
 
         # Batch tasks to reduce scheduler/IPC overhead while keeping polling.
         # Each batch item is a (params, run_id) pair so workers can persist
-        # transient files to tran_dir with the correct run_id in the filename.
+        # per-analysis CSVs with the correct run_id in the filename.
         chunk_size = _resolve_chunk_size(cfg, total_tasks, num_cores)
         param_id_pairs = list(zip(param_sets, run_ids))
         param_id_batches = list(_chunk_args(param_id_pairs, chunk_size))
         pending = [
-            pool.apply_async(simulate_case_batch, ((batch, stim.tests, engine.name, tran_dir),))
+            pool.apply_async(
+                simulate_case_batch,
+                ((batch, stim.tests, engine.name, analysis_dirs),),
+            )
             for batch in param_id_batches
         ]
         log.debug("%d batch tasks submitted (chunk_size=%d).", len(pending), chunk_size)
@@ -1296,7 +1330,7 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
                                 if emit_now and chunk_row_buffer:
                                     try:
                                         chunk_df = _assemble_result_df(
-                                            chunk_row_buffer, tran_dir
+                                            chunk_row_buffer, analysis_dirs
                                         )
                                         chunk_callback(chunk_df)
                                     except Exception:
@@ -1321,7 +1355,7 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
         # Flush any live rows left in stride buffer (should usually be empty).
         if chunk_callback and chunk_row_buffer:
             try:
-                chunk_df = _assemble_result_df(chunk_row_buffer, tran_dir)
+                chunk_df = _assemble_result_df(chunk_row_buffer, analysis_dirs)
                 chunk_callback(chunk_df)
             except Exception:
                 pass
@@ -1331,7 +1365,7 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
         pool.join()
         log.info("Pool finished cleanly. %d results collected.", len(results))
 
-        result_df = _assemble_result_df(results, tran_dir)
+        result_df = _assemble_result_df(results, analysis_dirs)
         return result_df
 
     except InterruptedError:

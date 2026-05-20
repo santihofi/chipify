@@ -387,37 +387,29 @@ class PlotManager:
         return result
 
     @staticmethod
-    def draw_transient_plot(
+    def _draw_xy_overlay(
         fig,
         canvas,
-        tran_dir: str,
+        adir: str,
         run_ids: list,
         signals: list,
         *,
+        x_col: str,
+        x_axis_label: str,
+        title_prefix: str,
+        empty_msg: str,
+        no_files_msg: str,
+        time_autoscale: bool = False,
+        x_log: bool = False,
         pass_map: dict | None = None,
         bg_color: str = "#1a1a1a",
         equations: list | None = None,
         theme=None,
     ) -> dict:
         """
-        Overlay time-domain waveforms from per-run CSV files.
-
-        Files are loaded lazily (one open() per run per testbench) to avoid
-        loading the full sweep into RAM.  Alpha is auto-faded when more than
-        50 curves would be drawn to prevent a solid painted rectangle.
-
-        Parameters
-        ----------
-        tran_dir   : directory containing `run_<id>__<tb>.csv` files.
-        run_ids    : list of zero-padded run_id strings (e.g. ['000001', …]).
-        signals    : list of signal names to overlay (must match CSV columns).
-        pass_map   : optional {run_id: bool} — failing runs use #e74c3c tint.
-        bg_color   : axes face colour (matches the parent tab panel).
-        equations  : optional list of {name, expr} dicts (custom equations).
-
-        Returns
-        -------
-        dict mapping each plotted Line2D → (run_id, signal_name) for hover.
+        Overlay per-run curves from CSV files. Internal helper shared by
+        ``draw_transient_plot`` and ``draw_dc_sweep``. The Bode plot uses its
+        own implementation because it needs two stacked subplots.
         """
         th = _resolve_theme(theme, bg_color=bg_color)
         fg = th["fg"]
@@ -430,11 +422,9 @@ class PlotManager:
         fig.patch.set_facecolor(th["bg"])
 
         # ── Guard: nothing to plot ────────────────────────────────────────────
-        if not tran_dir or not run_ids or not signals:
+        if not adir or not run_ids or not signals:
             ax.text(
-                0.5, 0.5,
-                "No transient data.\nRun a simulation with transient_signals defined,\n"
-                "then select signals and click Refresh.",
+                0.5, 0.5, empty_msg,
                 ha="center", va="center", color="gray",
                 transform=ax.transAxes, fontsize=11,
             )
@@ -444,58 +434,48 @@ class PlotManager:
 
         # ── Discover matching files ───────────────────────────────────────────
         run_id_set = set(run_ids)
-        matched: list[tuple[str, str]] = []  # (run_id, filepath)
-        for fname in os.listdir(tran_dir):
-            if not fname.endswith(".csv"):
+        matched: list[tuple[str, str]] = []
+        for fname in os.listdir(adir):
+            if not fname.endswith(".csv") or not fname.startswith("run_"):
                 continue
-            if not fname.startswith("run_"):
-                continue
-            parts = fname[4:].split("__", 1)  # strip "run_" prefix
-            rid = parts[0]
+            rid = fname[4:].split("__", 1)[0]
             if rid in run_id_set:
-                matched.append((rid, os.path.join(tran_dir, fname)))
+                matched.append((rid, os.path.join(adir, fname)))
 
         if not matched:
-            ax.text(
-                0.5, 0.5,
-                "No transient CSV files found for the selected runs.\n"
-                "The simulation may not have used transient_signals, "
-                "or the files have been removed.",
-                ha="center", va="center", color="gray",
-                transform=ax.transAxes, fontsize=11, wrap=True,
-            )
+            ax.text(0.5, 0.5, no_files_msg, ha="center", va="center", color="gray",
+                    transform=ax.transAxes, fontsize=11, wrap=True)
             ax.axis("off")
             canvas.draw()
             return line_map
 
-        # ── Time-axis auto-scaling: probe first file ──────────────────────────
-        time_scale, time_unit = 1.0, "s"
-        try:
-            probe_full = pd.read_csv(matched[0][1], usecols=["time"])
-            t_max = probe_full["time"].abs().max()
-            if t_max >= 1.0:
-                time_scale, time_unit = 1.0, "s"
-            elif t_max >= 1e-3:
-                time_scale, time_unit = 1e3, "ms"
-            elif t_max >= 1e-6:
-                time_scale, time_unit = 1e6, "µs"
-            else:
-                time_scale, time_unit = 1e9, "ns"
-        except Exception:
-            pass
+        # ── X-axis auto-scaling (transient only): probe first file ───────────
+        x_scale, x_unit = 1.0, ""
+        if time_autoscale:
+            try:
+                probe_full = pd.read_csv(matched[0][1], usecols=[x_col])
+                t_max = probe_full[x_col].abs().max()
+                if t_max >= 1.0:
+                    x_scale, x_unit = 1.0, "s"
+                elif t_max >= 1e-3:
+                    x_scale, x_unit = 1e3, "ms"
+                elif t_max >= 1e-6:
+                    x_scale, x_unit = 1e6, "µs"
+                else:
+                    x_scale, x_unit = 1e9, "ns"
+            except Exception:
+                pass
 
         # ── Alpha auto-fade ───────────────────────────────────────────────────
         n_curves = len(matched) * len(signals)
         alpha = 1.0 if n_curves <= 50 else max(0.05, 50.0 / n_curves)
 
         # ── Color mode ────────────────────────────────────────────────────────
-        # Single-signal mode: color by run index (viridis) rather than by signal.
         single_signal_mode = len(signals) == 1
         fail_color = "#e74c3c"
         base_colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(signals))))
         sig_color = {sig: base_colors[i % 10] for i, sig in enumerate(signals)}
 
-        # Build per-run color map for single-signal mode (viridis, sorted by run_id).
         if single_signal_mode:
             sorted_rids = sorted({rid for rid, _ in matched})
             run_palette = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, len(sorted_rids))))
@@ -515,10 +495,9 @@ class PlotManager:
                     first_error = str(exc)
                 continue
 
-            if "time" not in df.columns:
+            if x_col not in df.columns:
                 continue
 
-            # Apply transient equations to the waveform DataFrame.
             if equations:
                 from chipify.expression import default_evaluator
                 for eq in equations:
@@ -532,7 +511,7 @@ class PlotManager:
                         except Exception:
                             pass
 
-            t = df["time"] * time_scale
+            x = df[x_col] * x_scale if time_autoscale else df[x_col]
             for sig in signals:
                 if sig not in df.columns:
                     continue
@@ -540,7 +519,7 @@ class PlotManager:
                     color = fail_color if is_fail else run_color_map.get(run_id, sig_color[signals[0]])
                 else:
                     color = fail_color if is_fail else sig_color[sig]
-                lines = ax.plot(t, df[sig], color=color, alpha=alpha,
+                lines = ax.plot(x, df[sig], color=color, alpha=alpha,
                                 linewidth=0.8, rasterized=(n_curves > 200),
                                 picker=4)
                 if lines:
@@ -557,11 +536,14 @@ class PlotManager:
             return line_map
 
         # ── Axes labels ───────────────────────────────────────────────────────
-        ax.set_xlabel(f"Time ({time_unit})", color=fg)
+        x_label = f"{x_axis_label} ({x_unit})" if x_unit else x_axis_label
+        ax.set_xlabel(x_label, color=fg)
         ax.set_ylabel("Signal Value", color=fg)
+        if x_log:
+            ax.set_xscale("log")
         n_runs_drawn = len({rid for rid, _ in matched})
         ax.set_title(
-            f"Transient Overlay — {n_runs_drawn} run(s) × {len(signals)} signal(s)"
+            f"{title_prefix} — {n_runs_drawn} run(s) × {len(signals)} signal(s)"
             + (f"  [α={alpha:.2f}]" if n_curves > 50 else ""),
             color=fg, pad=10,
         )
@@ -573,7 +555,6 @@ class PlotManager:
         # ── Legend ────────────────────────────────────────────────────────────
         proxy_handles = []
         if single_signal_mode:
-            # Color bar-style indicator instead of per-run entries.
             proxy_handles.append(
                 Line2D([0], [0], color=plt.cm.viridis(0.1), linewidth=1.5,
                        label=f"{signals[0]}  (color = run index)")
@@ -590,6 +571,247 @@ class PlotManager:
         ax.legend(handles=proxy_handles, loc="best",
                   facecolor=th["legend_bg"], edgecolor=th["legend_edge"],
                   labelcolor=th["legend_text"], fontsize=9)
+
+        fig.tight_layout()
+        canvas.draw()
+        return line_map
+
+    @staticmethod
+    def draw_transient_plot(
+        fig,
+        canvas,
+        tran_dir: str,
+        run_ids: list,
+        signals: list,
+        *,
+        pass_map: dict | None = None,
+        bg_color: str = "#1a1a1a",
+        equations: list | None = None,
+        theme=None,
+    ) -> dict:
+        """Overlay time-domain waveforms from per-run CSV files."""
+        return PlotManager._draw_xy_overlay(
+            fig, canvas, tran_dir, run_ids, signals,
+            x_col="time",
+            x_axis_label="Time",
+            title_prefix="Transient Overlay",
+            empty_msg=("No transient data.\nRun a simulation with "
+                       "transient_signals defined,\n"
+                       "then select signals and click Refresh."),
+            no_files_msg=("No transient CSV files found for the selected runs.\n"
+                          "The simulation may not have used transient_signals, "
+                          "or the files have been removed."),
+            time_autoscale=True,
+            pass_map=pass_map, bg_color=bg_color, equations=equations, theme=theme,
+        )
+
+    @staticmethod
+    def draw_dc_sweep(
+        fig,
+        canvas,
+        dc_dir: str,
+        run_ids: list,
+        signals: list,
+        *,
+        pass_map: dict | None = None,
+        bg_color: str = "#1a1a1a",
+        equations: list | None = None,
+        theme=None,
+    ) -> dict:
+        """Overlay DC sweep curves from per-run CSV files.
+
+        Expects CSVs with a ``sweep`` column as the X axis (the sweep
+        parameter from the testbench's ``.dc`` statement).
+        """
+        return PlotManager._draw_xy_overlay(
+            fig, canvas, dc_dir, run_ids, signals,
+            x_col="sweep",
+            x_axis_label="Sweep",
+            title_prefix="DC Sweep Overlay",
+            empty_msg=("No DC sweep data.\nRun a simulation with "
+                       "dc_signals defined,\n"
+                       "then select signals and click Refresh."),
+            no_files_msg=("No DC sweep CSV files found for the selected runs.\n"
+                          "The simulation may not have used dc_signals, "
+                          "or the files have been removed."),
+            time_autoscale=False,
+            pass_map=pass_map, bg_color=bg_color, equations=equations, theme=theme,
+        )
+
+    @staticmethod
+    def draw_bode_plot(
+        fig,
+        canvas,
+        ac_dir: str,
+        run_ids: list,
+        signals: list,
+        *,
+        pass_map: dict | None = None,
+        bg_color: str = "#1a1a1a",
+        equations: list | None = None,
+        theme=None,
+    ) -> dict:
+        """Stacked Bode plot — magnitude (dB) above, phase (deg) below.
+
+        Each *signal* refers to the base name as declared in ``ac_signals``;
+        the underlying CSV is expected to contain ``<sig>_mag`` (linear) and
+        ``<sig>_phase`` (degrees) columns produced by ``ACAnalysis``.
+        """
+        th = _resolve_theme(theme, bg_color=bg_color)
+        fg = th["fg"]
+        line_map: dict = {}
+
+        fig.clf()
+        fig.patch.set_facecolor(th["bg"])
+
+        if not ac_dir or not run_ids or not signals:
+            ax = fig.add_subplot(111)
+            ax.set_facecolor(th["bg"])
+            ax.text(
+                0.5, 0.5,
+                "No AC data.\nRun a simulation with ac_signals defined,\n"
+                "then select signals and click Refresh.",
+                ha="center", va="center", color="gray",
+                transform=ax.transAxes, fontsize=11,
+            )
+            ax.axis("off")
+            canvas.draw()
+            return line_map
+
+        run_id_set = set(run_ids)
+        matched: list[tuple[str, str]] = []
+        for fname in os.listdir(ac_dir):
+            if not fname.endswith(".csv") or not fname.startswith("run_"):
+                continue
+            rid = fname[4:].split("__", 1)[0]
+            if rid in run_id_set:
+                matched.append((rid, os.path.join(ac_dir, fname)))
+
+        if not matched:
+            ax = fig.add_subplot(111)
+            ax.set_facecolor(th["bg"])
+            ax.text(
+                0.5, 0.5,
+                "No AC CSV files found for the selected runs.\n"
+                "The simulation may not have used ac_signals, "
+                "or the files have been removed.",
+                ha="center", va="center", color="gray",
+                transform=ax.transAxes, fontsize=11, wrap=True,
+            )
+            ax.axis("off")
+            canvas.draw()
+            return line_map
+
+        ax_mag, ax_phase = fig.subplots(2, 1, sharex=True)
+        for ax in (ax_mag, ax_phase):
+            ax.set_facecolor(th["bg"])
+            ax.tick_params(colors=fg)
+            for spine in ax.spines.values():
+                spine.set_edgecolor(th["spine"])
+            ax.grid(True, which="both", linestyle="--", alpha=0.2, color=th["grid"])
+            ax.set_xscale("log")
+
+        n_curves = len(matched) * len(signals)
+        alpha = 1.0 if n_curves <= 50 else max(0.05, 50.0 / n_curves)
+
+        single_signal_mode = len(signals) == 1
+        fail_color = "#e74c3c"
+        base_colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(signals))))
+        sig_color = {sig: base_colors[i % 10] for i, sig in enumerate(signals)}
+
+        if single_signal_mode:
+            sorted_rids = sorted({rid for rid, _ in matched})
+            run_palette = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, len(sorted_rids))))
+            run_color_map = {rid: run_palette[i] for i, rid in enumerate(sorted_rids)}
+        else:
+            run_color_map = {}
+
+        drawn_any = False
+        for run_id, fpath in matched:
+            is_fail = pass_map.get(run_id, True) is False if pass_map else False
+            try:
+                df = pd.read_csv(fpath)
+            except Exception:
+                continue
+
+            if "frequency" not in df.columns:
+                continue
+
+            if equations:
+                from chipify.expression import default_evaluator
+                for eq in equations:
+                    eq_name = eq.get("name", "").strip()
+                    eq_expr = eq.get("expr", "").strip()
+                    if eq_name and eq_expr:
+                        try:
+                            df = default_evaluator.evaluate_dataframe_column(
+                                df, eq_name, eq_expr
+                            )
+                        except Exception:
+                            pass
+
+            freq = df["frequency"]
+            for sig in signals:
+                mag_col = f"{sig}_mag"
+                ph_col = f"{sig}_phase"
+                if mag_col not in df.columns or ph_col not in df.columns:
+                    continue
+                if single_signal_mode:
+                    color = fail_color if is_fail else run_color_map.get(run_id, sig_color[signals[0]])
+                else:
+                    color = fail_color if is_fail else sig_color[sig]
+                mag_db = 20.0 * np.log10(np.maximum(np.abs(df[mag_col].values), 1e-30))
+                lines = ax_mag.plot(freq, mag_db, color=color, alpha=alpha,
+                                    linewidth=0.8, rasterized=(n_curves > 200),
+                                    picker=4)
+                if lines:
+                    line_map[lines[0]] = (run_id, f"{sig} (mag)")
+                ax_phase.plot(freq, df[ph_col], color=color, alpha=alpha,
+                              linewidth=0.8, rasterized=(n_curves > 200))
+                drawn_any = True
+
+        if not drawn_any:
+            for ax in (ax_mag, ax_phase):
+                ax.cla()
+                ax.set_facecolor(th["bg"])
+                ax.axis("off")
+            ax_mag.text(
+                0.5, 0.5,
+                "AC CSVs found but no '<sig>_mag' / '<sig>_phase' columns matched.",
+                ha="center", va="center", color="gray",
+                transform=ax_mag.transAxes, fontsize=11,
+            )
+            canvas.draw()
+            return line_map
+
+        ax_mag.set_ylabel("Magnitude (dB)", color=fg)
+        ax_phase.set_ylabel("Phase (°)", color=fg)
+        ax_phase.set_xlabel("Frequency (Hz)", color=fg)
+        n_runs_drawn = len({rid for rid, _ in matched})
+        ax_mag.set_title(
+            f"Bode Plot — {n_runs_drawn} run(s) × {len(signals)} signal(s)"
+            + (f"  [α={alpha:.2f}]" if n_curves > 50 else ""),
+            color=fg, pad=10,
+        )
+
+        proxy_handles = []
+        if single_signal_mode:
+            proxy_handles.append(
+                Line2D([0], [0], color=plt.cm.viridis(0.1), linewidth=1.5,
+                       label=f"{signals[0]}  (color = run index)")
+            )
+        else:
+            for sig in signals:
+                proxy_handles.append(
+                    Line2D([0], [0], color=sig_color[sig], linewidth=1.5, label=sig)
+                )
+        if pass_map and any(v is False for v in pass_map.values()):
+            proxy_handles.append(
+                Line2D([0], [0], color=fail_color, linewidth=1.5, label="Failing run")
+            )
+        ax_mag.legend(handles=proxy_handles, loc="best",
+                      facecolor=th["legend_bg"], edgecolor=th["legend_edge"],
+                      labelcolor=th["legend_text"], fontsize=9)
 
         fig.tight_layout()
         canvas.draw()
