@@ -1834,6 +1834,14 @@ class SimifyGUI(ctk.CTk):
             fg_color="#3484F0", hover_color="#1a6fc4",
         ).pack(side=tk.RIGHT, padx=(8, 0))
 
+        # TeX export — writes the current overlay as .csv + .tex into
+        # OUT_DIR/latex/, matching the histogram-tab workflow.
+        ctk.CTkButton(
+            ctrl, text="TeX Export", width=100,
+            command=self.action_export_tran_latex,
+            fg_color="#27ae60", hover_color="#2ecc71",
+        ).pack(side=tk.RIGHT, padx=(8, 0))
+
         attach_export_button(
             ctrl,
             get_fig=lambda: self.tran_fig,
@@ -1919,6 +1927,89 @@ class SimifyGUI(ctk.CTk):
         """Mode selector callback: refresh signal list and replot."""
         self._refresh_transient_signal_list()
         self.update_transient_plot()
+
+    def action_export_tran_latex(self):
+        """Write the currently displayed overlay as pgfplots .tex + .csv.
+
+        Pulls the same selection (mode, signals, run filter) that drives the
+        on-screen plot, then dispatches to the matching ``export_latex``
+        generator for transient / DC sweep / Bode.
+        """
+        if self.app_state.active_df is None:
+            return
+        kind = self._current_tran_kind()
+        adir = self._resolve_tran_dir()
+        if not adir:
+            messagebox.showinfo(
+                "LaTeX Export",
+                "No analysis data found. Run a simulation first.",
+            )
+            return
+
+        selected_signals = [
+            self._tran_sig_lb.get(i)
+            for i in self._tran_sig_lb.curselection()
+        ]
+        if not selected_signals:
+            messagebox.showinfo(
+                "LaTeX Export", "Select at least one signal first.",
+            )
+            return
+
+        df = self.app_state.active_df
+        if "run_id" not in df.columns:
+            return
+        mode = self._tran_mode_var.get()
+        if mode == "All Valid":
+            run_ids = list(df[df['sim_error'] == 'None']['run_id'].astype(str))
+        elif mode == "Failing Only":
+            if 'global_pass' in df.columns:
+                run_ids = list(df[df['global_pass'] == False]['run_id'].astype(str))
+            else:
+                run_ids = []
+        elif mode == "First N":
+            try:
+                n = int(self._tran_n_var.get())
+            except ValueError:
+                n = 50
+            run_ids = list(df[df['sim_error'] == 'None']['run_id'].astype(str).head(n))
+        else:  # Custom IDs
+            raw = self._tran_n_var.get()
+            run_ids = [r.strip().zfill(6) for r in raw.replace(",", " ").split() if r.strip()]
+
+        # Same hard cap as the on-screen plot.
+        _CAP = 500
+        if len(run_ids) > _CAP:
+            run_ids = run_ids[:_CAP]
+
+        equations = (app_config.load_config().get("transient_equations", [])
+                     if kind == "transient" else [])
+
+        from chipify import export_latex
+        out_dir = os.path.join(settings.OUT_DIR, "latex")
+        gen = {
+            "transient": export_latex.generate_transient_latex_export,
+            "dc":        export_latex.generate_dc_sweep_latex_export,
+            "ac":        export_latex.generate_bode_latex_export,
+        }[kind]
+        name = {"transient": "transient", "dc": "dc_sweep", "ac": "bode"}[kind]
+
+        try:
+            csv_path, tex_path = gen(
+                out_dir, name, adir, run_ids, selected_signals,
+                equations=equations,
+            )
+            messagebox.showinfo(
+                "LaTeX Export",
+                f"Exported:\n  {tex_path}\n  {csv_path}",
+            )
+        except ValueError as exc:
+            messagebox.showinfo("LaTeX Export", str(exc))
+        except Exception as exc:
+            log.exception("Tran LaTeX export failed: %s", exc)
+            messagebox.showerror(
+                "LaTeX Export", f"Export failed:\n{exc}",
+            )
 
     def _resolve_tran_dir(self) -> str:
         """
