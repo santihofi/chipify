@@ -1162,37 +1162,62 @@ class SimifyGUI(ctk.CTk):
             ctk.CTkLabel(val_frame, text="Min Spec", text_color="gray").grid(row=0, column=1, padx=5, pady=2, sticky="w")
             ctk.CTkLabel(val_frame, text="Max Spec", text_color="gray").grid(row=0, column=2, padx=5, pady=2, sticky="w")
             
+            # Keys handled by their own rows / not represented as boundary specs.
+            _SIGNAL_KEYS = ('transient_signals', 'dc_signals', 'ac_signals')
+
             test_val_vars = []
             for v_idx, (v_name, v_data) in enumerate(tb_data.items()):
-                if v_name in ('values', 'transient_signals'): continue
+                if v_name == 'values' or v_name in _SIGNAL_KEYS:
+                    continue
                 if not isinstance(v_data, dict): v_data = {}
                 v_name_var = ctk.StringVar(value=str(v_name))
-                
+
                 min_val = v_data.get('vmin', v_data.get('min', ''))
                 max_val = v_data.get('vmax', v_data.get('max', ''))
-                
+
                 v_min = ctk.StringVar(value=str(min_val) if min_val is not None else '')
                 v_max = ctk.StringVar(value=str(max_val) if max_val is not None else '')
-                
+
                 ctk.CTkEntry(val_frame, textvariable=v_name_var, width=150).grid(row=1+v_idx, column=0, padx=5, pady=2)
                 ctk.CTkEntry(val_frame, textvariable=v_min, width=80).grid(row=1+v_idx, column=1, padx=5, pady=2)
                 ctk.CTkEntry(val_frame, textvariable=v_max, width=80).grid(row=1+v_idx, column=2, padx=5, pady=2)
                 ctk.CTkButton(val_frame, text="X", width=24, height=24, fg_color="transparent", border_width=1, command=lambda t=t_idx, v=v_name: self.action_del_value(t, v)).grid(row=1+v_idx, column=3, padx=5, pady=2)
-                
+
                 test_val_vars.append({'name': v_name_var, 'vmin': v_min, 'vmax': v_max})
 
-            # Transient signals row
-            existing_tran = tb_data.get('transient_signals', [])
-            tran_str = ", ".join(str(s) for s in existing_tran) if isinstance(existing_tran, list) else str(existing_tran)
-            tran_var = ctk.StringVar(value=tran_str)
-            tran_row = ctk.CTkFrame(frame, fg_color="transparent")
-            tran_row.pack(fill="x", padx=10, pady=(4, 0))
-            ctk.CTkLabel(tran_row, text="Transient Signals:", text_color="#3484F0",
-                         font=ctk.CTkFont(size=12)).pack(side=tk.LEFT, padx=(0, 8))
-            ctk.CTkEntry(tran_row, textvariable=tran_var,
-                         placeholder_text="e.g.  v(out), v(in), i(vdd)").pack(side=tk.LEFT, fill="x", expand=True)
-                
-            self.test_vars.append({'tb_name': tb_name_var, 'values': test_val_vars, 'tran_signals': tran_var})
+            # One row per analysis kind. The YAML keys are 'transient_signals',
+            # 'dc_signals', 'ac_signals' — matching schema.py / analyses.py.
+            analysis_rows = (
+                ("transient_signals", "Transient Signals:", "e.g.  v(out), v(in), i(vdd)"),
+                ("dc_signals",        "DC Sweep Signals:",  "e.g.  i(vdd), v(out)"),
+                ("ac_signals",        "AC / Bode Signals:", "e.g.  v(out), v(in)"),
+            )
+            analysis_vars: dict = {}
+            for yaml_key, label, placeholder in analysis_rows:
+                existing = tb_data.get(yaml_key, [])
+                if isinstance(existing, list):
+                    initial = ", ".join(str(s) for s in existing)
+                else:
+                    initial = str(existing)
+                sig_var = ctk.StringVar(value=initial)
+                row = ctk.CTkFrame(frame, fg_color="transparent")
+                row.pack(fill="x", padx=10, pady=(4, 0))
+                ctk.CTkLabel(row, text=label, text_color="#3484F0",
+                             font=ctk.CTkFont(size=12), width=140, anchor="w"
+                             ).pack(side=tk.LEFT, padx=(0, 8))
+                ctk.CTkEntry(row, textvariable=sig_var,
+                             placeholder_text=placeholder
+                             ).pack(side=tk.LEFT, fill="x", expand=True)
+                analysis_vars[yaml_key] = sig_var
+
+            self.test_vars.append({
+                'tb_name': tb_name_var,
+                'values': test_val_vars,
+                # Back-compat alias still consumed by sync_form_to_yaml for
+                # transient. New keys carry DC / AC.
+                'tran_signals': analysis_vars['transient_signals'],
+                'analysis_signals': analysis_vars,
+            })
             ctk.CTkButton(frame, text="+ Add Measurement", width=140, height=24, fg_color="transparent", border_width=1, command=lambda idx=t_idx: self.action_add_value(idx)).pack(anchor="w", padx=10, pady=(5, 10))
 
     def sync_ui_to_state(self):

@@ -140,14 +140,34 @@ def sync_form_to_yaml(
 
         tb_content: dict[str, Any] = {}
 
-        # Transient signals first so they appear at the top of the block.
-        tran_raw = t_dict.get("tran_signals")
-        if tran_raw is not None:
-            tran_str = tran_raw.get().strip()
-            if tran_str:
-                tran_list = [s.strip() for s in tran_str.replace(",", " ").split() if s.strip()]
-                if tran_list:
-                    tb_content["transient_signals"] = tran_list
+        # Analysis signal lists (transient / dc / ac) first so they appear at
+        # the top of the block. The new ``analysis_signals`` dict carries all
+        # three; ``tran_signals`` is the legacy alias still set by the form
+        # for back-compat.
+        analysis_vars = t_dict.get("analysis_signals")
+        if isinstance(analysis_vars, dict):
+            for yaml_key in ("transient_signals", "dc_signals", "ac_signals"):
+                var = analysis_vars.get(yaml_key)
+                if var is None:
+                    continue
+                raw = var.get().strip()
+                if not raw:
+                    continue
+                signals = [s.strip()
+                           for s in raw.replace(",", " ").split()
+                           if s.strip()]
+                if signals:
+                    tb_content[yaml_key] = signals
+        else:
+            tran_raw = t_dict.get("tran_signals")
+            if tran_raw is not None:
+                tran_str = tran_raw.get().strip()
+                if tran_str:
+                    tran_list = [s.strip()
+                                 for s in tran_str.replace(",", " ").split()
+                                 if s.strip()]
+                    if tran_list:
+                        tb_content["transient_signals"] = tran_list
 
         for v_dict in t_dict["values"]:
             name = v_dict["name"].get().strip()
