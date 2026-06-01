@@ -1,5 +1,5 @@
 """
-export_button.py – Shared "💾 Export" button widget for plots.
+export_button.py – Shared "Export" button widget for plots.
 
 Drops into any CTk frame and gives the user a CustomTkinter-themed dialog
 that lets them pick a format (any registered
@@ -129,7 +129,7 @@ class ExportDialog(ctk.CTkToplevel):  # type: ignore[misc]
         self._folder_label.grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=(0, 6))
 
         ctk.CTkButton(
-            body, text="📂 Browse…",
+            body, text="Browse…",
             command=self._pick_folder, width=110,
             fg_color="transparent", border_width=1,
             text_color=("gray10", "#DCE4EE"),
@@ -147,7 +147,7 @@ class ExportDialog(ctk.CTkToplevel):  # type: ignore[misc]
         ).pack(side="right", padx=(8, 0))
 
         ctk.CTkButton(
-            btn_row, text="💾 Save", width=100,
+            btn_row, text="Save", width=100,
             command=self._save,
             fg_color="#3484F0", hover_color="#1a6fc4",
         ).pack(side="right")
@@ -265,7 +265,7 @@ def attach_export_button(
     **btn_kwargs: Any,
 ) -> ctk.CTkButton:
     """
-    Create a "💾 Export" button on *parent* and place it via either ``pack``
+    Create an "Export" button on *parent* and place it via either ``pack``
     or ``grid`` (caller chooses one).
 
     Parameters
@@ -297,7 +297,7 @@ def attach_export_button(
         raise ValueError("attach_export_button: pass pack_kwargs OR grid_kwargs, not both")
 
     defaults: dict[str, Any] = dict(
-        text="💾 Export",
+        text="Export",
         width=100,
         fg_color="transparent",
         border_width=1,

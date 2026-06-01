@@ -3,6 +3,8 @@
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 
+![GUI](./doc/images/chipify.png)
+
 **Chipify** is a high-performance EDA (Electronic Design Automation) tool for
 **mismatch simulations, parameter sweeping, and yield analysis**. It wraps
 [Xschem](https://xschem.sourceforge.io/) (schematic capture) and
@@ -24,6 +26,8 @@ a plugin system for custom plots, reports, and expressions.
 - **Safe custom expressions** — derive new metrics with a sandboxed evaluator (no arbitrary code execution).
 - **Reports** — export to PDF, Markdown, and LaTeX; PNG/SVG plot exporters.
 - **Pluggable** — add your own plots, reports, expressions, and exporters (see [PLUGINS.md](PLUGINS.md)).
+- **Multi Plot Dashboard** - arrange a selection of plots on a second window.
+![Multi Plot Dashboard](./doc/images/multi-plot.png)
 
 ## Prerequisites
 

@@ -136,11 +136,11 @@ class SimifyGUI(ctk.CTk):
         self.history_dropdown = ctk.CTkOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_history_select)
         self.history_dropdown.grid(row=7, column=0, padx=20, pady=(5, 10), sticky="ew")
         
-        self.btn_pdf = ctk.CTkButton(self.left_frame, text="📄 Export PDF Report", command=self.export_pdf, fg_color="#8e44ad", hover_color="#9b59b6")
+        self.btn_pdf = ctk.CTkButton(self.left_frame, text="Export PDF Report", command=self.export_pdf, fg_color="#8e44ad", hover_color="#9b59b6")
         self.btn_pdf.grid(row=8, column=0, padx=20, pady=(0, 4), sticky="ew")
 
         self.btn_open_folder = ctk.CTkButton(
-            self.left_frame, text="📂  Open Output Folder",
+            self.left_frame, text="Open Output Folder",
             command=self.open_output_folder,
             fg_color="transparent", border_width=1,
             text_color=("gray10", "#DCE4EE"),
@@ -148,7 +148,7 @@ class SimifyGUI(ctk.CTk):
         self.btn_open_folder.grid(row=9, column=0, padx=20, pady=(0, 8), sticky="ew")
 
         self.btn_settings = ctk.CTkButton(
-            self.left_frame, text="⚙️  Settings",
+            self.left_frame, text="Settings",
             command=self.open_settings,
             fg_color="transparent", border_width=1,
             text_color=("gray10", "#DCE4EE")
@@ -156,7 +156,7 @@ class SimifyGUI(ctk.CTk):
         self.btn_settings.grid(row=10, column=0, padx=20, pady=(0, 8), sticky="ew")
 
         self.btn_multiplot = ctk.CTkButton(
-            self.left_frame, text="🗖  Multi-Plot Dashboard",
+            self.left_frame, text="Multi-Plot Dashboard",
             command=self.open_multiplot,
             fg_color="transparent", border_width=1,
             text_color=("gray10", "#DCE4EE"),
@@ -733,7 +733,7 @@ class SimifyGUI(ctk.CTk):
                          placeholder_text="e.g.  p_out / p_in * 100").pack(
                 side=tk.LEFT, padx=(6, 8), fill="x", expand=True)
             ctk.CTkButton(
-                r, text="🗑️", width=30,
+                r, text="×", width=30,
                 fg_color="#e74c3c", hover_color="#c0392b",
                 command=lambda i=idx: self._action_del_equation(i)
             ).pack(side=tk.LEFT)
@@ -775,7 +775,7 @@ class SimifyGUI(ctk.CTk):
                          placeholder_text="e.g.  v(outp) - v(outn)").pack(
                 side=tk.LEFT, padx=(6, 8), fill="x", expand=True)
             ctk.CTkButton(
-                r, text="🗑️", width=30,
+                r, text="×", width=30,
                 fg_color="#e74c3c", hover_color="#c0392b",
                 command=lambda i=idx: self._action_del_tran_equation(i)
             ).pack(side=tk.LEFT)
@@ -1044,7 +1044,7 @@ class SimifyGUI(ctk.CTk):
         self.editor_mode = ctk.StringVar(value="Form View")
         self.mode_selector = ctk.CTkSegmentedButton(top_bar, values=["Form View", "Raw YAML"], variable=self.editor_mode, command=self.switch_editor_mode)
         self.mode_selector.pack(side="left", padx=30)
-        btn_save = ctk.CTkButton(top_bar, text="💾 Save Datasheet", command=self.save_yaml, fg_color="#2ecc71", hover_color="#27ae60")
+        btn_save = ctk.CTkButton(top_bar, text="Save Datasheet", command=self.save_yaml, fg_color="#2ecc71", hover_color="#27ae60")
         btn_save.pack(side="right", padx=5)
         self.editor_scroll = ctk.CTkScrollableFrame(self.tab_editor, fg_color="transparent")
         self.editor_scroll.grid(row=1, column=0, sticky="nsew")
@@ -1131,7 +1131,7 @@ class SimifyGUI(ctk.CTk):
             
             ctk.CTkEntry(params_frame, textvariable=key_var, width=150).grid(row=r, column=0, padx=10, pady=5, sticky="w")
             ctk.CTkEntry(params_frame, textvariable=val_var).grid(row=r, column=1, padx=10, pady=5, sticky="ew")
-            ctk.CTkButton(params_frame, text="🗑️", width=30, fg_color="#e74c3c", hover_color="#c0392b", command=lambda idx=r: self.action_del_param(idx)).grid(row=r, column=2, padx=10, pady=5)
+            ctk.CTkButton(params_frame, text="×", width=30, fg_color="#e74c3c", hover_color="#c0392b", command=lambda idx=r: self.action_del_param(idx)).grid(row=r, column=2, padx=10, pady=5)
             self.param_vars.append({'key': key_var, 'val': val_var})
             r += 1
             
@@ -1154,7 +1154,7 @@ class SimifyGUI(ctk.CTk):
             row_header.pack(fill="x", padx=10, pady=(10, 5))
             ctk.CTkLabel(row_header, text="Testbench Name:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 10))
             ctk.CTkEntry(row_header, textvariable=tb_name_var, width=200).pack(side="left")
-            ctk.CTkButton(row_header, text="🗑️ Delete Testbench", width=140, height=24, fg_color="#e74c3c", hover_color="#c0392b", command=lambda idx=t_idx: self.action_del_test(idx)).pack(side="right")
+            ctk.CTkButton(row_header, text="Delete Testbench", width=140, height=24, fg_color="#e74c3c", hover_color="#c0392b", command=lambda idx=t_idx: self.action_del_test(idx)).pack(side="right")
             
             val_frame = ctk.CTkFrame(frame, fg_color="transparent")
             val_frame.pack(fill="x", padx=10, pady=5)
@@ -1368,7 +1368,7 @@ class SimifyGUI(ctk.CTk):
         lbl = ctk.CTkLabel(top_bar, text="Outliers & Fails", font=ctk.CTkFont(size=16, weight="bold"))
         lbl.pack(side=tk.LEFT, padx=10)
         
-        self.btn_export_debug = ctk.CTkButton(top_bar, text="🪲 Export Fails for Debugging", command=self.action_export_debug, fg_color="#e67e22", hover_color="#d35400")
+        self.btn_export_debug = ctk.CTkButton(top_bar, text="Export Fails for Debugging", command=self.action_export_debug, fg_color="#e67e22", hover_color="#d35400")
         self.btn_export_debug.pack(side=tk.RIGHT, padx=10)
         
         self.wc_scroll = ctk.CTkScrollableFrame(self.tab_worst, fg_color="transparent")

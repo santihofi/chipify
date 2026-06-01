@@ -124,7 +124,7 @@ class PlotCell(ctk.CTkFrame):
         )
 
         self._btn_close = ctk.CTkButton(
-            hdr, text="✕", width=28, height=28,
+            hdr, text="×", width=28, height=28,
             fg_color="transparent", border_width=1,
             text_color="gray", hover_color="#3a0000",
             command=self._remove_cb,

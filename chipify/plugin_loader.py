@@ -228,7 +228,7 @@ class ExporterPlugin:
     Base class for plugins that save a Matplotlib figure to a single file
     in a particular image format (PNG, SVG, TIFF, EPS, WebP, …).
 
-    Each plot in the UI grows a "💾 Export" button whose menu is built
+    Each plot in the UI grows an "Export" button whose menu is built
     dynamically from every registered exporter. PNG and SVG ship as
     built-in exporters; users add formats by dropping a Python file
     into ``~/.chipify/plugins/`` (or the ``CHIPIFY_PLUGINS`` directory).

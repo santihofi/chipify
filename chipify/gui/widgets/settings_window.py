@@ -56,7 +56,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         # ── Header ──────────────────────────────────────────────────────────
         ctk.CTkLabel(
-            self, text="⚙️  Global Settings",
+            self, text="Global Settings",
             font=ctk.CTkFont(size=17, weight="bold")
         ).pack(pady=(22, 18))
 
@@ -242,7 +242,7 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(side="left")
 
         ctk.CTkButton(
-            btn_row, text="💾  Save", command=self._save,
+            btn_row, text="Save", command=self._save,
             fg_color="#2ecc71", hover_color="#27ae60"
         ).pack(side="right")
 
