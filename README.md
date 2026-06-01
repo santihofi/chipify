@@ -27,6 +27,7 @@ a plugin system for custom plots, reports, and expressions.
 - **Reports** — export to PDF, Markdown, and LaTeX; PNG/SVG plot exporters.
 - **Pluggable** — add your own plots, reports, expressions, and exporters (see [PLUGINS.md](PLUGINS.md)).
 - **Multi Plot Dashboard** - arrange a selection of plots on a second window.
+
 ![Multi Plot Dashboard](./doc/images/multi-plot.png)
 
 ## Prerequisites
