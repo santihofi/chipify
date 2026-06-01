@@ -40,6 +40,8 @@ available on your `PATH`:
 - **[Xschem](https://xschem.sourceforge.io/)** — schematic capture / netlist generation
 - *(optional)* **[VACASK](https://vacask.fke.uni-lj.si/)** + PyOPUS — alternative simulation backend
 
+It is highly recommended to install and run Chipify inside the [IIC-OSIC-TOOLS](https://github.com/iic-jku/iic-osic-tools) docker container. This way, all the required tools plus a bunch of open source PDKs are already installed.
+
 ## Installation
 
 ```bash
