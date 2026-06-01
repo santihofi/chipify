@@ -101,9 +101,13 @@ class Value:
 
 def get_num_cores() -> int:
     """Return the number of cores available for simulation workers."""
-    try:
-        available_cores = len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
-    except AttributeError:
+    # os.sched_getaffinity is Linux-only; fall back to cpu_count elsewhere.
+    # getattr (rather than a platform-specific ``# type: ignore``) keeps mypy
+    # happy on both Linux and Windows.
+    sched_getaffinity = getattr(os, "sched_getaffinity", None)
+    if sched_getaffinity is not None:
+        available_cores = len(sched_getaffinity(0))
+    else:
         available_cores = os.cpu_count() or 1
 
     return max(1, available_cores - 1)

@@ -11,7 +11,7 @@ cd chipify
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\Activate.ps1
 pip install -e ".[fast]"
-pip install pytest mypy
+pip install pytest mypy pandas-stubs types-PyYAML
 ```
 
 To run a full simulation you also need **Ngspice** and **Xschem** on your `PATH`
