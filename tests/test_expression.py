@@ -93,8 +93,10 @@ def test_blocks_import(ev: SafeEvaluator) -> None:
 
 
 def test_blocks_open(ev: SafeEvaluator) -> None:
+    # `open` must be unavailable regardless of platform (asteval ships it by
+    # default in some versions); using a real path would make this OS-dependent.
     with pytest.raises(ExpressionError):
-        ev.evaluate_scalar("open('/etc/passwd').read()", {})
+        ev.evaluate_scalar("open('x')", {})
 
 
 def test_blocks_dunder_attr(ev: SafeEvaluator) -> None:

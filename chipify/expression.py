@@ -33,6 +33,15 @@ _RE_SANITISE = re.compile(r"[^a-zA-Z0-9_]")
 _RE_SPICE_CALL = re.compile(r"([a-zA-Z_]\w*)\(([^()]+)\)")
 _RE_VALID_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
+# Dangerous builtins that must never be reachable from a user expression.
+# asteval's default symbol table ships some of these (e.g. ``open`` in 1.0.x), so
+# we strip them explicitly rather than trusting whatever asteval happens to expose.
+_BLOCKED_BUILTINS = frozenset({
+    "open", "eval", "exec", "compile", "__import__", "input",
+    "globals", "locals", "vars", "memoryview", "breakpoint", "help",
+    "getattr", "setattr", "delattr",
+})
+
 
 class ExpressionError(Exception):
     """Raised when a user expression cannot be parsed or evaluated safely."""
@@ -85,6 +94,10 @@ class SafeEvaluator:
 
     def _make_interp(self, extra: dict[str, Any] | None = None) -> Interpreter:
         interp = Interpreter(use_numpy=self._use_numpy)
+        # Remove dangerous builtins before adding user names, so a data name that
+        # happens to be e.g. "open" can still shadow it as harmless data.
+        for name in _BLOCKED_BUILTINS:
+            interp.symtable.pop(name, None)
         interp.symtable.update(self._helpers)
         if extra:
             interp.symtable.update(extra)
