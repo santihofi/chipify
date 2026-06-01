@@ -41,6 +41,7 @@ module = [
     "chipify.project_config",
     "chipify.plugin_loader",
     "chipify.analyzer",
+    "chipify.analyses",
     "chipify.plot_manager",
     "chipify.simulator",
     "chipify.cli",

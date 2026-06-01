@@ -1,0 +1,148 @@
+# Chipify
+
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+
+**Chipify** is a high-performance EDA (Electronic Design Automation) tool for
+**mismatch simulations, parameter sweeping, and yield analysis**. It wraps
+[Xschem](https://xschem.sourceforge.io/) (schematic capture) and
+[Ngspice](https://ngspice.sourceforge.io/) (circuit simulation) to automate
+Monte-Carlo and corner sweeps, run them in parallel, and turn the raw results
+into plots, yield matrices, and reports.
+
+It ships with both a **CustomTkinter desktop GUI** and a **headless CLI**, plus
+a plugin system for custom plots, reports, and expressions.
+
+<!-- Add a GUI screenshot here, e.g.:  ![Chipify GUI](docs/screenshot.png) -->
+
+## Features
+
+- **Parallel sweeps** — multiprocessing pool runs Monte-Carlo / corner cases across all cores.
+- **Datasheet-driven** — describe parameters, tests, and pass/fail specs in a single YAML file.
+- **Range DSL** — `range`, `linspace`, and `logspace` parameter sweeps (safely parsed, no `eval`).
+- **Yield & statistics** — pass/fail yield, histograms with distribution fits, corner yield matrices.
+- **Safe custom expressions** — derive new metrics with a sandboxed evaluator (no arbitrary code execution).
+- **Reports** — export to PDF, Markdown, and LaTeX; PNG/SVG plot exporters.
+- **Pluggable** — add your own plots, reports, expressions, and exporters (see [PLUGINS.md](PLUGINS.md)).
+
+## Prerequisites
+
+Chipify is a *wrapper* around external EDA tools, so these must be installed and
+available on your `PATH`:
+
+- **Python 3.11+**
+- **[Ngspice](https://ngspice.sourceforge.io/)** — the SPICE simulator
+- **[Xschem](https://xschem.sourceforge.io/)** — schematic capture / netlist generation
+- *(optional)* **[VACASK](https://vacask.fke.uni-lj.si/)** + PyOPUS — alternative simulation backend
+
+## Installation
+
+```bash
+git clone https://github.com/santihofi/chipify.git
+cd chipify
+
+python -m venv venv
+# Linux/macOS:
+source venv/bin/activate
+# Windows (PowerShell):
+venv\Scripts\Activate.ps1
+
+pip install .
+```
+
+Optional extras:
+
+```bash
+pip install ".[fast]"     # numexpr — vectorized transient-equation evaluation
+pip install ".[vacask]"   # PyOPUS — VACASK simulation backend
+```
+
+For development, install in editable mode: `pip install -e .`
+(On Linux/macOS, `install.sh` is a one-line convenience wrapper for the venv + install steps above.)
+
+## Quick start
+
+### Desktop GUI
+
+```bash
+chipify
+```
+
+This opens the desktop application where you can edit datasheets, launch sweeps,
+and explore results interactively.
+
+### Headless CLI
+
+See [`examples/datasheet.yaml`](examples/datasheet.yaml) for a documented
+datasheet template (and [examples/README.md](examples/README.md) for how to run
+it). Place your datasheet YAML in the input folder (`datasheets/` by default), then:
+
+```bash
+chipify-cli -c my_design.yaml          # run a single datasheet
+chipify-cli --batch ./datasheets       # run every *.yaml in a directory
+chipify-cli -c my_design.yaml --json   # also print a JSON summary (handy for CI)
+chipify-cli -c my_design.yaml --markdown report.md
+```
+
+Results are written to the output folder (`out/` by default), including
+`simulation_results.csv` and any generated reports. Run `chipify-cli --help`
+for the full list of options.
+
+## Configuration
+
+User preferences are stored in `settings.json` in the directory you launch
+Chipify from (CPU cores, simulator engine, theme, live plotting, custom
+equations, …). The file is created/updated by the GUI's settings dialog.
+
+### Folder paths
+
+By default Chipify uses this layout under the working directory:
+
+| Folder         | `settings.json` key | Default        |
+| -------------- | ------------------- | -------------- |
+| Input datasheets | `in_dir`          | `datasheets/`  |
+| Simulation output | `out_dir`        | `out/`         |
+| Scratch / temp | `work_dir`          | `tmp/`         |
+| Testbench files | `tb_dir`           | `tb/`          |
+
+To relocate any of them, set the corresponding key in `settings.json` to an
+absolute or relative path, e.g.:
+
+```json
+{
+  "out_dir": "results",
+  "in_dir": "/data/chipify/datasheets"
+}
+```
+
+Any key that is missing or blank falls back to its default. Paths are resolved
+when Chipify starts, so changes take effect on the next launch.
+
+## Project layout
+
+```
+chipify/            # engine (no GUI deps) + gui/ package
+  cli.py            # CLI entry point + GUI launcher
+  simulator.py      # multiprocessing simulation engine
+  schema.py         # datasheet validation + range DSL
+  expression.py     # sandboxed expression evaluation
+  settings.py       # project folder paths (configurable via settings.json)
+  app_config.py     # persistent preferences + logging
+  gui/              # CustomTkinter desktop GUI (controllers / services / widgets)
+tests/              # pytest suite for the core engine
+```
+
+See [context.md](context.md) for the full architecture overview and
+[PLUGINS.md](PLUGINS.md) for the plugin API.
+
+## Development
+
+```bash
+pip install -e .
+pytest                                   # run the test suite
+python -m mypy chipify/settings.py       # strict type-checking (see pyproject.toml)
+```
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).

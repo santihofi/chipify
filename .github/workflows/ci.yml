@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and dev tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pytest mypy
+
+      - name: Run tests
+        run: pytest
+
+      # GUI/simulator modules need Ngspice/Xschem and a display, so they are not
+      # exercised here; mypy covers the strict-typed engine core (see pyproject.toml).
+      - name: Type-check (mypy, strict core)
+        run: |
+          python -m mypy \
+            chipify/expression.py \
+            chipify/schema.py \
+            chipify/util.py \
+            chipify/app_config.py \
+            chipify/settings.py \
+            chipify/gui/state.py \
+            chipify/gui/tabs/base.py

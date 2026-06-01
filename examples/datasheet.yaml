@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Example Chipify datasheet
+#
+# A datasheet describes (1) the parameters to sweep and (2) the testbenches to
+# run with their pass/fail specs. Chipify expands the sweep into a grid of
+# simulation cases, runs them in parallel through Ngspice/Xschem, and reports
+# the results and yield.
+#
+# This file is a documented TEMPLATE: the `tb_*` names below refer to Xschem
+# testbench schematics that you provide (see examples/README.md). Copy it into
+# your input folder (default `datasheets/`) and adapt it to your design.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Each entry becomes a swept dimension. Values may be:
+#   - a list of discrete values:      [-40, 27, 100]
+#   - a single value in a list:       [1.5]
+#   - a range DSL string:             range(30), linspace(0.6, 0.9, 4), logspace(...)
+parameters:
+  temp:       [-40, 27, 100]          # corner temperatures (°C)
+  corner_mos: ["tt"]                  # process corner label passed to the netlist
+  vdd:        [1.5]                   # supply voltage (V)
+  vincm:      linspace(0.6, 0.9, 4)   # sweep input common-mode over 4 points
+  seed:       range(30)               # 30 Monte-Carlo mismatch seeds
+
+# Each key under `tests` is the path/name of an Xschem testbench schematic.
+tests:
+  tb_ota_op:
+    # Measurement boundary specs: min/max define pass/fail, typ is the target.
+    ve:
+      min: 0.7
+      max: 0.8
+      typ: 0.75
+    vd:
+      min: -0.02
+      max: 0.02
+      typ: 0.0
+
+  tb_ota_gain:
+    # Optional: signals to capture for plotting (transient_signals / dc_signals /
+    # ac_signals correspond to the available analysis types).
+    ac_signals: [out, outn]
+    gain:
+      min: 40
+      max: 80
+      typ: 60
+    bandwidth:                        # YAML supports scientific notation
+      min: 1.0e+6
+      max: 1.0e+9
+      typ: 1.0e+7
+    # Optional: derive extra metrics from measured values with sandboxed
+    # expressions (name: expression).
+    measure:
+      gbw: "gain * bandwidth"

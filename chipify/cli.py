@@ -39,9 +39,8 @@ def _json_summary(df, stim, yaml_name: str, duration_s: float) -> dict:
 def _make_progress_stream_cb():
     """Return a progress_callback that emits 'PROGRESS: <done> <total>' to stdout.
 
-    Used by --progress-stream when chipify-cli is invoked over SSH by
-    RemoteDispatcher; the local side tails stdout for these lines to drive
-    the GUI progress bar.
+    Enabled by --progress-stream so a parent process can tail stdout for these
+    lines and drive its own progress bar.
     """
     def _cb(current: int, total: int) -> None:
         print(f"PROGRESS: {current} {total}", flush=True)
@@ -61,7 +60,6 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
     df = simulator.run_sim(
         stim,
         simulator=simulator_override,
-        yaml_path=yaml_path,
         templates_dir=templates_dir or "",
         progress_callback=progress_cb,
     )
@@ -158,8 +156,8 @@ def main():
         default=None,
         help=(
             "Skip xschem netlist generation and load pre-rendered Jinja2\n"
-            "templates from DIR. Set by chipify on the remote host when\n"
-            "RemoteDispatcher offloads a sweep — not for normal local use."
+            "templates from DIR instead — useful for re-running a sweep\n"
+            "against netlists that were already generated."
         ),
     )
 
@@ -169,8 +167,8 @@ def main():
         default=False,
         help=(
             "Emit 'PROGRESS: <done> <total>' lines to stdout for each batch\n"
-            "completion. Used by RemoteDispatcher to drive the GUI progress\n"
-            "bar over SSH; harmless if grep'd out otherwise."
+            "completion, so a parent process can track progress; harmless\n"
+            "otherwise."
         ),
     )
 

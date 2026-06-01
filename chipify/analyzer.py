@@ -1,7 +1,14 @@
-# analyzer.py
+"""analyzer.py – Console summary of simulation results.
+
+Prints a human-readable run summary (total iterations, failed runs, and
+per-testbench / global yield) for a completed results DataFrame. Used by the
+CLI after a sweep. Note: the printed report text is in German.
+"""
 import pandas as pd
 
+
 def print_summary(df, stim):
+    """Print a German-language summary of *df* (yield, crashes) to stdout."""
     print("\n" + "="*85)
     print(" ZUSAMMENFASSUNG DER SIMULATIONSERGEBNISSE")
     print("="*85)

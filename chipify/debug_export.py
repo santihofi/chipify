@@ -1,7 +1,17 @@
+"""debug_export.py – Export failing simulation runs for debugging.
+
+Writes the failed runs of a results DataFrame to a CSV and generates a ready-to-run
+SPICE deck for the worst-case failure, so it can be re-simulated in isolation.
+"""
 import os
 import pandas as pd
 
+
 def export_fails(df, stim, out_dir):
+    """Write failed runs to ``failed_runs.csv`` and a worst-case SPICE deck in *out_dir*.
+
+    Returns the number of failing runs found (0 if none / no ``global_pass`` column).
+    """
     os.makedirs(out_dir, exist_ok=True)
     
     if 'global_pass' not in df.columns:

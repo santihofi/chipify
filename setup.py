@@ -1,11 +1,22 @@
+from pathlib import Path
+
 from setuptools import setup, find_packages
+
+here = Path(__file__).parent
+long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="chipify",
     version="0.2.0",
-    description="High-Performance Mismatch Simulation Wrapper",
+    description="High-Performance Mismatch Simulation Wrapper for Xschem and Ngspice",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     author="Santiago Hofwimmer",
-    packages=find_packages(), 
+    author_email="santiago.hofwimmer2@gmail.com",
+    url="https://github.com/santihofi/chipify",
+    license="Apache-2.0",
+    python_requires=">=3.11",
+    packages=find_packages(exclude=["tests", "tests.*"]),
     install_requires=[
         "pandas",
         "numpy",
@@ -22,13 +33,20 @@ setup(
         "vacask": ["PyOPUS>=0.11"],
         # pip install chipify[fast]  → numexpr accelerates transient equation eval
         "fast": ["numexpr"],
-        # pip install chipify[remote] → paramiko for SSH/SFTP remote dispatcher
-        "remote": ["paramiko>=3.0"],
     },
     entry_points={
         "console_scripts": [
-            "chipify-cli=chipify.cli:main", 
-            "chipify=chipify.cli:run_gui", 
+            "chipify-cli=chipify.cli:main",
+            "chipify=chipify.cli:run_gui",
         ]
-    }
+    },
+    classifiers=[
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Science/Research",
+        "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+        "License :: OSI Approved :: Apache Software License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.11",
+        "Operating System :: OS Independent",
+    ],
 )

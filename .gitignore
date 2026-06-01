@@ -1,6 +1,21 @@
+# ── Working directories (default project folder structure) ──
 out/
 tmp/
+
+# ── User-local config (paths, cores, theme — generated at runtime) ──
+settings.json
+
+# ── Virtualenv ──
 venv/
+
+# ── Build / packaging artifacts ──
 build/
-*.egg-info
+*.egg-info/
+
+# ── Caches ──
 __pycache__/
+.mypy_cache/
+.pytest_cache/
+
+# ── Editor / tooling local state ──
+.claude/settings.local.json

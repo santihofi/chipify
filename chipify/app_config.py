@@ -31,14 +31,11 @@ DEFAULTS: dict[str, Any] = {
     "transient_equations": [],        # [{"name": "vdiff", "expr": "v(outp) - v(outn)"}, ...]
     "multiplot_config": [],           # persisted PlotCell configs for Multi-Plot Dashboard
     "theme": "night",                 # appearance theme: night|dark|light
-    # ── Remote compute dispatcher ──
-    "compute_target": "local",        # local|remote
-    "remote_host": "",                # remote server hostname / IP
-    "remote_user": "",                # remote SSH username
-    "remote_key_path": "",            # absolute path to SSH private key file
-    "remote_work_dir": "/tmp/chipify_remote",  # base directory on remote for per-run subdirs
-    "remote_port": 22,                # SSH port
-    "remote_chipify_cmd": "chipify-cli",  # remote command to invoke
+    # ── Project folders (None/absent/blank ⇒ default structure; see settings.py) ──
+    "in_dir": None,                   # input datasheets   (default: datasheets/)
+    "out_dir": None,                  # simulation output  (default: out/)
+    "work_dir": None,                 # scratch / temp     (default: tmp/)
+    "tb_dir": None,                   # testbench files    (default: tb/)
 }
 
 _logging_ready = False

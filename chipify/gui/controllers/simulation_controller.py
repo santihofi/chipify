@@ -254,7 +254,6 @@ class SimulationController:
                 stim,
                 progress_callback=self.progress_callback_wrapper,
                 chunk_callback=chunk_cb,
-                yaml_path=yaml_path,
             )
 
             if df is not None:

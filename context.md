@@ -13,7 +13,7 @@
 
 | Module | Purpose |
 |---|---|
-| `settings.py` | Global paths (`IN_DIR`, `OUT_DIR`, `WORK_DIR`, `TB_DIR`, `FAST_TMP`). |
+| `settings.py` | Project paths (`IN_DIR`, `OUT_DIR`, `WORK_DIR`, `TB_DIR`, `FAST_TMP`). The four project folders are configurable via `settings.json` (keys `in_dir/out_dir/work_dir/tb_dir`); missing/blank ⇒ default structure. `FAST_TMP` is fixed. |
 | `util.py` | Domain objects: `Stimuli`, `Test`, `Value`. Delegates YAML parsing to `schema.py`. |
 | `schema.py` | `validate_datasheet()` — validates `datasheet.yaml` against typed schema; safe `_parse_range_dsl()` for `range/linspace/logspace` strings. |
 | `expression.py` | `SafeEvaluator` — sandboxed `asteval`-backed evaluator with `numexpr` fast path. Replaces all `eval()` / `df.eval()` call-sites. |
