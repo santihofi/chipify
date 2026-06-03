@@ -423,6 +423,53 @@ def get_simulator_engine(simulator_name: str) -> BaseSimulator:
     return engines.get(key, NgspiceSimulator)()
 
 
+def _read_run_log_tail(n: int = 25) -> str:
+    """Return the tail of this worker's ngspice run log (best-effort, '' on failure).
+
+    ``NgspiceSimulator.run`` writes the simulator's stdout/stderr to
+    ``FAST_TMP/sim_<pid>.log`` for the current worker pid; right after ``run``
+    returns it still holds that run's output. Used to explain why a declared
+    analysis produced no output tab.
+    """
+    log_path = os.path.join(settings.FAST_TMP, f"sim_{os.getpid()}.log")
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return ""
+    return "".join(lines[-n:]).strip()
+
+
+def _persist_analyses(analyses, analysis_tab_paths, analysis_dirs,
+                      run_id, tb_safe, tb_path, sample):
+    """Write each declared analysis's tab file into its per-run CSV.
+
+    When an analysis was set up to capture (both its tab path and output dir
+    exist) but ngspice produced no tab file, record a note on *sample* and log a
+    warning with the ngspice log tail — instead of silently skipping it, which
+    leaves an empty plot and no clue why (the common Bode/AC "no data" symptom).
+    """
+    for an in analyses:
+        tab = analysis_tab_paths.get(an.kind, "")
+        dest_dir = analysis_dirs.get(an.kind, "")
+        if not (tab and dest_dir):
+            continue
+        if os.path.exists(tab):
+            dest_csv = os.path.join(dest_dir, f"run_{run_id}__{tb_safe}.csv")
+            an.persist_to_csv(tab, dest_csv)
+        else:
+            note = (
+                f"{an.kind} analysis produced no data - ngspice wrote no "
+                f"'{an.kind}1' output to capture (check that the testbench "
+                f"actually runs its .{an.kind} analysis)"
+            )
+            sample[f"{tb_path}_{an.kind}_capture"] = note
+            log.warning(
+                "%s: %s\n  expected tab: %s\n  ngspice log tail:\n%s",
+                tb_path, note, tab, _read_run_log_tail(),
+            )
+
+
 # ── VACASK helpers ─────────────────────────────────────────────────────────────
 
 def _run_ng2vc(spice_file: str, sim_file: str) -> None:
@@ -1027,13 +1074,12 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
                 sample[f"{val_obj.name}_pass"] = False
             continue
 
-        # Persist every analysis's tab file into its destination CSV.
-        for an in analyses:
-            tab = analysis_tab_paths.get(an.kind, "")
-            dest_dir = analysis_dirs.get(an.kind, "")
-            if tab and dest_dir and os.path.exists(tab):
-                dest_csv = os.path.join(dest_dir, f"run_{run_id}__{tb_safe}.csv")
-                an.persist_to_csv(tab, dest_csv)
+        # Persist every analysis's tab file into its destination CSV (and surface
+        # any analysis that ran but produced no output — see _persist_analyses).
+        _persist_analyses(
+            analyses, analysis_tab_paths, analysis_dirs,
+            run_id, tb_safe, test.tb_path, sample,
+        )
 
         # Transient-only testbench: no scalar measurements defined → skip MY_DATA.
         if not test.value_lst:

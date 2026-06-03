@@ -670,7 +670,10 @@ class PlotManager:
             ax.text(
                 0.5, 0.5,
                 "No AC data.\nRun a simulation with ac_signals defined,\n"
-                "then select signals and click Refresh.",
+                "then select signals and click Refresh.\n\n"
+                "If you did and still see nothing, check out/chipify.log for a\n"
+                "'... analysis produced no data' warning (the testbench's .ac\n"
+                "may not be producing data to capture).",
                 ha="center", va="center", color="gray",
                 transform=ax.transAxes, fontsize=11,
             )
@@ -693,7 +696,8 @@ class PlotManager:
             ax.text(
                 0.5, 0.5,
                 "No AC CSV files found for the selected runs.\n"
-                "The simulation may not have used ac_signals, "
+                "The AC analysis may have produced no data — check "
+                "out/chipify.log for a\n'... analysis produced no data' warning, "
                 "or the files have been removed.",
                 ha="center", va="center", color="gray",
                 transform=ax.transAxes, fontsize=11, wrap=True,
