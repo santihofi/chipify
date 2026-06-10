@@ -30,16 +30,22 @@ log = logging.getLogger("chipify.gui.services.transient")
 
 # ── Generic helpers ──────────────────────────────────────────────────────────
 
-def resolve_analysis_dir(df: pd.DataFrame, out_dir: str, kind: str) -> str:
+def resolve_analysis_dir(df: pd.DataFrame, out_dir: str, kind: str,
+                         meta: dict | None = None) -> str:
     """
     Find the per-run CSV directory for ``kind`` (transient/dc/ac).
 
     Strategy (first match wins):
     1. ``df.attrs["analysis_dirs"][kind]`` — set by run_sim when CSVs are written.
     2. ``df.attrs["tran_dir"]`` — back-compat alias for kind="transient".
-    3. ``{out_dir}/analysis_data/{kind}/.latest`` pointer file.
-    4. Newest sub-directory under ``{out_dir}/analysis_data/{kind}/``.
-    5. (transient only) newest sub-directory under the legacy ``{out_dir}/tran_data/``.
+    3. *meta* — a run_meta sidecar dict for the loaded history run
+       (``analysis_dirs`` / legacy ``tran_dir`` keys). Checked before the
+       pointer files so an older history run resolves to its own data, not
+       the most recent run's.
+    4. ``{out_dir}/analysis_data/{kind}/.latest`` pointer file (and the
+       legacy ``{out_dir}/tran_data/.latest`` for transient).
+    5. Newest sub-directory under ``{out_dir}/analysis_data/{kind}/``.
+    6. (transient only) newest sub-directory under the legacy ``{out_dir}/tran_data/``.
     """
     # 1. DataFrame attribute set by the live simulation run.
     if hasattr(df, "attrs"):
@@ -54,24 +60,38 @@ def resolve_analysis_dir(df: pd.DataFrame, out_dir: str, kind: str) -> str:
             if d and os.path.isdir(d):
                 return d
 
-    # 3. Pointer file (if anything writes one).
-    ptr = os.path.join(out_dir, "analysis_data", kind, ".latest")
-    if os.path.exists(ptr):
-        try:
-            with open(ptr, encoding="utf-8") as fh:
-                d = fh.read().strip()
+    # 3. History run's meta sidecar.
+    if isinstance(meta, dict):
+        meta_adirs = meta.get("analysis_dirs", {})
+        d = meta_adirs.get(kind, "") if isinstance(meta_adirs, dict) else ""
+        if d and os.path.isdir(d):
+            return d
+        if kind == "transient":
+            d = meta.get("tran_dir", "")
             if d and os.path.isdir(d):
                 return d
-        except Exception:
-            pass
 
-    # 4. Newest timestamped subdir under analysis_data/<kind>/.
+    # 4. Pointer files.
+    pointers = [os.path.join(out_dir, "analysis_data", kind, ".latest")]
+    if kind == "transient":
+        pointers.append(os.path.join(out_dir, "tran_data", ".latest"))
+    for ptr in pointers:
+        if os.path.exists(ptr):
+            try:
+                with open(ptr, encoding="utf-8") as fh:
+                    d = fh.read().strip()
+                if d and os.path.isdir(d):
+                    return d
+            except Exception:
+                pass
+
+    # 5. Newest timestamped subdir under analysis_data/<kind>/.
     base = os.path.join(out_dir, "analysis_data", kind)
     newest = _newest_subdir(base)
     if newest:
         return newest
 
-    # 5. Legacy transient location.
+    # 6. Legacy transient location.
     if kind == "transient":
         legacy = _newest_subdir(os.path.join(out_dir, "tran_data"))
         if legacy:

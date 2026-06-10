@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from setuptools import setup, find_packages
@@ -5,9 +6,13 @@ from setuptools import setup, find_packages
 here = Path(__file__).parent
 long_description = (here / "README.md").read_text(encoding="utf-8")
 
+# Single source of truth for the version: chipify/__init__.py
+_init = (here / "chipify" / "__init__.py").read_text(encoding="utf-8")
+version = re.search(r'^__version__ = "([^"]+)"', _init, re.M).group(1)
+
 setup(
     name="chipify",
-    version="0.2.0",
+    version=version,
     description="High-Performance Mismatch Simulation Wrapper for Xschem and Ngspice",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -17,6 +22,8 @@ setup(
     license="Apache-2.0",
     python_requires=">=3.11",
     packages=find_packages(exclude=["tests", "tests.*"]),
+    # Ship the PEP 561 marker so installed copies expose their type hints.
+    package_data={"chipify": ["py.typed"]},
     install_requires=[
         "pandas",
         "numpy",

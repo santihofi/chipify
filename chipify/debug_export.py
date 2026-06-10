@@ -22,20 +22,22 @@ def export_fails(df, stim, out_dir):
     if fails_df.empty:
         return 0
         
-    # 1. Alle Fails als kleine CSV wegspeichern
+    # 1. Save all failing runs as a small CSV
     csv_path = os.path.join(out_dir, "failed_runs.csv")
     fails_df.to_csv(csv_path, index=False)
-    
-    # 2. Eine fertige SPICE-Datei für den Allerschlimmsten Fail generieren
+
+    # 2. Generate a ready-to-run SPICE deck for the first failing run
     spice_path = os.path.join(out_dir, "debug_worst_case.spice")
     with open(spice_path, 'w') as f:
-        run_id = fails_df.index[0]
+        row = fails_df.iloc[0]
+        # The run_id column is the simulator's identifier; the DataFrame
+        # index is just a row number and differs after filtering.
+        run_id = row['run_id'] if 'run_id' in fails_df.columns else fails_df.index[0]
         f.write(f"* Auto-Generated Debug Params for worst failing run (ID: {run_id})\n")
         f.write("* Include this file in your Xschem testbench using a 'code' block!\n\n")
-        
-        row = fails_df.iloc[0]
+
         for p in stim.params.keys():
             if p in row:
                 f.write(f".param {p}={row[p]}\n")
-                
+
     return len(fails_df)

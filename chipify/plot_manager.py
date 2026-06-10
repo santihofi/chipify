@@ -250,7 +250,7 @@ class PlotManager:
         elif mode == "Corner Yield Matrix":
             if x_col not in valid_df.columns or y_col not in valid_df.columns: return None, None
             if len(valid_df[x_col].unique()) > 50 or len(valid_df[y_col].unique()) > 50:
-                ax.text(0.5, 0.5, "Zu viele X/Y Werte!\nBitte wähle diskrete Sweep-Parameter.", color=fg, ha='center', va='center')
+                ax.text(0.5, 0.5, "Too many X/Y values!\nPlease pick discrete sweep parameters.", color=fg, ha='center', va='center')
                 canvas.draw()
                 return None, None
 
@@ -372,21 +372,6 @@ class PlotManager:
         return sc_plot, scatter_df
 
     @staticmethod
-    def _quote_special_cols(columns, expr: str) -> str:
-        """
-        Backtick-quote column names that contain non-identifier characters
-        (e.g. parentheses in ngspice signal names like ``v(outp)``)
-        so that pandas ``df.eval()`` treats them as column references rather
-        than function calls.  Processes longest names first to avoid partial
-        substitution of shorter substrings.
-        """
-        result = expr
-        for col in sorted(columns, key=len, reverse=True):
-            if not str(col).isidentifier() and col in result:
-                result = result.replace(col, f"`{col}`")
-        return result
-
-    @staticmethod
     def _draw_xy_overlay(
         fig,
         canvas,
@@ -500,6 +485,7 @@ class PlotManager:
 
             if equations:
                 from chipify.expression import default_evaluator
+                import logging
                 for eq in equations:
                     eq_name = eq.get("name", "").strip()
                     eq_expr = eq.get("expr", "").strip()
@@ -508,8 +494,9 @@ class PlotManager:
                             df = default_evaluator.evaluate_dataframe_column(
                                 df, eq_name, eq_expr
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logging.getLogger("chipify.plot").debug(
+                                "Waveform equation %r skipped: %s", eq_name, exc)
 
             x = df[x_col] * x_scale if time_autoscale else df[x_col]
             for sig in signals:

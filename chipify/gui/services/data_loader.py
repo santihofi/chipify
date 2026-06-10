@@ -46,15 +46,23 @@ def valid_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalise_sim_error(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure ``sim_error`` column exists and has no pandas-NaN values."""
+    """Ensure ``sim_error`` column exists, is string-typed, and has no NaNs."""
     if "sim_error" not in df.columns:
         df = df.copy()
         df["sim_error"] = "None"
         return df
-    if not df["sim_error"].isna().any() and (df["sim_error"].str.lower() != "nan").all():
+    ser = df["sim_error"]
+    # Fast path: already clean string data. The dtype guard matters — a CSV
+    # whose sim_error column is all-NaN loads as float, where .str would raise.
+    if (
+        ser.dtype == object
+        and not ser.isna().any()
+        and ser.map(lambda v: isinstance(v, str)).all()
+        and not (ser.str.lower() == "nan").any()
+    ):
         return df
     df = df.copy()
-    df["sim_error"] = df["sim_error"].fillna("None").astype(str)
+    df["sim_error"] = ser.fillna("None").astype(str)
     df.loc[df["sim_error"].str.lower() == "nan", "sim_error"] = "None"
     return df
 
@@ -67,6 +75,16 @@ def compute_global_pass(df: pd.DataFrame) -> pd.DataFrame:
     for col in tb_pass_cols:
         df["global_pass"] = df["global_pass"] & df[col]
     return df
+
+
+def prepare_results(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise ``sim_error`` and (re)compute ``global_pass`` in one call.
+
+    This is the single authoritative way to prepare a results DataFrame for
+    yield computation — CLI, analyzer, and report exporters all delegate
+    here rather than carrying their own copies of the logic. Idempotent.
+    """
+    return compute_global_pass(normalise_sim_error(df))
 
 
 def compute_plot_cols(df: pd.DataFrame, stim: Any) -> PlotColumns:

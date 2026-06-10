@@ -27,25 +27,6 @@ class SchemaError(ValueError):
     """Raised when a datasheet.yaml violates the expected schema."""
 
 
-# ── TypedDict definitions (for type-checker use) ─────────────────────────────
-
-class MeasurementSpec:
-    """Represents one measurement boundary specification within a testbench."""
-    __slots__ = ("name", "vmin", "vmax", "vtyp")
-
-    def __init__(
-        self,
-        name: str,
-        vmin: float | None,
-        vmax: float | None,
-        vtyp: float | None,
-    ) -> None:
-        self.name = name
-        self.vmin = vmin
-        self.vmax = vmax
-        self.vtyp = vtyp
-
-
 # ── Allowed range DSL functions ───────────────────────────────────────────────
 
 _ALLOWED_CALLS: dict[str, Any] = {
@@ -111,8 +92,9 @@ def _parse_range_dsl(value: str) -> list[float]:
             f"Use one of: {sorted(_ALLOWED_CALLS)!r}"
         )
 
-    # No keyword args, no star args
-    if body.keywords or body.starargs if hasattr(body, "starargs") else body.keywords:
+    # No keyword args (starred args are rejected by the constant-only
+    # argument check below).
+    if body.keywords:
         raise ValueError(f"Range DSL {value!r}: keyword arguments are not supported.")
 
     # Extract numeric arguments — only constants allowed
@@ -153,23 +135,30 @@ def _parse_range_dsl(value: str) -> list[float]:
 
 
 def _parse_scalar_value(raw: Any) -> float | None:
-    """Convert a YAML scalar (str/int/float/None) to float or None."""
+    """Convert a YAML scalar (str/int/float/None) to float or None.
+
+    Raises SchemaError for values that are present but not numeric, so a typo
+    like ``min: abc`` fails loudly instead of silently dropping the bound.
+    """
     if raw is None:
         return None
     try:
         return float(raw)
-    except (TypeError, ValueError):
-        return None
+    except (TypeError, ValueError) as exc:
+        raise SchemaError(f"expected a number, got {raw!r}") from exc
 
 
 def validate_parameters(params_raw: dict[str, Any]) -> dict[str, Any]:
     """
     Validate and normalise the ``parameters:`` block.
 
-    Sequences expressed as range-DSL strings are expanded here.
-    Non-DSL scalars and lists are returned unchanged.
+    Sequences expressed as range-DSL strings are expanded here. Scalars
+    (numbers and non-DSL strings) are wrapped in one-element lists so that
+    every parameter value is a sweepable sequence — ``generate_cases`` builds
+    the case grid with ``itertools.product``, which would otherwise crash on
+    a bare number or silently sweep a bare string character by character.
 
-    Returns a dict mapping parameter names to their Python values.
+    Returns a dict mapping parameter names to lists of values.
     Raises SchemaError on malformed entries.
     """
     result: dict[str, Any] = {}
@@ -185,9 +174,11 @@ def validate_parameters(params_raw: dict[str, Any]) -> dict[str, Any]:
                 except ValueError as exc:
                     raise SchemaError(f"Parameter {key!r}: {exc}") from exc
             else:
-                result[key] = value
-        else:
+                result[key] = [value]
+        elif isinstance(value, list):
             result[key] = value
+        else:
+            result[key] = [value]
     return result
 
 
@@ -252,9 +243,14 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
             # Measurement boundary spec
             if not isinstance(bounds, dict):
                 bounds = {}
-            vmin = _parse_scalar_value(bounds.get("min", bounds.get("vmin")))
-            vmax = _parse_scalar_value(bounds.get("max", bounds.get("vmax")))
-            vtyp = _parse_scalar_value(bounds.get("typ", bounds.get("vtyp")))
+            try:
+                vmin = _parse_scalar_value(bounds.get("min", bounds.get("vmin")))
+                vmax = _parse_scalar_value(bounds.get("max", bounds.get("vmax")))
+                vtyp = _parse_scalar_value(bounds.get("typ", bounds.get("vtyp")))
+            except SchemaError as exc:
+                raise SchemaError(
+                    f"tests.{tb_path}.{val_name}: {exc}"
+                ) from exc
             value_lst.append(Value(name=str(val_name), vmin=vmin, vmax=vmax, vtyp=vtyp))
 
         t = Test(tb_path, value_lst)

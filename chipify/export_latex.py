@@ -68,7 +68,7 @@ def _build_xy_table(
     *,
     y_columns_for_signal,
     equations: list | None = None,
-) -> tuple[pd.DataFrame, list[tuple[str, str, str, str]]]:
+) -> tuple[pd.DataFrame, list[tuple[str, str, str, str]], dict[str, str]]:
     """
     Load each per-run CSV and assemble a wide LaTeX-ready DataFrame.
 
@@ -76,14 +76,20 @@ def _build_xy_table(
     emit for that signal — transient/DC supply one (``("", df[sig])``), Bode
     supplies two (``("mag", db_series), ("phase", phase_series)``).
 
-    Returns ``(wide_df, series_keys)`` where each entry of *series_keys* is
-    ``(run_id, base_signal, suffix, column_name)``. The base signal is the
-    name the user picked (without mag/phase) so chipify-style colouring can
-    group mag+phase of the same (rid, sig) under one colour.
+    Every source file gets its own X column: transient runs have per-run
+    adaptive timesteps, so plotting all runs against one shared time vector
+    would silently distort every run but the first.
+
+    Returns ``(wide_df, series_keys, series_x)``:
+      series_keys – ``(run_id, base_signal, suffix, column_name)`` per curve.
+                    The base signal is the name the user picked (without
+                    mag/phase) so chipify-style colouring can group mag+phase
+                    of the same (rid, sig) under one colour.
+      series_x    – ``{column_name: x_column_name}`` for the matching X data.
     """
     cols: dict[str, np.ndarray] = {}
     series_keys: list[tuple[str, str, str, str]] = []
-    x_vec: np.ndarray | None = None
+    series_x: dict[str, str] = {}
 
     for rid, fpath in run_files:
         try:
@@ -94,24 +100,35 @@ def _build_xy_table(
             continue
         df = _apply_equations(df, equations)
 
-        x = df[x_col].to_numpy()
-        if x_vec is None:
-            x_vec = x
-            cols[x_col] = x_vec
+        rid_tok = _safe_col(rid)
+        x_name = f"x_{rid_tok}"
+        n = 2
+        while x_name in cols:  # same run id can appear once per testbench
+            x_name = f"x_{rid_tok}_{n}"
+            n += 1
+        cols[x_name] = df[x_col].to_numpy()
 
+        wrote_any = False
         for sig in signals:
             for suffix, series in y_columns_for_signal(df, sig):
                 if series is None:
                     continue
-                rid_tok = _safe_col(rid)
                 sig_tok = _safe_col(sig)
                 suffix_tok = f"_{suffix}" if suffix else ""
                 col_name = f"r_{rid_tok}_{sig_tok}{suffix_tok}"
+                n = 2
+                while col_name in cols:
+                    col_name = f"r_{rid_tok}_{sig_tok}{suffix_tok}_{n}"
+                    n += 1
                 cols[col_name] = np.asarray(series, dtype=float)
                 series_keys.append((rid, sig, suffix, col_name))
+                series_x[col_name] = x_name
+                wrote_any = True
+        if not wrote_any:
+            del cols[x_name]
 
-    if x_vec is None:
-        return pd.DataFrame(), []
+    if not series_keys:
+        return pd.DataFrame(), [], {}
 
     # NaN-pad to the longest column so all series fit in one CSV.
     max_len = max(len(v) for v in cols.values())
@@ -122,7 +139,7 @@ def _build_xy_table(
             padded[name] = np.concatenate([vec, pad])
         else:
             padded[name] = vec
-    return pd.DataFrame(padded), series_keys
+    return pd.DataFrame(padded), series_keys, series_x
 
 
 # ── chipify-styled colour / alpha plumbing ────────────────────────────────────
@@ -267,8 +284,8 @@ def _write_overlay_tex(
     name: str,
     csv_filename: str,
     series_keys: list[tuple[str, str, str, str]],
+    series_x: dict[str, str],
     *,
-    x_col: str,
     xlabel: str,
     ylabel: str,
     xmode: str = "normal",
@@ -289,6 +306,7 @@ def _write_overlay_tex(
     addplots: list[str] = []
     for rid, sig, _suffix, col in series_keys:
         cname = curve_color.get((rid, sig), "black")
+        x_col = series_x.get(col, col)
         addplots.append(
             f"    \\addplot+ [color={cname}, no marks,"
             f" line width=0.6pt, opacity={alpha:.3f}]"
@@ -357,7 +375,7 @@ def generate_transient_latex_export(
             return [("", df[sig])]
         return []
 
-    table, series_keys = _build_xy_table(
+    table, series_keys, series_x = _build_xy_table(
         run_files, signals, x_col="time",
         y_columns_for_signal=y_for, equations=equations,
     )
@@ -365,16 +383,20 @@ def generate_transient_latex_export(
         raise ValueError("No transient data available for the current selection.")
 
     # Auto-scale time to a readable unit (s / ms / µs / ns), matching the GUI.
-    t_scale, t_unit = _time_autoscale(table["time"].to_numpy())
+    # Every run has its own time column (adaptive timesteps) — scale them all.
+    x_cols = sorted(set(series_x.values()))
+    all_x = np.concatenate([table[c].to_numpy() for c in x_cols])
+    t_scale, t_unit = _time_autoscale(all_x)
     if t_scale != 1.0:
-        table["time"] = table["time"] * t_scale
+        for c in x_cols:
+            table[c] = table[c] * t_scale
 
     csv_filename = f"{name}_plot.csv"
     csv_path = os.path.join(out_dir, csv_filename)
     table.to_csv(csv_path, index=False)
     tex_path = _write_overlay_tex(
-        out_dir, name, csv_filename, series_keys,
-        x_col="time", xlabel=f"Time ({t_unit})", ylabel="Signal Value",
+        out_dir, name, csv_filename, series_keys, series_x,
+        xlabel=f"Time ({t_unit})", ylabel="Signal Value",
         title_prefix="Transient Overlay",
     )
     return csv_path, tex_path
@@ -397,7 +419,7 @@ def generate_dc_sweep_latex_export(
             return [("", df[sig])]
         return []
 
-    table, series_keys = _build_xy_table(
+    table, series_keys, series_x = _build_xy_table(
         run_files, signals, x_col="sweep",
         y_columns_for_signal=y_for, equations=equations,
     )
@@ -408,8 +430,8 @@ def generate_dc_sweep_latex_export(
     csv_path = os.path.join(out_dir, csv_filename)
     table.to_csv(csv_path, index=False)
     tex_path = _write_overlay_tex(
-        out_dir, name, csv_filename, series_keys,
-        x_col="sweep", xlabel="Sweep", ylabel="Signal Value",
+        out_dir, name, csv_filename, series_keys, series_x,
+        xlabel="Sweep", ylabel="Signal Value",
         title_prefix="DC Sweep Overlay",
     )
     return csv_path, tex_path
@@ -442,7 +464,7 @@ def generate_bode_latex_export(
             out.append(("phase", df[ph_col]))
         return out
 
-    table, series_keys = _build_xy_table(
+    table, series_keys, series_x = _build_xy_table(
         run_files, signals, x_col="frequency",
         y_columns_for_signal=y_for, equations=equations,
     )
@@ -463,10 +485,11 @@ def generate_bode_latex_export(
         rows: list[str] = []
         for rid, sig, _suffix, col in keys:
             cname = curve_color.get((rid, sig), "black")
+            x_col = series_x.get(col, col)
             rows.append(
                 f"        \\addplot+ [color={cname}, no marks,"
                 f" line width=0.5pt, opacity={alpha:.3f}]"
-                f" table [x=frequency, y={col}] {{\\datatable}};"
+                f" table [x={x_col}, y={col}] {{\\datatable}};"
             )
         return "\n".join(rows) if rows else ""
 

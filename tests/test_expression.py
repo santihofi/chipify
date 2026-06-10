@@ -75,6 +75,19 @@ def test_sanitise_spice_expr(ev: SafeEvaluator) -> None:
     assert safe == "v_out_ - v_in_"
 
 
+def test_sanitise_keeps_helper_calls_with_bare_args(ev: SafeEvaluator) -> None:
+    # Helper calls must remain calls — only SPICE accessors get rewritten.
+    assert ev.sanitise_spice_expr("last(vout)") == "last(vout)"
+    assert ev.sanitise_spice_expr("db(gain)") == "db(gain)"
+    assert ev.sanitise_spice_expr("last(v(out))") == "last(v_out_)"
+    assert ev.sanitise_spice_expr("gain * bandwidth") == "gain * bandwidth"
+
+
+def test_spice_measure_with_bare_name_helper(ev: SafeEvaluator) -> None:
+    results = {"vout": np.array([0.0, 0.5, 1.0])}
+    assert float(ev.evaluate_spice_measure("last(vout)", results)) == pytest.approx(1.0)
+
+
 def test_evaluate_spice_measure(ev: SafeEvaluator) -> None:
     results = {
         "v(out)": np.array([0.0, 0.5, 1.0]),

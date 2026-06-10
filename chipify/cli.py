@@ -12,16 +12,11 @@ from chipify.analyzer import print_summary
 
 def _json_summary(df, stim, yaml_name: str, duration_s: float) -> dict:
     """Return a machine-readable summary dict for the completed run."""
-    import pandas as pd
+    from chipify.gui.services import data_loader as _dl
+    df = _dl.prepare_results(df)
     total = len(df)
-    crashes = int((df['sim_error'] != 'None').sum()) if 'sim_error' in df.columns else 0
+    crashes = int((df['sim_error'] != 'None').sum())
     valid = total - crashes
-
-    tb_pass_cols = [c for c in df.columns if c.endswith('_overall_pass')]
-    df = df.copy()
-    df['global_pass'] = True
-    for col in tb_pass_cols:
-        df['global_pass'] = df['global_pass'] & df[col]
     global_passed = int(df['global_pass'].sum())
     global_yield  = (global_passed / total * 100) if total > 0 else 0.0
 
@@ -50,10 +45,19 @@ def _make_progress_stream_cb():
 def _run_single(yaml_path: str, *, json_out: bool = False,
                 simulator_override: str | None = None,
                 templates_dir: str | None = None,
-                progress_stream: bool = False) -> dict | None:
-    """Run simulation for one yaml file. Returns summary dict or None on failure."""
+                progress_stream: bool = False,
+                out_dir: str | None = None) -> dict | None:
+    """Run simulation for one yaml file. Returns summary dict or None on failure.
+
+    out_dir:
+        Where to write simulation_results.csv and history/. Defaults to the
+        global OUT_DIR; batch mode passes a per-datasheet subdirectory so
+        consecutive runs don't overwrite each other.
+    """
     import time
     print(f"[*] Loading configuration: {os.path.basename(yaml_path)}")
+    out_dir = out_dir or settings.OUT_DIR
+    os.makedirs(out_dir, exist_ok=True)
     stim = util.Stimuli(yaml_path)
     t0 = time.perf_counter()
     progress_cb = _make_progress_stream_cb() if progress_stream else None
@@ -69,31 +73,32 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
         print(f"[-] Simulation returned no data for {yaml_path}")
         return None
 
-    csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
+    csv_out = os.path.join(out_dir, "simulation_results.csv")
     df.to_csv(csv_out, index=False)
     print(f"[+] Results saved to {csv_out}")
+
+    analysis_dirs = df.attrs.get("analysis_dirs", {}) or {}
+    simulator.write_analysis_pointers(analysis_dirs)
 
     # Save history copy + sidecar metadata
     try:
         import datetime
         from chipify import run_meta
-        history_dir = os.path.join(settings.OUT_DIR, "history")
+        history_dir = os.path.join(out_dir, "history")
         os.makedirs(history_dir, exist_ok=True)
         ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         hist = os.path.join(history_dir, f"run_{ts}.csv")
         df.to_csv(hist, index=False)
-        total  = len(df)
-        valid  = int((df.get('sim_error', 'None') == 'None').sum()) if 'sim_error' in df.columns else total
-        import pandas as pd
-        df2 = df.copy()
-        tb_pass_cols = [c for c in df2.columns if c.endswith('_overall_pass')]
-        df2['global_pass'] = True
-        for col in tb_pass_cols:
-            df2['global_pass'] = df2['global_pass'] & df2[col]
+        from chipify.gui.services import data_loader as _dl
+        df2 = _dl.prepare_results(df)
+        total  = len(df2)
+        valid  = int((df2['sim_error'] == 'None').sum())
         gyield = float(df2['global_pass'].sum()) / total * 100 if total else 0
         run_meta.write_meta(hist, yaml_name=os.path.basename(yaml_path),
                             duration_s=duration_s, total_runs=total,
-                            valid_runs=valid, global_yield=round(gyield, 2))
+                            valid_runs=valid, global_yield=round(gyield, 2),
+                            tran_dir=analysis_dirs.get("transient", ""),
+                            analysis_dirs=analysis_dirs)
     except Exception as exc:
         print(f"[!] Could not save history: {exc}")
 
@@ -115,7 +120,12 @@ def main():
         "-c", "--config",
         type=str,
         default="datasheet.yaml",
-        help="Name of .yaml config file.\n(Automatically searched in '../in/').\nDefault: datasheet.yaml"
+        help=(
+            "Name of .yaml config file.\n"
+            "(Searched in the input folder — 'datasheets/' by default,\n"
+            "configurable via the in_dir key in settings.json.)\n"
+            "Default: datasheet.yaml"
+        ),
     )
 
     parser.add_argument(
@@ -140,7 +150,11 @@ def main():
         "--markdown",
         metavar="OUTPUT",
         default=None,
-        help="After simulation, write a Markdown report to OUTPUT path.",
+        help=(
+            "After simulation, write a Markdown report to OUTPUT path.\n"
+            "In --batch mode, OUTPUT is treated as a directory and one\n"
+            "<datasheet>.md report is written per datasheet."
+        ),
     )
 
     parser.add_argument(
@@ -188,13 +202,31 @@ def main():
         all_ok = True
         for yaml_path in yaml_files:
             print(f"\n{'='*60}")
+            # Per-datasheet output subdirectory so consecutive runs don't
+            # overwrite each other's simulation_results.csv.
+            stem = os.path.splitext(os.path.basename(yaml_path))[0]
+            run_out_dir = os.path.join(settings.OUT_DIR, stem)
             summary = _run_single(yaml_path, json_out=args.json,
                                   simulator_override=args.simulator,
                                   templates_dir=args.templates_dir,
-                                  progress_stream=args.progress_stream)
+                                  progress_stream=args.progress_stream,
+                                  out_dir=run_out_dir)
             if summary is None:
                 all_ok = False
                 summary = {"yaml": os.path.basename(yaml_path), "error": "no data"}
+            elif args.markdown:
+                try:
+                    from chipify import md_export
+                    import pandas as pd
+                    md_dir = args.markdown
+                    os.makedirs(md_dir, exist_ok=True)
+                    md_path = os.path.join(md_dir, f"{stem}.md")
+                    df = pd.read_csv(os.path.join(run_out_dir, "simulation_results.csv"))
+                    stim = util.Stimuli(yaml_path)
+                    md_export.generate_md_report(df, stim, yaml_path, md_path)
+                    print(f"[+] Markdown report saved to {md_path}")
+                except Exception as exc:
+                    print(f"[!] Markdown report failed for {stem}: {exc}")
             summaries.append(summary)
 
         print(f"\n{'='*60}")

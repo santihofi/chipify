@@ -7,6 +7,7 @@ Covers:
 - get_params_dict: recognised key variants, falls back to ('params', {})
 - get_tests_dict: recognised key variants, normalises 'values' sub-block
 - gui_repr_param: string wrapping, pass-through for DSL/numeric strings
+- sync_form_to_yaml: round-trip preservation of measure:/typ:/unknown keys
 """
 from __future__ import annotations
 
@@ -15,7 +16,18 @@ from chipify.gui.services.yaml_editor_service import (
     get_params_dict,
     get_tests_dict,
     gui_repr_param,
+    sync_form_to_yaml,
 )
+
+
+class _Var:
+    """Stand-in for a tk StringVar (only .get() is needed)."""
+
+    def __init__(self, value: str = "") -> None:
+        self._value = value
+
+    def get(self) -> str:
+        return self._value
 
 
 # ── get_params_dict ───────────────────────────────────────────────────────────
@@ -107,3 +119,114 @@ def test_gui_repr_param_plain_string_gets_quoted() -> None:
 def test_gui_repr_param_non_string() -> None:
     assert gui_repr_param(1.8) == "1.8"
     assert gui_repr_param([1, 2]) == "[1, 2]"
+
+
+# ── sync_form_to_yaml round-trip ──────────────────────────────────────────────
+
+def _form_state(yaml_data: dict) -> tuple[list, list]:
+    """Build (param_vars, test_vars) mirroring an untouched editor form."""
+    _, params = get_params_dict(yaml_data)
+    _, tests = get_tests_dict(yaml_data)
+    skip = ("values", "measure",
+            "transient_signals", "dc_signals", "ac_signals")
+
+    param_vars = []
+    for k, v in params.items():
+        if isinstance(v, list):
+            val_str = ", ".join(str(x) for x in v)
+        else:
+            val_str = str(v)
+        param_vars.append({"key": _Var(str(k)), "val": _Var(val_str)})
+
+    test_vars = []
+    for tb_name, tb_data in tests.items():
+        tb_data = tb_data if isinstance(tb_data, dict) else {}
+        values = []
+        for v_name, v_data in tb_data.items():
+            if v_name in skip:
+                continue
+            v_data = v_data if isinstance(v_data, dict) else {}
+            vmin = v_data.get("vmin", v_data.get("min", ""))
+            vmax = v_data.get("vmax", v_data.get("max", ""))
+            values.append({
+                "name": _Var(str(v_name)),
+                "vmin": _Var(str(vmin) if vmin is not None else ""),
+                "vmax": _Var(str(vmax) if vmax is not None else ""),
+                "orig_name": str(v_name),
+            })
+        analysis_vars = {
+            key: _Var(", ".join(str(s) for s in tb_data.get(key, []))
+                      if isinstance(tb_data.get(key), list) else "")
+            for key in ("transient_signals", "dc_signals", "ac_signals")
+        }
+        test_vars.append({
+            "tb_name": _Var(str(tb_name)),
+            "values": values,
+            "tran_signals": analysis_vars["transient_signals"],
+            "analysis_signals": analysis_vars,
+        })
+    return param_vars, test_vars
+
+
+def _sample_yaml() -> dict:
+    return {
+        "parameters": {"temp": [27, 85], "corner": ["tt"]},
+        "tests": {
+            "tb_gain": {
+                "ac_signals": ["out"],
+                "gain": {"min": 40.0, "max": 80.0, "typ": 60.0},
+                "measure": {"gbw": "gain * bandwidth"},
+                "custom_key": {"anything": True},
+            },
+        },
+    }
+
+
+def test_sync_preserves_measure_typ_and_unknown_keys() -> None:
+    data = _sample_yaml()
+    pv, tv = _form_state(data)
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
+    tb = out["tests"]["tb_gain"]
+    assert tb["measure"] == {"gbw": "gain * bandwidth"}
+    assert tb["gain"]["typ"] == 60.0
+    assert tb["custom_key"] == {"anything": True}
+    assert tb["ac_signals"] == ["out"]
+    assert tb["gain"]["min"] == 40.0 and tb["gain"]["max"] == 80.0
+
+
+def test_sync_updates_bounds_keeps_typ() -> None:
+    data = _sample_yaml()
+    pv, tv = _form_state(data)
+    tv[0]["values"][0]["vmin"] = _Var("45")     # edit min in the form
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
+    tb = out["tests"]["tb_gain"]
+    assert tb["gain"]["min"] == 45.0
+    assert tb["gain"]["typ"] == 60.0            # untouched key survives
+
+
+def test_sync_rename_measurement_carries_spec() -> None:
+    data = _sample_yaml()
+    pv, tv = _form_state(data)
+    tv[0]["values"][0]["name"] = _Var("gain_db")
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
+    tb = out["tests"]["tb_gain"]
+    assert "gain" not in tb
+    assert tb["gain_db"]["typ"] == 60.0
+
+
+def test_sync_clearing_bound_removes_it() -> None:
+    data = _sample_yaml()
+    pv, tv = _form_state(data)
+    tv[0]["values"][0]["vmax"] = _Var("")
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
+    tb = out["tests"]["tb_gain"]
+    assert "max" not in tb["gain"]
+    assert tb["gain"]["min"] == 40.0
+
+
+def test_sync_clearing_signals_removes_key() -> None:
+    data = _sample_yaml()
+    pv, tv = _form_state(data)
+    tv[0]["analysis_signals"]["ac_signals"] = _Var("")
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
+    assert "ac_signals" not in out["tests"]["tb_gain"]

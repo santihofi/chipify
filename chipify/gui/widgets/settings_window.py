@@ -47,7 +47,10 @@ class SettingsWindow(ctk.CTkToplevel):
             simulator_engine = "ngspice"
         if process_mode not in ["auto", "forkserver", "spawn"]:
             process_mode = "auto"
-        if chunk_size_mode not in ["auto", "1", "2", "4", "8", "16", "32"]:
+        # Must accept every value the chunk-size menu offers, otherwise a
+        # saved 64/128/256 silently resets to "auto" on the next dialog open.
+        if chunk_size_mode not in ["auto", "1", "2", "4", "8", "16", "32",
+                                   "64", "128", "256"]:
             chunk_size_mode = "auto"
         if vacask_src not in ["xschem", "ng2vc"]:
             vacask_src = "xschem"

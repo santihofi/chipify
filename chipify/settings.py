@@ -13,11 +13,16 @@ Configurable keys (in ``settings.json``):
     tb_dir    – testbench files     (default: ``tb/``)
 
 Relative paths are resolved against the project root; absolute paths are used
-as-is. ``FAST_TMP`` (volatile RAM scratch for Linux/Docker) is not configurable.
+as-is. ``FAST_TMP`` (volatile scratch, tmpfs-backed on typical Linux/Docker
+setups) is not configurable; it is namespaced per project so concurrent
+chipify instances on different projects do not share staged files or the
+abort flag.
 """
+import hashlib
 import json
 import logging
 import os
+import tempfile
 from typing import Any
 
 log = logging.getLogger("chipify.settings")
@@ -86,6 +91,12 @@ OUT_DIR = _resolve_dir("out_dir", _overrides)
 WORK_DIR = _resolve_dir("work_dir", _overrides)
 TB_DIR = _resolve_dir("tb_dir", _overrides)
 
-# Volatile RAM scratch space (kept absolute for Linux/Docker); not configurable.
-FAST_TMP = "/tmp/sim_work/"
+# Volatile scratch space; not configurable. One directory per project (hash of
+# PROJECT_ROOT) under the system temp dir, so that:
+#   - the abort flag of one chipify instance cannot stop another project's run,
+#   - staged .lib/.mod/.inc files from different projects never collide,
+#   - Windows gets a real temp location instead of a literal "\tmp" folder.
+# On typical Linux/Docker setups the system temp dir is tmpfs (RAM-backed).
+_project_tag = hashlib.md5(PROJECT_ROOT.encode("utf-8")).hexdigest()[:10]
+FAST_TMP = os.path.join(tempfile.gettempdir(), f"chipify_{_project_tag}")
 os.makedirs(FAST_TMP, exist_ok=True)

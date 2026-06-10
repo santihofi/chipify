@@ -58,7 +58,9 @@ class Test:
     def __init__(self, tb_path: str, value_lst: list["Value"]) -> None:
         self.tb_path: str = tb_path
         self.value_lst: list[Value] = value_lst
-        self.template: str = ""
+        # Rendered-ready Jinja2 netlist template, filled in by
+        # simulator.generate_templates() before the sweep starts.
+        self.template_str: str = ""
         # One Analysis instance per kind captured from this testbench.
         # Populated by schema.validate_datasheet() from transient_signals /
         # dc_signals / ac_signals YAML keys.

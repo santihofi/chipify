@@ -50,7 +50,7 @@ from chipify.gui.theme import BACKGROUND_COLOR as background_color, PANEL_COLOR 
 # SettingsWindow is imported from chipify.gui.widgets.settings_window above.
 # QuotedString is imported from chipify.gui.widgets.yaml_dumper above.
 
-class SimifyGUI(ctk.CTk):
+class ChipifyGUI(ctk.CTk):
     def __init__(self):
         super().__init__(fg_color=background_color)
         self.title("Chipify EDA Dashboard")
@@ -458,10 +458,17 @@ class SimifyGUI(ctk.CTk):
                 v_min = getattr(val_obj, "vmin", getattr(val_obj, "min", None))
                 v_max = getattr(val_obj, "vmax", getattr(val_obj, "max", None))
 
+                # Both bounds can be violated across different runs — show
+                # the side with the larger absolute excess.
+                candidates = []
                 if v_min is not None and min_fail < v_min:
-                    worst_val, worst_idx, violation = min_fail, failed_rows[p_name].idxmin(), f"< {fmt(v_min)}"
-                elif v_max is not None and max_fail > v_max:
-                    worst_val, worst_idx, violation = max_fail, failed_rows[p_name].idxmax(), f"> {fmt(v_max)}"
+                    candidates.append((v_min - min_fail, min_fail,
+                                       failed_rows[p_name].idxmin(), f"< {fmt(v_min)}"))
+                if v_max is not None and max_fail > v_max:
+                    candidates.append((max_fail - v_max, max_fail,
+                                       failed_rows[p_name].idxmax(), f"> {fmt(v_max)}"))
+                if candidates:
+                    _, worst_val, worst_idx, violation = max(candidates, key=lambda c: c[0])
 
                 if worst_idx is not None:
                     worst_row = failed_rows.loc[worst_idx]
@@ -868,39 +875,18 @@ class SimifyGUI(ctk.CTk):
 
     def _apply_custom_equations(self, equations: list[dict] | None = None) -> list[str]:
         """
-        Evaluate each equation via SafeEvaluator and append the result as a new
-        column to self.current_df.  Returns the list of successfully added column names.
+        Apply custom equations (plus any installed ExpressionPlugins) to
+        self.current_df via the equation service.
+        Returns the list of successfully added column names.
         """
         if self.current_df is None:
             return []
         if equations is None:
             equations = app_config.load_config().get("custom_equations", [])
 
-        from chipify.expression import default_evaluator, ExpressionError
-
-        derived = []
-        log_lines = []
-
-        for eq in equations:
-            name = eq.get("name", "").strip()
-            expr = eq.get("expr", "").strip()
-            if not name or not expr:
-                continue
-            try:
-                self.current_df = default_evaluator.evaluate_dataframe_column(
-                    self.current_df, name, expr
-                )
-                n_valid = int((self.current_df['sim_error'] == 'None').sum())
-                log_lines.append(f"[✓] {name} = {expr}  →  ok  ({n_valid} rows)")
-                log.debug("Applied equation: %s = %s", name, expr)
-                derived.append(name)
-            except (ExpressionError, ValueError) as exc:
-                log_lines.append(f"[✗] {name} = {expr}  →  {exc}")
-                log.warning("Equation '%s' failed: %s", name, exc)
-            except Exception as exc:
-                log_lines.append(f"[✗] {name} = {expr}  →  {exc}")
-                log.warning("Equation '%s' unexpected error: %s", name, exc)
-
+        self.current_df, derived, log_lines = _eq_svc.apply_scalar_equations(
+            self.current_df, equations
+        )
         if log_lines:
             self._eq_log_write("\n".join(log_lines) + "\n")
         return derived
@@ -961,33 +947,7 @@ class SimifyGUI(ctk.CTk):
     def _load_tran_df(self, tran_dir: str, run_ids: list,
                       equations: list | None = None) -> "pd.DataFrame":
         """Load selected waveform CSVs into a combined (run_id, time, …) DataFrame."""
-        if not tran_dir or not run_ids:
-            return pd.DataFrame()
-        from chipify.expression import default_evaluator
-        run_id_set = set(run_ids)
-        chunks = []
-        for fname in glob.glob(os.path.join(tran_dir, "run_*.csv")):
-            rid = os.path.basename(fname)[4:].split("__", 1)[0]
-            if rid not in run_id_set:
-                continue
-            try:
-                df_chunk = pd.read_csv(fname)
-                if equations:
-                    for eq in equations:
-                        eq_n = eq.get("name", "").strip()
-                        eq_e = eq.get("expr", "").strip()
-                        if eq_n and eq_e:
-                            try:
-                                df_chunk = default_evaluator.evaluate_dataframe_column(
-                                    df_chunk, eq_n, eq_e
-                                )
-                            except Exception:
-                                pass
-                df_chunk.insert(0, "run_id", rid)
-                chunks.append(df_chunk)
-            except Exception:
-                pass
-        return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+        return _tl.load_analysis_df(tran_dir, run_ids, equations)
 
     def open_multiplot(self):
         from chipify.multiplot_window import MultiPlotWindow
@@ -1069,9 +1029,22 @@ class SimifyGUI(ctk.CTk):
             self.editor_scroll.grid_remove()
             self.raw_editor.grid(row=1, column=0, sticky="nsew")
             self.sync_ui_to_state()
-            raw_text = yaml.dump(self.current_yaml_data, default_flow_style=False, sort_keys=False)
-            self.raw_editor.delete("1.0", "end")
-            self.raw_editor.insert("1.0", raw_text)
+            # Only regenerate the raw text when the form actually changed the
+            # data — a plain view switch keeps the file's comments intact.
+            if not self._raw_editor_matches_state():
+                raw_text = yaml.dump(self.current_yaml_data, Dumper=_yaml_dumper.ChipifyDumper,
+                                     default_flow_style=False, sort_keys=False)
+                self.raw_editor.delete("1.0", "end")
+                self.raw_editor.insert("1.0", raw_text)
+
+    def _raw_editor_matches_state(self) -> bool:
+        """True if the Raw editor's text parses to the same data as the form state."""
+        try:
+            current_raw = self.raw_editor.get("1.0", "end-1c")
+            return bool(current_raw.strip()) and \
+                yaml.safe_load(current_raw) == self.current_yaml_data
+        except Exception:
+            return False
 
     def get_params_dict(self):
         return _ye_svc.get_params_dict(self.current_yaml_data)
@@ -1088,7 +1061,9 @@ class SimifyGUI(ctk.CTk):
             self.current_yaml_data = yaml.safe_load(raw_text) or {}
             self.param_key, _ = self.get_params_dict()
             self.test_key, _ = self.get_tests_dict()
-            self.raw_yaml_text = yaml.dump(self.current_yaml_data, default_flow_style=False, sort_keys=False)
+            # Keep the file's original text (comments included) — the Raw view
+            # shows and saves it verbatim as long as the data is unchanged.
+            self.raw_yaml_text = raw_text
         except Exception as e:
             messagebox.showerror("Load Error", f"Error loading {selected_yaml}:\n{e}")
             return
@@ -1162,12 +1137,15 @@ class SimifyGUI(ctk.CTk):
             ctk.CTkLabel(val_frame, text="Min Spec", text_color="gray").grid(row=0, column=1, padx=5, pady=2, sticky="w")
             ctk.CTkLabel(val_frame, text="Max Spec", text_color="gray").grid(row=0, column=2, padx=5, pady=2, sticky="w")
             
-            # Keys handled by their own rows / not represented as boundary specs.
-            _SIGNAL_KEYS = ('transient_signals', 'dc_signals', 'ac_signals')
+            # Keys handled by their own rows / not represented as boundary
+            # specs. 'measure' holds expression strings, not bounds — it is
+            # preserved untouched by sync_form_to_yaml.
+            _SKIP_KEYS = ('values', 'measure',
+                          'transient_signals', 'dc_signals', 'ac_signals')
 
             test_val_vars = []
             for v_idx, (v_name, v_data) in enumerate(tb_data.items()):
-                if v_name == 'values' or v_name in _SIGNAL_KEYS:
+                if v_name in _SKIP_KEYS:
                     continue
                 if not isinstance(v_data, dict): v_data = {}
                 v_name_var = ctk.StringVar(value=str(v_name))
@@ -1183,7 +1161,10 @@ class SimifyGUI(ctk.CTk):
                 ctk.CTkEntry(val_frame, textvariable=v_max, width=80).grid(row=1+v_idx, column=2, padx=5, pady=2)
                 ctk.CTkButton(val_frame, text="X", width=24, height=24, fg_color="transparent", border_width=1, command=lambda t=t_idx, v=v_name: self.action_del_value(t, v)).grid(row=1+v_idx, column=3, padx=5, pady=2)
 
-                test_val_vars.append({'name': v_name_var, 'vmin': v_min, 'vmax': v_max})
+                # orig_name lets sync_form_to_yaml find the original spec dict
+                # after a rename, so typ:/extra keys survive the round-trip.
+                test_val_vars.append({'name': v_name_var, 'vmin': v_min,
+                                      'vmax': v_max, 'orig_name': str(v_name)})
 
             # One row per analysis kind. The YAML keys are 'transient_signals',
             # 'dc_signals', 'ac_signals' — matching schema.py / analyses.py.
@@ -1282,9 +1263,15 @@ class SimifyGUI(ctk.CTk):
         try:
             if self.editor_mode.get() == "Form View":
                 self.sync_ui_to_state()
-                text_to_save = yaml.dump(self.current_yaml_data, default_flow_style=False, sort_keys=False)
-                self.raw_editor.delete("1.0", "end")
-                self.raw_editor.insert("1.0", text_to_save)
+                if self._raw_editor_matches_state():
+                    # Form didn't change the data — save the existing text so
+                    # the file's comments and formatting survive.
+                    text_to_save = self.raw_editor.get("1.0", "end-1c")
+                else:
+                    text_to_save = yaml.dump(self.current_yaml_data, Dumper=_yaml_dumper.ChipifyDumper,
+                                             default_flow_style=False, sort_keys=False)
+                    self.raw_editor.delete("1.0", "end")
+                    self.raw_editor.insert("1.0", text_to_save)
             else:
                 text_to_save = self.raw_editor.get("1.0", "end-1c")
                 yaml.safe_load(text_to_save) 
@@ -1381,9 +1368,9 @@ class SimifyGUI(ctk.CTk):
         out_dir = os.path.join(settings.OUT_DIR, "debug")
         count = debug_export.export_fails(self.current_df, self.current_stim, out_dir)
         if count > 0:
-            messagebox.showinfo("Export Debug", f"Erfolgreich {count} fehlgeschlagene Runs exportiert nach:\n{out_dir}")
+            messagebox.showinfo("Export Debug", f"Exported {count} failing run(s) to:\n{out_dir}")
         else:
-            messagebox.showinfo("Export Debug", "Keine fehlgeschlagenen Runs zum Exportieren vorhanden (100% Yield!).")
+            messagebox.showinfo("Export Debug", "No failing runs to export (100% yield!).")
 
     # ── Tree context menu ────────────────────────────────────────────────────
 
@@ -1480,8 +1467,6 @@ class SimifyGUI(ctk.CTk):
             lbl.pack(side=tk.LEFT, padx=(8, 0), pady=2)
         ctk.CTkLabel(self.kpi_frame, text="", width=6).pack(side=tk.LEFT)  # right margin
 
-        # keep legacy alias so existing call sites that still use lbl_hist_metrics don't break
-        self.lbl_hist_metrics = self.lbl_kpi_cpk
 
         ctk.CTkLabel(row2, text="Compare (Ref):", text_color="#f1c40f").pack(side=tk.LEFT, padx=(0, 5))
         self.compare_var = ctk.StringVar(value="None")
@@ -1535,9 +1520,9 @@ class SimifyGUI(ctk.CTk):
         
         try:
             export_latex.generate_latex_export(param, data, dist_type, b, out_dir)
-            messagebox.showinfo("LaTeX Export", f"Erfolgreich exportiert nach:\n{out_dir}")
+            messagebox.showinfo("LaTeX Export", f"Exported successfully to:\n{out_dir}")
         except Exception as e:
-            messagebox.showerror("Export Error", f"LaTeX Export fehlgeschlagen:\n{e}")
+            messagebox.showerror("Export Error", f"LaTeX export failed:\n{e}")
 
     def on_group_by_change(self, choice):
         if choice != "None": self.compare_dropdown.configure(state="disabled")
@@ -2016,89 +2001,21 @@ class SimifyGUI(ctk.CTk):
         Map the currently loaded run → the per-run CSV directory for the
         active analysis kind (transient / dc / ac).
 
-        Priority for the active kind:
-        1. df.attrs["analysis_dirs"][kind]      — freshly simulated run
-        2. df.attrs["tran_dir"]                 — legacy alias (transient only)
-        3. run_meta sidecar (analysis_dirs)
-        4. Newest out/analysis_data/<kind>/*/
-        5. (transient only) newest legacy out/tran_data/*/
+        Delegates to transient_loader.resolve_analysis_dir, passing the
+        history run's meta sidecar when one is selected.
         """
         kind = self._current_tran_kind()
+        df = self.app_state.active_df
+        if df is None:
+            df = pd.DataFrame()
 
-        # 1. In-memory analysis_dirs attr
-        if self.app_state.active_df is not None:
-            attrs = self.app_state.active_df.attrs
-            adirs = attrs.get("analysis_dirs", {}) if isinstance(attrs, dict) else {}
-            d = adirs.get(kind, "") if isinstance(adirs, dict) else ""
-            if d and os.path.isdir(d):
-                return d
-            # 2. Legacy single-kind attr
-            if kind == "transient":
-                d = attrs.get("tran_dir", "")
-                if d and os.path.isdir(d):
-                    return d
-
-        # 3a. Pointer file under analysis_data/<kind>/
-        pointer = os.path.join(settings.OUT_DIR, "analysis_data", kind, ".latest")
-        if os.path.exists(pointer):
-            try:
-                with open(pointer, "r", encoding="utf-8") as _f:
-                    d = _f.read().strip()
-                if d and os.path.isdir(d):
-                    return d
-            except Exception:
-                pass
-
-        # 3b. Legacy pointer for transient.
-        if kind == "transient":
-            legacy_ptr = os.path.join(settings.OUT_DIR, "tran_data", ".latest")
-            if os.path.exists(legacy_ptr):
-                try:
-                    with open(legacy_ptr, "r", encoding="utf-8") as _f:
-                        d = _f.read().strip()
-                    if d and os.path.isdir(d):
-                        return d
-                except Exception:
-                    pass
-
-        # 4. History meta sidecar
+        meta = None
         selection = self.history_dropdown.get() if hasattr(self, "history_dropdown") else ""
         if selection and selection not in ("No runs found", "Latest (simulation_results)"):
-            csv_path = os.path.join(settings.OUT_DIR, "history", selection)
             from chipify import run_meta as _rm
-            meta = _rm.read_meta(csv_path)
-            meta_adirs = meta.get("analysis_dirs", {}) if isinstance(meta, dict) else {}
-            d = meta_adirs.get(kind, "") if isinstance(meta_adirs, dict) else ""
-            if d and os.path.isdir(d):
-                return d
-            if kind == "transient":
-                d = meta.get("tran_dir", "") if isinstance(meta, dict) else ""
-                if d and os.path.isdir(d):
-                    return d
+            meta = _rm.read_meta(os.path.join(settings.OUT_DIR, "history", selection))
 
-        # 5. Newest sub-directory under analysis_data/<kind>/
-        base = os.path.join(settings.OUT_DIR, "analysis_data", kind)
-        if os.path.isdir(base):
-            subdirs = sorted(
-                (d for d in glob.glob(os.path.join(base, "*")) if os.path.isdir(d)),
-                reverse=True,
-            )
-            if subdirs:
-                return subdirs[0]
-
-        # 6. Legacy transient location.
-        if kind == "transient":
-            tran_base = os.path.join(settings.OUT_DIR, "tran_data")
-            if os.path.isdir(tran_base):
-                subdirs = sorted(
-                    (d for d in glob.glob(os.path.join(tran_base, "*"))
-                     if os.path.isdir(d)),
-                    reverse=True,
-                )
-                if subdirs:
-                    return subdirs[0]
-
-        return ""
+        return _tl.resolve_analysis_dir(df, settings.OUT_DIR, kind, meta=meta)
 
     def _refresh_transient_signal_list(self):
         """Re-populate the signals listbox from the active analysis kind +
@@ -2489,12 +2406,16 @@ class SimifyGUI(ctk.CTk):
             self.multiplot_window = None
 
 
+# Backward-compatibility alias (pre-rename class name).
+SimifyGUI = ChipifyGUI
+
+
 def main():
     app_config.setup_logging()
-    log.info("Silicrunch GUI starting up.")
-    app = SimifyGUI()
+    log.info("Chipify GUI starting up.")
+    app = ChipifyGUI()
     app.mainloop()
-    log.info("Silicrunch GUI shut down.")
+    log.info("Chipify GUI shut down.")
 
 if __name__ == "__main__":
     main()

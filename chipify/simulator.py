@@ -13,11 +13,6 @@ import datetime
 from multiprocessing import get_context
 from abc import ABC, abstractmethod
 
-try:
-    from multiprocessing.pool import WorkerLostError
-except ImportError:
-    WorkerLostError = Exception  # Python < 3.12.2 compat
-
 import pandas as pd
 from tqdm import tqdm
 from jinja2 import Template, StrictUndefined
@@ -69,20 +64,37 @@ def abort_simulation() -> None:
 
 # ── Init helpers ──────────────────────────────────────────────────────────────
 
+def _staged_copy_is_stale(src: str, dest: str) -> bool:
+    """True if *dest* is missing or differs from *src* (size or older mtime).
+
+    ``shutil.copy2`` preserves mtime, so an up-to-date staged copy has the
+    same size and an mtime within filesystem resolution of the source.
+    """
+    try:
+        s = os.stat(src)
+        d = os.stat(dest)
+    except OSError:
+        return True
+    return s.st_size != d.st_size or s.st_mtime > d.st_mtime + 1.0
+
+
 def stage_files_to_ram(engine=None) -> None:
     """Stage library/model files into FAST_TMP.
 
-    Always copies the project's *.lib/*.mod/*.inc from WORK_DIR. If `engine`
-    is provided and exposes ``stage_extra_files()``, that hook runs too — used
-    by VacaskSimulator to mirror OSDI compact-model objects so that the
-    netlist's ``load "*.osdi"`` directives resolve relative to FAST_TMP.
+    Always copies the project's *.lib/*.mod/*.inc from WORK_DIR. Files are
+    re-copied whenever the source changed — FAST_TMP isn't cleaned between
+    runs, so a skip-if-exists policy would let a stale cached copy mask
+    edits to model files. If `engine` is provided and exposes
+    ``stage_extra_files()``, that hook runs too — used by VacaskSimulator to
+    mirror OSDI compact-model objects so that the netlist's
+    ``load "*.osdi"`` directives resolve relative to FAST_TMP.
     """
     log.info("Staging library files to RAM disk: %s", settings.FAST_TMP)
     for pattern in ("*.lib", "*.mod", "*.inc"):
         for file_path in glob.glob(os.path.join(settings.WORK_DIR, pattern)):
             filename = os.path.basename(file_path)
             dest_path = os.path.join(settings.FAST_TMP, filename)
-            if not os.path.exists(dest_path):
+            if _staged_copy_is_stale(file_path, dest_path):
                 try:
                     shutil.copy2(file_path, dest_path)
                     log.debug("Staged: %s", filename)
@@ -127,6 +139,19 @@ def _snapshot_dir(path: str) -> set:
         return set(os.listdir(path))
     except OSError:
         return set()
+
+
+def _safe_rel(path: str) -> str:
+    """``os.path.relpath`` that never raises.
+
+    On Windows, relpath raises ValueError when *path* and the cwd are on
+    different drives (e.g. temp on C:, project on D:); fall back to the
+    absolute path rather than turning a log statement into a failure.
+    """
+    try:
+        return os.path.relpath(path)
+    except ValueError:
+        return path
 
 
 def run_xschem(
@@ -259,9 +284,9 @@ def run_xschem(
                        else (netlist_files[0] if netlist_files else ""))
 
         log.info("xschem post-run scan: recent_files=%s netlist_files=%s chosen=%s",
-                 [os.path.relpath(p) for p in recent_files],
-                 [os.path.relpath(p) for p in netlist_files],
-                 os.path.relpath(chosen_path) if chosen_path else "<none>")
+                 [_safe_rel(p) for p in recent_files],
+                 [_safe_rel(p) for p in netlist_files],
+                 _safe_rel(chosen_path) if chosen_path else "<none>")
 
         if not chosen_path:
             tail = _read_log_tail(log_path)
@@ -278,7 +303,7 @@ def run_xschem(
         if produced != out_file:
             shutil.move(produced, out_file)
             log.info("Moved xschem output %s -> %s",
-                     os.path.relpath(produced), out_file)
+                     _safe_rel(produced), out_file)
 
         if process.returncode != 0:
             log.warning(
@@ -363,7 +388,10 @@ class NgspiceSimulator(BaseSimulator):
         tb_path = _safe_tb_path(test.tb_path)
         run_xschem(tb_path)
 
-        spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
+        # run_xschem names its output after the schematic's basename, so a
+        # nested tb_path like "sub/tb_x" still yields FAST_TMP/tb_x.spice.
+        stem = os.path.splitext(os.path.basename(tb_path))[0]
+        spice_file = os.path.join(settings.FAST_TMP, stem + ".spice")
         with open(spice_file, "r") as f:
             netlist = f.read()
             if ".control" in netlist:
@@ -592,6 +620,24 @@ def _sanitise_key(name: str) -> str:
     return _RE_SANITISE.sub("_", name)
 
 
+def _parse_raw_token(tok: str):
+    """Parse one ASCII raw-file value token.
+
+    Real values are plain floats; complex values are written as ``re,im``.
+    Returns float, complex, or None if the token is not numeric.
+    """
+    if "," in tok:
+        re_s, _, im_s = tok.partition(",")
+        try:
+            return complex(float(re_s), float(im_s))
+        except ValueError:
+            return None
+    try:
+        return float(tok)
+    except ValueError:
+        return None
+
+
 def _parse_ascii_raw(raw_file: str) -> dict:
     """Parse a SPICE-format .raw file (binary or ASCII).
 
@@ -662,21 +708,51 @@ def _parse_ascii_raw(raw_file: str) -> dict:
         if section == "ascii_values":
             if n_vars <= 0:
                 return {}
-            rows: dict[str, list[float]] = {nm: [] for nm in var_names}
-            pending: list[float] = []
+            values: list = []
             for raw_line in fh:
                 ls = raw_line.decode("utf-8", errors="replace").strip()
                 for tok in ls.split():
-                    try:
-                        pending.append(float(tok))
-                    except ValueError:
-                        pass
-                while len(pending) >= n_vars:
-                    row_vals = pending[:n_vars]
-                    pending = pending[n_vars:]
-                    for i, nm in enumerate(var_names):
-                        if i < len(row_vals):
-                            rows[nm].append(row_vals[i])
+                    num = _parse_raw_token(tok)
+                    if num is not None:
+                        values.append(num)
+
+            # The SPICE ASCII format prefixes every point with its running
+            # index ("0\t<v0>\n\t<v1>…"), giving n_vars+1 tokens per point.
+            # Some writers omit the index; detect which layout we have, using
+            # the declared point count when available and a 0,1,2,… index
+            # heuristic otherwise.
+            def _looks_indexed(stride: int) -> bool:
+                idx_toks = values[::stride]
+                return all(
+                    isinstance(v, float) and v.is_integer() and int(v) == i
+                    for i, v in enumerate(idx_toks)
+                )
+
+            n_tok = len(values)
+            stride_idx = n_vars + 1
+            if n_points > 0 and n_tok == n_points * stride_idx:
+                indexed = True
+            elif n_points > 0 and n_tok == n_points * n_vars:
+                indexed = False
+            elif n_tok % stride_idx == 0 and _looks_indexed(stride_idx):
+                indexed = True
+            elif n_tok % n_vars == 0:
+                indexed = False
+            else:
+                log.warning(
+                    "ASCII raw %s: %d value tokens do not align with %d variables.",
+                    raw_file, n_tok, n_vars,
+                )
+                return {}
+
+            stride = stride_idx if indexed else n_vars
+            offset = 1 if indexed else 0
+            rows: dict[str, list] = {nm: [] for nm in var_names}
+            for start in range(0, n_tok - stride + 1, stride):
+                row_vals = values[start + offset: start + stride]
+                for i, nm in enumerate(var_names):
+                    if i < len(row_vals):
+                        rows[nm].append(row_vals[i])
             return {k: np.array(v) for k, v in rows.items() if v}
 
     return {}
@@ -932,17 +1008,20 @@ class VacaskSimulator(BaseSimulator):
         cfg = app_config.load_config()
         source = cfg.get("vacask_netlist_source", "xschem")
         tb_path = _safe_tb_path(test.tb_path)
+        # run_xschem names its output after the schematic's basename (nested
+        # tb_path like "sub/tb_x" yields FAST_TMP/tb_x.<ext>).
+        stem = os.path.splitext(os.path.basename(tb_path))[0]
 
         if source == "ng2vc":
             # Generate ngspice netlist via Xschem, then convert to VACASK syntax
             run_xschem(tb_path)
-            spice_file = os.path.join(settings.FAST_TMP, test.tb_path + ".spice")
-            sim_file = os.path.join(settings.FAST_TMP, test.tb_path + ".sim")
+            spice_file = os.path.join(settings.FAST_TMP, stem + ".spice")
+            sim_file = os.path.join(settings.FAST_TMP, stem + ".sim")
             _run_ng2vc(spice_file, sim_file)
         else:
             # User picked xschem: produce the Spectre netlist directly via xschem.
             # No silent fallback — switch the setting to "ng2vc" to opt into that path.
-            sim_file = os.path.join(settings.FAST_TMP, test.tb_path + ".sim")
+            sim_file = os.path.join(settings.FAST_TMP, stem + ".sim")
             run_xschem(tb_path, netlist_mode="spectre")
 
         with open(sim_file, "r", encoding="utf-8") as fh:
@@ -1104,6 +1183,38 @@ class VacaskSimulator(BaseSimulator):
             return ""
 
 
+def _eval_scalar_measures(test, sample: dict, params: dict) -> None:
+    """Evaluate datasheet ``measure:`` expressions against this run's scalars.
+
+    Runs after MY_DATA parsing so a measure can reference the test's measured
+    values (e.g. ``gbw: gain * bandwidth``) as well as numeric sweep
+    parameters. This makes ``measure:`` work on the ngspice engine; on the
+    VACASK raw path, names already computed from waveforms are left untouched
+    (``name in sample`` check). A failed expression records NaN plus a
+    one-line note under ``<tb>__measure_error`` — worker logging doesn't
+    reach chipify.log (see _persist_analyses), so the row is the channel.
+    """
+    measures = getattr(test, "measure", {}) or {}
+    if not measures:
+        return
+    from chipify.expression import default_evaluator
+
+    namespace = {
+        k: v for k, v in {**params, **sample}.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+    for name, expr in measures.items():
+        if name in sample:
+            continue
+        try:
+            val = default_evaluator.evaluate_spice_measure(expr, namespace)
+            sample[name] = float(val)
+        except Exception as exc:
+            sample[name] = float('nan')
+            note = f"measure '{name}' = {expr!r} failed: {exc}"
+            sample[f"{test.tb_path}__measure_error"] = " ".join(str(note).split())[:200]
+
+
 def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
                                       run_id: str = "",
                                       analysis_dirs: dict | None = None):
@@ -1156,6 +1267,7 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
         # Transient-only testbench: no scalar measurements defined → skip MY_DATA.
         if not test.value_lst:
             sample[f"{test.tb_path}_overall_pass"] = True
+            _eval_scalar_measures(test, sample, params)
             continue
 
         if sim_output and sim_output.startswith("MY_DATA:"):
@@ -1177,20 +1289,27 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
                     sample['sim_error'] = f"{test.tb_path}: INVALID_OUTPUT({val_str})"
                     all_passed = False
 
+            # Fewer values than declared measurements is an error, not a
+            # silent gap — mark the missing ones failed so the row can't
+            # masquerade as a clean run with absent columns.
+            n_expected = len(test.value_lst)
+            if len(values) < n_expected:
+                sample['sim_error'] = (
+                    f"{test.tb_path}: INVALID_OUTPUT("
+                    f"expected {n_expected} values, got {len(values)})"
+                )
+                all_passed = False
+                for val_obj in test.value_lst[len(values):]:
+                    sample[val_obj.name] = float('nan')
+                    sample[f"{val_obj.name}_pass"] = False
+
             sample[f"{test.tb_path}_overall_pass"] = all_passed
+            _eval_scalar_measures(test, sample, params)
         else:
             sample['sim_error'] = f"{test.tb_path}: NO_MY_DATA_FOUND"
             sample[f"{test.tb_path}_overall_pass"] = False
 
     return sample
-
-
-def simulate_single_case(args):
-    params, tests, simulator_name, run_id, analysis_dirs = args
-    engine = get_simulator_engine(simulator_name)
-    return _simulate_single_case_with_engine(
-        params, tests, engine, run_id, analysis_dirs,
-    )
 
 
 def simulate_case_batch(batch_args):
@@ -1268,6 +1387,28 @@ def _assemble_result_df(rows: list, analysis_dirs: dict) -> pd.DataFrame:
         if analysis_dirs.get("transient"):
             df.attrs["tran_dir"] = analysis_dirs["transient"]
     return df
+
+
+def write_analysis_pointers(analysis_dirs: dict) -> None:
+    """Record each kind's latest data directory in ``analysis_data/<kind>/.latest``.
+
+    The GUI's analysis-dir resolution reads these pointer files after a
+    restart; the legacy ``tran_data/.latest`` pointer is also kept for
+    transient so older consumers keep working.
+    """
+    for kind, d in (analysis_dirs or {}).items():
+        if not d:
+            continue
+        targets = [os.path.join(settings.OUT_DIR, "analysis_data", kind, ".latest")]
+        if kind == "transient":
+            targets.append(os.path.join(settings.OUT_DIR, "tran_data", ".latest"))
+        for ptr in targets:
+            try:
+                os.makedirs(os.path.dirname(ptr), exist_ok=True)
+                with open(ptr, "w", encoding="utf-8") as fh:
+                    fh.write(d)
+            except Exception as exc:
+                log.warning("Could not write %s pointer %s: %s", kind, ptr, exc)
 
 
 def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
@@ -1405,11 +1546,11 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
                                         )
                                         chunk_callback(chunk_df)
                                     except Exception:
-                                        pass
+                                        log.debug("chunk_callback failed.", exc_info=True)
                                     chunk_row_buffer = []
-                        except (WorkerLostError, Exception) as exc:
-                            if isinstance(exc, InterruptedError):
-                                raise
+                        except InterruptedError:
+                            raise
+                        except Exception as exc:  # incl. WorkerLostError
                             log.error("Worker error (result skipped): %s", exc)
                             completed += chunk_size
                         completed = min(total_tasks, completed)
@@ -1429,7 +1570,7 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
                 chunk_df = _assemble_result_df(chunk_row_buffer, analysis_dirs)
                 chunk_callback(chunk_df)
             except Exception:
-                pass
+                log.debug("chunk_callback failed on final flush.", exc_info=True)
             chunk_row_buffer = []
 
         pool.close()

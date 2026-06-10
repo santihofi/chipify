@@ -73,6 +73,24 @@ def get_tests_dict(yaml_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return "tests", {}
 
 
+def _set_bound(v_data: dict[str, Any], primary: str, alias: str, raw: str) -> None:
+    """Update one min/max bound on a measurement spec dict.
+
+    Writes to whichever key the spec already uses (``min`` or the legacy
+    ``vmin`` alias); an empty form field removes the bound. All other keys
+    on the spec (``typ`` etc.) are left untouched.
+    """
+    target = alias if (alias in v_data and primary not in v_data) else primary
+    if raw and raw.lower() != "none":
+        try:
+            v_data[target] = float(raw)
+        except ValueError:
+            v_data[target] = raw
+    else:
+        v_data.pop(primary, None)
+        v_data.pop(alias, None)
+
+
 def sync_form_to_yaml(
     yaml_data: dict[str, Any],
     param_key: str,
@@ -84,6 +102,11 @@ def sync_form_to_yaml(
     """
     Write the form-variable state back into *yaml_data*.
 
+    The tests section is merged, not rebuilt: keys the form does not edit
+    (``measure:`` blocks, ``typ:`` values, anything user-defined) are
+    preserved. Only the keys the form actually owns — testbench names,
+    min/max bounds, and the three ``*_signals`` lists — are rewritten.
+
     Parameters
     ----------
     yaml_data:
@@ -93,7 +116,11 @@ def sync_form_to_yaml(
     param_vars:
         List of ``{"key": StringVar, "val": StringVar}`` dicts.
     test_vars:
-        List of ``{"tb_name": StringVar, "values": [...], "tran_signals": StringVar}`` dicts.
+        List of ``{"tb_name": StringVar, "values": [...], "tran_signals": StringVar}``
+        dicts, in the same order as the testbench entries of *yaml_data*
+        (build_editor_ui builds them that way). Each ``values`` entry may
+        carry ``orig_name`` so renames can be tracked back to the original
+        spec dict.
     QuotedString:
         The QuotedString subclass from yaml_dumper (passed to avoid circular imports).
 
@@ -131,19 +158,33 @@ def sync_form_to_yaml(
                     parsed_list.append(x)
         yaml_data[param_key][k] = parsed_list
 
-    # ── Tests ─────────────────────────────────────────────────────────────────
+    # ── Tests (merge: preserve keys the form does not edit) ───────────────────
+    old_tests_raw = yaml_data.get(test_key)
+    old_tests: dict[str, Any] = (
+        dict(old_tests_raw) if isinstance(old_tests_raw, dict) else {}
+    )
+    old_tb_keys = list(old_tests.keys())
+
     yaml_data[test_key] = {}
-    for t_dict in test_vars:
+    for t_idx, t_dict in enumerate(test_vars):
         tb_name = t_dict["tb_name"].get().strip()
         if not tb_name:
             continue
 
-        tb_content: dict[str, Any] = {}
+        # Form rows are built in the dict's order, so index alignment maps a
+        # (possibly renamed) form entry back to its original content — this
+        # is what keeps measure:/typ:/custom keys alive across a save.
+        orig_content = (
+            old_tests.get(old_tb_keys[t_idx]) if t_idx < len(old_tb_keys) else None
+        )
+        tb_content: dict[str, Any] = (
+            dict(orig_content) if isinstance(orig_content, dict) else {}
+        )
 
-        # Analysis signal lists (transient / dc / ac) first so they appear at
-        # the top of the block. The new ``analysis_signals`` dict carries all
-        # three; ``tran_signals`` is the legacy alias still set by the form
-        # for back-compat.
+        # Analysis signal lists (transient / dc / ac). The new
+        # ``analysis_signals`` dict carries all three; ``tran_signals`` is the
+        # legacy alias still set by the form for back-compat. An emptied form
+        # field removes the corresponding key.
         analysis_vars = t_dict.get("analysis_signals")
         if isinstance(analysis_vars, dict):
             for yaml_key in ("transient_signals", "dc_signals", "ac_signals"):
@@ -151,42 +192,39 @@ def sync_form_to_yaml(
                 if var is None:
                     continue
                 raw = var.get().strip()
-                if not raw:
-                    continue
                 signals = [s.strip()
                            for s in raw.replace(",", " ").split()
                            if s.strip()]
                 if signals:
                     tb_content[yaml_key] = signals
+                else:
+                    tb_content.pop(yaml_key, None)
         else:
             tran_raw = t_dict.get("tran_signals")
             if tran_raw is not None:
                 tran_str = tran_raw.get().strip()
-                if tran_str:
-                    tran_list = [s.strip()
-                                 for s in tran_str.replace(",", " ").split()
-                                 if s.strip()]
-                    if tran_list:
-                        tb_content["transient_signals"] = tran_list
+                tran_list = [s.strip()
+                             for s in tran_str.replace(",", " ").split()
+                             if s.strip()]
+                if tran_list:
+                    tb_content["transient_signals"] = tran_list
+                else:
+                    tb_content.pop("transient_signals", None)
 
         for v_dict in t_dict["values"]:
             name = v_dict["name"].get().strip()
+            orig_name = str(v_dict.get("orig_name", "") or "")
+            orig_spec = tb_content.get(orig_name) if orig_name else None
+            renamed = bool(orig_name) and name != orig_name
+            if (renamed or not name) and orig_name in tb_content:
+                del tb_content[orig_name]
             if not name:
                 continue
-            v_data: dict[str, Any] = {}
-            vmin_str = v_dict["vmin"].get().strip()
-            vmax_str = v_dict["vmax"].get().strip()
-
-            if vmin_str and vmin_str.lower() != "none":
-                try:
-                    v_data["min"] = float(vmin_str)
-                except ValueError:
-                    v_data["min"] = vmin_str
-            if vmax_str and vmax_str.lower() != "none":
-                try:
-                    v_data["max"] = float(vmax_str)
-                except ValueError:
-                    v_data["max"] = vmax_str
+            v_data: dict[str, Any] = (
+                dict(orig_spec) if isinstance(orig_spec, dict) else {}
+            )
+            _set_bound(v_data, "min", "vmin", v_dict["vmin"].get().strip())
+            _set_bound(v_data, "max", "vmax", v_dict["vmax"].get().strip())
             tb_content[name] = v_data
 
         yaml_data[test_key][tb_name] = tb_content

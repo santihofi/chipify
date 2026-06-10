@@ -199,7 +199,7 @@ class SimulationController:
         app = self.app  # type: ignore[attr-defined]
         log.info("SimulationController.stop_simulation: abort requested.")
         app.stop_event.set()
-        simulator.abort_simulation()  # writes /tmp/sim_work/abort.flag
+        simulator.abort_simulation()  # writes FAST_TMP/abort.flag (per-project)
         app.lbl_status.configure(text="Status: Canceling simulation…", text_color="orange")
         app.btn_stop.configure(state="disabled")
 
@@ -267,16 +267,10 @@ class SimulationController:
                 csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
                 df.to_csv(csv_out, index=False)
 
-                # Write a pointer so the Transient tab can resolve tran_dir on reload.
-                tran_dir_val = df.attrs.get("tran_dir", "")
-                if tran_dir_val:
-                    try:
-                        ptr = os.path.join(settings.OUT_DIR, "tran_data", ".latest")
-                        os.makedirs(os.path.dirname(ptr), exist_ok=True)
-                        with open(ptr, "w", encoding="utf-8") as fh:
-                            fh.write(tran_dir_val)
-                    except Exception as exc:
-                        log.warning("Could not write tran_dir pointer: %s", exc)
+                # Write .latest pointers so the analysis tabs can resolve each
+                # kind's data directory after a GUI restart.
+                analysis_dirs = df.attrs.get("analysis_dirs", {}) or {}
+                simulator.write_analysis_pointers(analysis_dirs)
 
                 # Archive history run + write meta sidecar
                 try:
@@ -299,6 +293,7 @@ class SimulationController:
                         valid_runs=valid,
                         global_yield=gyield,
                         tran_dir=df.attrs.get("tran_dir", ""),
+                        analysis_dirs=analysis_dirs,
                     )
                 except Exception as exc:
                     log.warning("Could not save history: %s", exc)

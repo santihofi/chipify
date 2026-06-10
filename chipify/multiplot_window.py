@@ -612,6 +612,17 @@ class PlotCell(ctk.CTkFrame):
             "tran_n":       self._tran_n.get(),
         }
 
+    def close_figure(self):
+        """Release the matplotlib figure from pyplot's global registry.
+
+        Without this, every removed cell leaks its figure (pyplot keeps a
+        reference) and matplotlib starts warning after 20 open figures.
+        """
+        try:
+            plt.close(self._fig)
+        except Exception:
+            pass
+
     def apply_config(self, cfg: dict):
         self._mode.set(cfg.get("mode",   "Histogram"))
         self._param.set(cfg.get("param", "-"))
@@ -788,6 +799,9 @@ class MultiPlotWindow(ctk.CTkToplevel):
                 st.data_changed.disconnect(self._on_data_changed_mp)
         except Exception:
             pass
+        # Release every cell's matplotlib figure from pyplot's registry.
+        for cell in self._cells:
+            cell.close_figure()
         # Clear parent's reference so the button can re-open later
         try:
             self._parent.multiplot_window = None
@@ -822,6 +836,7 @@ class MultiPlotWindow(ctk.CTkToplevel):
         if cell in self._cells:
             self._cells.remove(cell)
         cell.grid_forget()
+        cell.close_figure()
         cell.destroy()
         self._reflow()
 

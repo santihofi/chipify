@@ -42,13 +42,16 @@ A4     = (8.27, 11.69)   # inches
 ML     = 0.07            # left/right margin in figure-fraction units
 MB     = 0.05            # bottom margin
 
-mpl.rcParams.update({
+# Applied via mpl.rc_context() inside generate_pdf_report — mutating the
+# global rcParams here would permanently restyle the GUI's plots after the
+# first PDF export.
+_PDF_RCPARAMS = {
     "font.family": "DejaVu Sans",
     "font.size": 9,
     "axes.spines.top": False,
     "axes.spines.right": False,
     "axes.linewidth": 0.8,
-})
+}
 
 
 # ── Low-level helpers ──────────────────────────────────────────────────────────
@@ -64,16 +67,9 @@ def _fmt(v):
 
 
 def _build_global_pass(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    if "sim_error" not in out.columns:
-        out["sim_error"] = "None"
-    out["sim_error"] = out["sim_error"].fillna("None").astype(str)
-    out.loc[out["sim_error"].str.lower() == "nan", "sim_error"] = "None"
-    tb_cols = [c for c in out.columns if c.endswith("_overall_pass")]
-    out["global_pass"] = True
-    for c in tb_cols:
-        out["global_pass"] &= out[c]
-    return out
+    # Single source of truth for sim_error normalisation + global_pass.
+    from chipify.gui.services import data_loader as _dl
+    return _dl.prepare_results(df)
 
 
 def _get_spec(val_obj):
@@ -567,6 +563,26 @@ def _add_correlation(pdf: PdfPages, valid_df: pd.DataFrame):
     plt.close(fig)
 
 
+# ── Section 5: ReportPlugin pages ─────────────────────────────────────────────
+
+def _add_plugin_pages(pdf: PdfPages, valid_df: pd.DataFrame, stim):
+    """Invoke ``render_pdf`` on every installed ReportPlugin (PLUGINS.md)."""
+    try:
+        from chipify.plugin_loader import get_report_plugins
+        plugins = get_report_plugins()
+    except Exception:
+        return
+    for cls in plugins:
+        try:
+            cls().render_pdf(pdf, valid_df, stim)
+        except Exception:
+            import logging
+            logging.getLogger("chipify.pdf").warning(
+                "ReportPlugin %r render_pdf failed.",
+                getattr(cls, "name", cls.__name__), exc_info=True,
+            )
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
@@ -578,10 +594,11 @@ def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
     valid_df = prepared[prepared["sim_error"] == "None"]
     rows     = _measurement_rows(valid_df, stim)
 
-    with PdfPages(pdf_path) as pdf:
+    with mpl.rc_context(_PDF_RCPARAMS), PdfPages(pdf_path) as pdf:
         _add_cover(pdf, prepared, yaml_path, rows, stim, sim_duration_sec=sim_duration_sec)
         _add_table(pdf, rows, valid_df, stim)
         _add_histograms(pdf, valid_df, stim, rows)
         _add_correlation(pdf, valid_df)
+        _add_plugin_pages(pdf, valid_df, stim)
 
     return pdf_path

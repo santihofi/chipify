@@ -23,19 +23,12 @@ import numpy as np
 import pandas as pd
 
 
-# ── internal helpers (reuse logic from pdf_export without importing it) ───────
+# ── internal helpers ──────────────────────────────────────────────────────────
 
 def _build_global_pass(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    if "sim_error" not in out.columns:
-        out["sim_error"] = "None"
-    out["sim_error"] = out["sim_error"].fillna("None").astype(str)
-    out.loc[out["sim_error"].str.lower() == "nan", "sim_error"] = "None"
-    tb_cols = [c for c in out.columns if c.endswith("_overall_pass")]
-    out["global_pass"] = True
-    for c in tb_cols:
-        out["global_pass"] &= out[c]
-    return out
+    # Single source of truth for sim_error normalisation + global_pass.
+    from chipify.gui.services import data_loader as _dl
+    return _dl.prepare_results(df)
 
 
 def _fmt(v) -> str:

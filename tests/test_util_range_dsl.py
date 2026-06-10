@@ -113,11 +113,42 @@ def test_validate_parameters_passes_list_unchanged() -> None:
     assert result["temp"] == [27, 85, 125]
 
 
-def test_validate_parameters_passes_scalar_unchanged() -> None:
+def test_validate_parameters_wraps_numeric_scalar() -> None:
+    # Scalars must come back as one-element lists: generate_cases builds the
+    # sweep grid with itertools.product, which crashes on a bare float.
     result = validate_parameters({"vdd": 1.8})
-    assert result["vdd"] == pytest.approx(1.8)
+    assert result["vdd"] == [pytest.approx(1.8)]
+
+
+def test_validate_parameters_wraps_string_scalar() -> None:
+    # A bare string would otherwise be swept character by character.
+    result = validate_parameters({"corner": "tt"})
+    assert result["corner"] == ["tt"]
 
 
 def test_validate_parameters_raises_on_unsafe_string() -> None:
     with pytest.raises(SchemaError):
         validate_parameters({"key": "os.system('bad')"})
+
+
+# ── measurement bound validation ──────────────────────────────────────────────
+
+def test_validate_datasheet_rejects_non_numeric_bound() -> None:
+    from chipify.schema import validate_datasheet
+    data = {
+        "parameters": {"temp": [27]},
+        "tests": {"tb_x": {"gain": {"min": "abc", "max": 80}}},
+    }
+    with pytest.raises(SchemaError, match="tb_x.gain"):
+        validate_datasheet(data)
+
+
+def test_validate_datasheet_allows_missing_bounds() -> None:
+    from chipify.schema import validate_datasheet
+    data = {
+        "parameters": {"temp": [27]},
+        "tests": {"tb_x": {"gain": {"min": 40}}},
+    }
+    stim = validate_datasheet(data)
+    val = stim.tests[0].value_lst[0]
+    assert val.vmin == 40.0 and val.vmax is None

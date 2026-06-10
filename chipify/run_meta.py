@@ -92,9 +92,15 @@ def write_meta(
     valid_runs: int | None = None,
     global_yield: float | None = None,
     tran_dir: str = "",
+    analysis_dirs: dict | None = None,
 ) -> str:
     """
     Write a sidecar .meta.json next to *csv_path*.
+
+    ``analysis_dirs`` maps analysis kind (transient/dc/ac) to the per-run CSV
+    directory of this run, so the GUI can resolve waveform data for any kind
+    when a history run is re-loaded. ``tran_dir`` is the legacy
+    transient-only alias.
 
     Returns the path written, or "" on failure.
     """
@@ -112,6 +118,7 @@ def write_meta(
         "valid_runs": valid_runs,
         "global_yield": global_yield,
         "tran_dir": tran_dir,
+        "analysis_dirs": dict(analysis_dirs or {}),
         "notes": "",
         "tags": [],
     }
@@ -141,23 +148,3 @@ def read_meta(csv_path: str) -> dict:
     except Exception as exc:
         log.warning("Could not read run metadata %s: %s", path, exc)
         return {}
-
-
-def update_meta(csv_path: str, **fields) -> bool:
-    """
-    Merge *fields* into an existing .meta.json (or create a minimal one).
-    Returns True on success.
-    """
-    meta = read_meta(csv_path) or {
-        "schema_version": _SCHEMA_VERSION,
-        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-    }
-    meta.update(fields)
-    path = _meta_path(csv_path)
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
-        return True
-    except Exception as exc:
-        log.warning("Could not update run metadata %s: %s", path, exc)
-        return False

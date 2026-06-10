@@ -82,27 +82,3 @@ def save(data: dict) -> bool:
     except Exception as exc:
         log.warning("Could not write project.yaml: %s", exc)
         return False
-
-
-def effective_config(user_config: dict) -> dict:
-    """
-    Merge ``project.yaml`` defaults under *user_config*.
-
-    Priority (highest first): user_config → project.yaml → nothing.
-    """
-    proj = load()
-    merged = {}
-
-    # Map project keys to app_config keys
-    _key_map = {
-        "default_num_cores":      "num_cores",
-        "default_report_profile": "pdf_profile",
-    }
-
-    for proj_key, cfg_key in _key_map.items():
-        if proj_key in proj and cfg_key not in user_config:
-            merged[cfg_key] = proj[proj_key]
-
-    # user_config always wins
-    merged.update(user_config)
-    return merged

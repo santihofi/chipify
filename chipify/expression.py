@@ -30,7 +30,13 @@ from asteval import Interpreter
 log = logging.getLogger("chipify.expression")
 
 _RE_SANITISE = re.compile(r"[^a-zA-Z0-9_]")
-_RE_SPICE_CALL = re.compile(r"([a-zA-Z_]\w*)\(([^()]+)\)")
+# Only SPICE signal accessors are rewritten (v(out) → v_out_). Matching any
+# identifier would also mangle helper calls with bare arguments — e.g.
+# last(vout) must stay a call to last(), not become the name last_vout_.
+_RE_SPICE_CALL = re.compile(
+    r"\b(v|i|vm|vp|vr|vi|vdb|im|ip|ir|ii|idb)\(([^()]+)\)",
+    re.IGNORECASE,
+)
 _RE_VALID_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 # Dangerous builtins that must never be reachable from a user expression.
@@ -110,7 +116,12 @@ class SafeEvaluator:
         return _RE_SANITISE.sub("_", name)
 
     def sanitise_spice_expr(self, expr: str) -> str:
-        """Translate SPICE-style function calls: v(out) → v_out_, i(R1) → i_R1_."""
+        """Translate SPICE-style signal accessors: v(out) → v_out_, i(R1) → i_R1_.
+
+        Only the SPICE accessor names (v, i, vm, vp, vdb, …) are rewritten;
+        helper calls such as ``last(vout)`` or ``db(gain)`` pass through
+        unchanged so they still evaluate as function calls.
+        """
         return _RE_SPICE_CALL.sub(
             lambda m: self.sanitise_key(m.group(1) + "_" + m.group(2) + "_"),
             expr,
