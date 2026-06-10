@@ -3,10 +3,10 @@ parameters:
   corner_mos: ['tt', 'ss', 'ff', 'sf', 'fs']
   seed: range(1)
   sigma: [1]
-  vcm: [0.75]
   vincm: [0.75]
   vdd: [1.45, 1.5, 1.55]
   ibias: ['8.5u']
+  vcm: [0.75]
 tests:
   tb_ota_op:
     vdc:
@@ -20,5 +20,8 @@ tests:
     bandwidth:
       min: 100000.0
       max: 1000000000.0
+    phase_margin:
+      min: 30.0
+      max: 90.0
   tb_ota_tran:
     transient_signals: [out]

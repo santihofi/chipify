@@ -40,11 +40,15 @@ save v(out)
 ac dec 10 1 10000000k
 
 let gain = mag(out)
+let phase = phase(out)
 
 meas ac max_gain max gain
 meas ac bandwidth when gain=0.707*max_gain fall=1
+meas ac ft when gain=1 fall=1
+meas ac phase_ft FIND phase AT=ft
+let phase_margin = 180 + (phase_ft*180/pi)
 
-echo MY_DATA:$&max_gain $&bandwidth
+echo MY_DATA:$&max_gain $&bandwidth $&phase_margin
 quit
 .endc
 "}

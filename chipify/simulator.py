@@ -334,6 +334,28 @@ class BaseSimulator(ABC):
         raise NotImplementedError
 
 
+def _inject_capture(netlist: str, injection: str) -> str:
+    """Splice analysis-capture commands into the ngspice ``.control`` block.
+
+    The capture (``setplot``/``wrdata`` …) must run after the testbench's own
+    analysis but before the control block terminates. Many testbenches end their
+    ``.control`` with ``quit`` (or ``exit``), which exits ngspice immediately — so
+    inserting before ``.endc`` would place the capture *after* the quit, where it
+    never runs (the silent Bode/AC "no data" bug). Insert before the first
+    ``quit``/``exit`` inside the control block if present, else before ``.endc``.
+    """
+    ctrl_idx = netlist.find(".control")
+    endc_idx = netlist.find(".endc")
+    region = netlist[ctrl_idx:endc_idx] if (ctrl_idx != -1 and endc_idx != -1) else ""
+    m = re.search(r"(?im)^[ \t]*(?:quit|exit)\b.*$", region)
+    if m:
+        pos = ctrl_idx + m.start()
+        return netlist[:pos] + injection + "\n" + netlist[pos:]
+    if endc_idx != -1:
+        return netlist.replace(".endc", f"{injection}\n.endc", 1)
+    return netlist + "\n" + injection + "\n"
+
+
 class NgspiceSimulator(BaseSimulator):
     name = "ngspice"
 
@@ -356,7 +378,7 @@ class NgspiceSimulator(BaseSimulator):
             analyses = getattr(test, "analyses", []) or []
             if analyses:
                 injection = "\n".join(a.ngspice_inject() for a in analyses)
-                netlist = netlist.replace(".endc", f"{injection}\n.endc", 1)
+                netlist = _inject_capture(netlist, injection)
 
             return netlist
 
@@ -440,34 +462,84 @@ def _read_run_log_tail(n: int = 25) -> str:
     return "".join(lines[-n:]).strip()
 
 
+def _extract_ngspice_error(log_text: str) -> str:
+    """Pull the most relevant single line from an ngspice log (best-effort).
+
+    Prefers the first line mentioning an error / missing vector; otherwise the
+    last non-empty line. Whitespace-collapsed and length-capped so it fits in a
+    one-line result-row note / CSV cell.
+    """
+    lines = [ln.strip() for ln in log_text.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    markers = ("error", "not available", "fatal", "can't", "cannot", "no such")
+    pick = next((ln for ln in lines if any(m in ln.lower() for m in markers)), "")
+    if not pick:
+        pick = lines[-1]
+    return " ".join(pick.split())[:200]
+
+
 def _persist_analyses(analyses, analysis_tab_paths, analysis_dirs,
                       run_id, tb_safe, tb_path, sample):
     """Write each declared analysis's tab file into its per-run CSV.
 
-    When an analysis was set up to capture (both its tab path and output dir
-    exist) but ngspice produced no tab file, record a note on *sample* and log a
-    warning with the ngspice log tail — instead of silently skipping it, which
-    leaves an empty plot and no clue why (the common Bode/AC "no data" symptom).
+    If an analysis was set up to capture (tab path + output dir both present) but
+    produced no CSV — the tab is missing, or present-but-empty/unreadable so
+    ``persist_to_csv`` writes nothing — record a one-line reason (including the
+    ngspice error) on *sample* under ``<tb>__<kind>_capture``. Worker logging does
+    not reach chipify.log (forkserver workers lack the file handler), so the
+    result row is the reliable channel; ``run_sim`` surfaces these from the main
+    process. This is what makes the silent Bode/AC "no data" case diagnosable.
     """
     for an in analyses:
         tab = analysis_tab_paths.get(an.kind, "")
         dest_dir = analysis_dirs.get(an.kind, "")
         if not (tab and dest_dir):
             continue
-        if os.path.exists(tab):
+
+        reason = ""
+        if not os.path.exists(tab):
+            reason = (
+                f"ngspice wrote no '{an.kind}1' tab to capture "
+                f"(does the testbench run its .{an.kind} analysis?)"
+            )
+        else:
             dest_csv = os.path.join(dest_dir, f"run_{run_id}__{tb_safe}.csv")
             an.persist_to_csv(tab, dest_csv)
-        else:
-            note = (
-                f"{an.kind} analysis produced no data - ngspice wrote no "
-                f"'{an.kind}1' output to capture (check that the testbench "
-                f"actually runs its .{an.kind} analysis)"
-            )
-            sample[f"{tb_path}_{an.kind}_capture"] = note
-            log.warning(
-                "%s: %s\n  expected tab: %s\n  ngspice log tail:\n%s",
-                tb_path, note, tab, _read_run_log_tail(),
-            )
+            if not os.path.exists(dest_csv):
+                reason = (
+                    f"ngspice wrote an empty/unreadable {an.kind} tab "
+                    f"(capture vectors were empty)"
+                )
+
+        if reason:
+            err = _extract_ngspice_error(_read_run_log_tail())
+            note = f"{an.kind} produced no data - {reason}"
+            if err:
+                note += f" | ngspice: {err}"
+            sample[f"{tb_path}__{an.kind}_capture"] = note
+            log.warning("%s: %s", tb_path, note)  # also surfaced from run_sim (main)
+
+
+def _log_capture_failures(results: list) -> None:
+    """Surface analysis-capture failures recorded on result rows (main process).
+
+    Workers can't write to chipify.log under forkserver, so ``_persist_analyses``
+    stashes the reason on each row under ``<tb>__<kind>_capture``. Here, in the
+    main process, we log each distinct failure once so it actually reaches the
+    log file (and it also persists as a column in simulation_results.csv).
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for row in results:
+        if not isinstance(row, dict):
+            continue
+        for key, val in row.items():
+            if (isinstance(key, str) and key.endswith("_capture")
+                    and isinstance(val, str) and val):
+                counts[(key, val)] = counts.get((key, val), 0) + 1
+    for (key, val), count in counts.items():
+        tb = key[: -len("_capture")].rstrip("_")
+        log.warning("Analysis capture failed on %s (%d run(s)): %s", tb, count, val)
 
 
 # ── VACASK helpers ─────────────────────────────────────────────────────────────
@@ -1363,6 +1435,10 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
         pool.close()
         pool.join()
         log.info("Pool finished cleanly. %d results collected.", len(results))
+
+        # Surface analysis-capture failures recorded by workers (worker logging
+        # doesn't reach chipify.log under forkserver, so the reason rides the row).
+        _log_capture_failures(results)
 
         result_df = _assemble_result_df(results, analysis_dirs)
         return result_df
