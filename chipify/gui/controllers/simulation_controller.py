@@ -239,6 +239,11 @@ class SimulationController:
             text_color="red",
             justify="left",
         ).pack(anchor="w", padx=20, pady=20)
+        # The error panel lives on the Measurements tab — bring it into view.
+        try:
+            app.tabs.set("Measurements")
+        except Exception:
+            pass
 
     def run_sim_thread(self, yaml_path: str) -> None:
         """Worker-thread body: runs the simulation and saves results."""

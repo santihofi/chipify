@@ -230,9 +230,8 @@ class ChipifyGUI(ctk.CTk):
                                     command=self._on_tab_change)
         self.tabs.grid(row=2, column=0, sticky="nsew")
         
-        self.tab_editor = self.tabs.add("Datasheet Editor") 
+        self.tab_editor = self.tabs.add("Datasheet Editor")
         self.tab_table = self.tabs.add("Measurements")
-        self.tab_worst = self.tabs.add("Worst-Case Analysis")
         self.tab_hist = self.tabs.add("Histograms")
         self.tab_adv = self.tabs.add("Advanced Analytics")
         self.tab_eq = self.tabs.add("Custom Equations")
@@ -240,7 +239,6 @@ class ChipifyGUI(ctk.CTk):
 
         self.setup_editor_tab()
         self.setup_table_tab()
-        self.setup_worst_case_tab()
         self.setup_histogram_tab()
         self.setup_adv_analytics_tab()
         self.setup_equations_tab()
@@ -255,13 +253,11 @@ class ChipifyGUI(ctk.CTk):
         _ms = app_config.get_live_throttle_ms()
         self._throttle_meas = ThrottledRedraw(self, self._throttled_measurements, _ms)
         self._throttle_hist = ThrottledRedraw(self, self.update_plot, _ms)
-        self._throttle_wc = ThrottledRedraw(self, self._throttled_worst_case, _ms)
         self._throttle_adv = ThrottledRedraw(self, self.update_adv_plots, _ms)
         self._throttle_tran = ThrottledRedraw(self, self.update_transient_plot, _ms)
         self._all_throttles = [
             self._throttle_meas,
             self._throttle_hist,
-            self._throttle_wc,
             self._throttle_adv,
             self._throttle_tran,
         ]
@@ -270,7 +266,6 @@ class ChipifyGUI(ctk.CTk):
         self._live_throttle_tab_map = {
             "Measurements": self._throttle_meas,
             "Histograms": self._throttle_hist,
-            "Worst-Case Analysis": self._throttle_wc,
             "Advanced Analytics": self._throttle_adv,
             "Transient": self._throttle_tran,
         }
@@ -279,11 +274,6 @@ class ChipifyGUI(ctk.CTk):
         stim = self.app_state.current_stim or self.current_stim
         if stim is not None:
             self._refresh_measurements_panel(stim)
-
-    def _throttled_worst_case(self) -> None:
-        stim = self.app_state.current_stim or self.current_stim
-        if stim is not None:
-            self._refresh_worst_case_panel(stim)
 
     def _on_state_data_changed(self, stim=None, switch_tab=False, **kwargs) -> None:
         stim = stim or self.app_state.current_stim or self.current_stim
@@ -416,6 +406,12 @@ class ChipifyGUI(ctk.CTk):
                 tags=("warn",),
             )
 
+        if update_tree:
+            # Size the table to its rows so the fails panel below gets the
+            # remaining tab height (tree scrolls beyond 14 rows).
+            n_rows = len(self.tree.get_children())
+            self.tree.configure(height=max(4, min(14, n_rows)))
+
         return meas_cols, failed_params, valid_df, total, fmt
 
     def _rebuild_measurement_tree(self, stim):
@@ -423,11 +419,12 @@ class ChipifyGUI(ctk.CTk):
         return self._measurement_snapshot(stim, update_tree=True)
 
     def _refresh_measurements_panel(self, stim) -> None:
-        """Measurements tab only: tree + sweep metadata + dropdowns (no histogram / adv / worst-case)."""
+        """Measurements tab: tree + failure cards + dropdown metadata (no histogram / adv)."""
         meta = self._rebuild_measurement_tree(stim)
         if meta is None:
             return
-        meas_cols, _failed_params, valid_df, _total, _fmt = meta
+        meas_cols, failed_params, valid_df, total, fmt = meta
+        self._refresh_worst_case_cards(stim, meas_cols, failed_params, valid_df, total, fmt)
 
         _plot_cols = _dl.compute_plot_cols(valid_df, stim)
         self.all_plot_cols = _plot_cols.all_numeric_cols
@@ -456,79 +453,104 @@ class ChipifyGUI(ctk.CTk):
                 self.tornado_target_var.set(all_plot_meas[0])
 
     def _refresh_worst_case_cards(self, stim, meas_cols, failed_params, valid_df, total, fmt) -> None:
-        """Rebuild only the worst-case scroll panel content."""
+        """Rebuild the Outliers & Fails panel below the measurements table."""
+        import chipify.gui.theme as _theme_mod
         for widget in self.wc_scroll.winfo_children():
             widget.destroy()
+
+        muted = _theme_mod.TEXT_MUTED
+        card_bg = _theme_mod.CARD_BG
+        card_border = _theme_mod.CARD_BORDER
+        small = ctk.CTkFont(size=11)
 
         if not meas_cols and total > 0:
             ctk.CTkLabel(
                 self.wc_scroll,
                 text="Loaded CSV does not match the current Datasheet specifications.",
                 text_color="#e67e22",
-                font=ctk.CTkFont(size=14),
-            ).pack(pady=50)
-        elif not failed_params:
+                font=ctk.CTkFont(size=13),
+            ).pack(pady=24)
+            return
+        if not failed_params:
             ctk.CTkLabel(
                 self.wc_scroll,
-                text="All specifications met! No outliers found.",
+                text="✓   All specifications met — no outliers found.",
                 text_color="#2ecc71",
-                font=ctk.CTkFont(size=16),
-            ).pack(pady=50)
-        else:
-            param_cols = list(stim.params.keys())
-            for test, val_obj in failed_params:
-                p_name, pass_col = val_obj.name, f"{val_obj.name}_pass"
-                failed_rows = valid_df[valid_df[pass_col] == False]
-                if failed_rows.empty:
-                    continue
-
-                min_fail, max_fail = failed_rows[p_name].min(), failed_rows[p_name].max()
-                worst_val, worst_idx, violation = None, None, ""
-
-                v_min = getattr(val_obj, "vmin", getattr(val_obj, "min", None))
-                v_max = getattr(val_obj, "vmax", getattr(val_obj, "max", None))
-
-                # Both bounds can be violated across different runs — show
-                # the side with the larger absolute excess.
-                candidates = []
-                if v_min is not None and min_fail < v_min:
-                    candidates.append((v_min - min_fail, min_fail,
-                                       failed_rows[p_name].idxmin(), f"< {fmt(v_min)}"))
-                if v_max is not None and max_fail > v_max:
-                    candidates.append((max_fail - v_max, max_fail,
-                                       failed_rows[p_name].idxmax(), f"> {fmt(v_max)}"))
-                if candidates:
-                    _, worst_val, worst_idx, violation = max(candidates, key=lambda c: c[0])
-
-                if worst_idx is not None:
-                    worst_row = failed_rows.loc[worst_idx]
-                    card = ctk.CTkFrame(self.wc_scroll, border_width=2, border_color="#e74c3c", corner_radius=8)
-                    card.pack(fill="x", padx=10, pady=10)
-                    header = ctk.CTkFrame(card, fg_color="#e74c3c", corner_radius=0)
-                    header.pack(fill="x")
-                    ctk.CTkLabel(
-                        header,
-                        text=f"FAIL: {p_name} = {fmt(worst_val)}",
-                        font=ctk.CTkFont(weight="bold", size=14),
-                        text_color="white",
-                    ).pack(anchor="w", padx=15, pady=5)
-                    ctk.CTkLabel(
-                        card,
-                        text=f"Specification exceeded: {violation}",
-                        text_color="#ff9999",
-                    ).pack(anchor="w", padx=15, pady=(10, 5))
-                    params_text = "\n".join([f"• {k}: {worst_row[k]}" for k in param_cols if k in worst_row])
-                    ctk.CTkLabel(card, text=f"Triggering parameters:\n{params_text}", justify="left").pack(
-                        anchor="w", padx=15, pady=(0, 15)
-                    )
-
-    def _refresh_worst_case_panel(self, stim) -> None:
-        """Worst-case tab only: rebuild cards from current data (no measurements tree rebuild)."""
-        meta = self._measurement_snapshot(stim, update_tree=False)
-        if meta is None:
+                font=ctk.CTkFont(size=13, weight="bold"),
+            ).pack(pady=24)
             return
-        meas_cols, failed_params, valid_df, total, fmt = meta
-        self._refresh_worst_case_cards(stim, meas_cols, failed_params, valid_df, total, fmt)
+
+        # Two cards per row — one compact card per failing measurement.
+        grid_host = ctk.CTkFrame(self.wc_scroll, fg_color="transparent")
+        grid_host.pack(fill="x")
+        grid_host.grid_columnconfigure((0, 1), weight=1, uniform="wccards")
+
+        param_cols = list(stim.params.keys())
+        card_i = 0
+        for test, val_obj in failed_params:
+            p_name, pass_col = val_obj.name, f"{val_obj.name}_pass"
+            failed_rows = valid_df[valid_df[pass_col] == False]
+            if failed_rows.empty:
+                continue
+
+            min_fail, max_fail = failed_rows[p_name].min(), failed_rows[p_name].max()
+            worst_val, worst_idx, violation = None, None, ""
+
+            v_min = getattr(val_obj, "vmin", getattr(val_obj, "min", None))
+            v_max = getattr(val_obj, "vmax", getattr(val_obj, "max", None))
+
+            # Both bounds can be violated across different runs — show
+            # the side with the larger absolute excess.
+            candidates = []
+            if v_min is not None and min_fail < v_min:
+                candidates.append((v_min - min_fail, min_fail,
+                                   failed_rows[p_name].idxmin(), f"< {fmt(v_min)}"))
+            if v_max is not None and max_fail > v_max:
+                candidates.append((max_fail - v_max, max_fail,
+                                   failed_rows[p_name].idxmax(), f"> {fmt(v_max)}"))
+            if candidates:
+                _, worst_val, worst_idx, violation = max(candidates, key=lambda c: c[0])
+
+            if worst_idx is None:
+                continue
+            worst_row = failed_rows.loc[worst_idx]
+            n_fail = len(failed_rows)
+
+            row_g, col_g = divmod(card_i, 2)
+            card = ctk.CTkFrame(grid_host, fg_color=card_bg, corner_radius=10,
+                                border_width=1, border_color=card_border)
+            card.grid(row=row_g, column=col_g, sticky="nsew",
+                      padx=(0, 8) if col_g == 0 else (0, 0), pady=(0, 8))
+
+            hdr = ctk.CTkFrame(card, fg_color="transparent")
+            hdr.pack(fill="x", padx=12, pady=(10, 2))
+            ctk.CTkLabel(hdr, text="FAIL", fg_color="#e74c3c", corner_radius=4,
+                         text_color="white", width=44, height=18,
+                         font=ctk.CTkFont(size=10, weight="bold")).pack(side="left")
+            ctk.CTkLabel(hdr, text=p_name,
+                         font=ctk.CTkFont(size=13, weight="bold")).pack(side="left", padx=(8, 0))
+            ctk.CTkLabel(hdr, text=f"{n_fail} / {total} runs failing",
+                         text_color=muted, font=small).pack(side="right")
+
+            ctk.CTkLabel(card,
+                         text=f"worst  {fmt(worst_val)}    (spec {violation})",
+                         text_color="#e74c3c",
+                         font=ctk.CTkFont(size=12)).pack(anchor="w", padx=12)
+
+            # Triggering parameters: compact two-column name/value grid.
+            pf = ctk.CTkFrame(card, fg_color="transparent")
+            pf.pack(fill="x", padx=12, pady=(6, 12))
+            shown = [(k, worst_row[k]) for k in param_cols if k in worst_row]
+            for i, (k, v) in enumerate(shown):
+                rr, cc = divmod(i, 2)
+                v_txt = f"{v:g}" if isinstance(v, float) else str(v)
+                ctk.CTkLabel(pf, text=str(k), text_color=muted, font=small,
+                             width=88, anchor="w").grid(row=rr, column=2 * cc,
+                                                        sticky="w", padx=(0, 4), pady=1)
+                ctk.CTkLabel(pf, text=v_txt, font=small,
+                             anchor="w").grid(row=rr, column=2 * cc + 1,
+                                              sticky="w", padx=(0, 20), pady=1)
+            card_i += 1
 
     def _refresh_visual_tabs(self, stim, switch_tab=False) -> None:
         """Redraw measurements tree, dropdowns, histogram, analytics, worst-case."""
@@ -1460,11 +1482,16 @@ class ChipifyGUI(ctk.CTk):
             self.build_editor_ui()
             
     def setup_table_tab(self):
+        import chipify.gui.theme as _theme_mod
         self.tab_table.grid_columnconfigure(0, weight=1)
-        self.tab_table.grid_rowconfigure(0, weight=1)
-        
+        # Results table on top (sized to its rows, see _measurement_snapshot),
+        # Outliers & Fails panel below takes the remaining height (merged from
+        # the former Worst-Case Analysis tab).
+        self.tab_table.grid_rowconfigure(0, weight=0)
+        self.tab_table.grid_rowconfigure(2, weight=1)
+
         self.tree_frame = ctk.CTkFrame(self.tab_table, fg_color="transparent")
-        self.tree_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        self.tree_frame.grid(row=0, column=0, sticky="new", pady=(0, 4))
         self.tree_frame.grid_columnconfigure(0, weight=1)
         self.tree_frame.grid_rowconfigure(0, weight=1)
         
@@ -1502,24 +1529,25 @@ class ChipifyGUI(ctk.CTk):
         self.tree.bind("<Button-3>", self._on_tree_right_click)  # Windows/Linux
         self.tree.bind("<Button-2>", self._on_tree_right_click)  # macOS
 
-    def setup_worst_case_tab(self):
-        self.tab_worst.grid_columnconfigure(0, weight=1)
-        self.tab_worst.grid_rowconfigure(1, weight=1)
-        
-        top_bar = ctk.CTkFrame(self.tab_worst, fg_color="transparent")
-        top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        
-        lbl = ctk.CTkLabel(top_bar, text="Outliers & Fails", font=ctk.CTkFont(size=16, weight="bold"))
-        lbl.pack(side=tk.LEFT, padx=10)
-        
-        self.btn_export_debug = ctk.CTkButton(top_bar, text="Export Fails for Debugging", command=self.action_export_debug, fg_color="#e67e22", hover_color="#d35400")
-        self.btn_export_debug.pack(side=tk.RIGHT, padx=10)
-        
-        self.wc_scroll = ctk.CTkScrollableFrame(self.tab_worst, fg_color="transparent")
-        self.wc_scroll.grid(row=1, column=0, sticky="nsew")
+        # ── Outliers & Fails (merged from the former Worst-Case Analysis tab) ──
+        fails_hdr = ctk.CTkFrame(self.tab_table, fg_color="transparent")
+        fails_hdr.grid(row=1, column=0, sticky="ew", pady=(8, 4))
+        self._lbl_fails_hdr = ctk.CTkLabel(
+            fails_hdr, text="OUTLIERS & FAILS",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=_theme_mod.ACCENT)
+        self._lbl_fails_hdr.pack(side=tk.LEFT, padx=5)
+        self.btn_export_debug = ctk.CTkButton(
+            fails_hdr, text="Export Fails for Debugging", width=180, height=26,
+            command=self.action_export_debug,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE"))
+        self.btn_export_debug.pack(side=tk.RIGHT, padx=5)
+
+        self.wc_scroll = ctk.CTkScrollableFrame(self.tab_table, fg_color="transparent")
+        self.wc_scroll.grid(row=2, column=0, sticky="nsew")
         _bind_mousewheel(self.wc_scroll)
-        self.lbl_wc_empty = ctk.CTkLabel(self.wc_scroll, text="Start a simulation to see outliers...", text_color="gray")
-        self.lbl_wc_empty.pack(pady=50)
+        self.lbl_wc_empty = ctk.CTkLabel(self.wc_scroll, text="Run a simulation to see outliers…", text_color="gray")
+        self.lbl_wc_empty.pack(pady=20)
 
     def action_export_debug(self):
         if self.current_df is None: return
@@ -2415,7 +2443,7 @@ class ChipifyGUI(ctk.CTk):
         self.configure(fg_color=bg_fg)
         self.left_frame.configure(fg_color=panel_fg)
         self.tabs.configure(fg_color=panel_fg)
-        for _tf in [self.tab_editor, self.tab_table, self.tab_worst,
+        for _tf in [self.tab_editor, self.tab_table,
                     self.tab_hist, self.tab_adv, self.tab_eq, self.tab_tran]:
             _tf.configure(fg_color=panel_fg)
 
