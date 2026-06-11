@@ -31,6 +31,7 @@ from chipify.gui.widgets import yaml_dumper as _yaml_dumper
 from chipify.gui.widgets.yaml_dumper import QuotedString
 from chipify.gui.widgets.treeview_styling import apply_dark_style as _apply_dark_style, apply_treeview_style as _apply_treeview_style
 from chipify.gui.widgets.export_button import attach_export_button
+from chipify.gui.widgets.scrolling import bind_mousewheel as _bind_mousewheel
 from chipify.gui.services import data_loader as _dl
 from chipify.gui.services import equation_service as _eq_svc
 from chipify.gui.services import yaml_editor_service as _ye_svc
@@ -101,11 +102,27 @@ class ChipifyGUI(ctk.CTk):
         self.setup_right_panel()
         self.apply_treeview_dark_style()
 
+        # Window-manager close must stop the mainloop explicitly: CTk's
+        # scaling/DPI trackers keep rescheduling after-callbacks, so a plain
+        # destroy() can leave mainloop() running forever and the process
+        # never exits (observed as zombie pythons after closing the window).
+        self.protocol("WM_DELETE_WINDOW", self._on_app_close)
+
         _saved_theme = app_config.load_config().get("theme", "night")
         self.after(1, lambda: self.change_theme(_saved_theme))
 
         self.after(200, self._startup_load)
         
+    def _on_app_close(self):
+        """Stop the mainloop reliably, then tear down the window."""
+        try:
+            self.quit()
+        finally:
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
     def _startup_load(self):
         self.refresh_yamls()
         self.refresh_history()
@@ -115,16 +132,27 @@ class ChipifyGUI(ctk.CTk):
     def setup_left_panel(self):
         self.left_frame = ctk.CTkFrame(self, width=260, corner_radius=0, fg_color=panel_color)
         self.left_frame.grid(row=0, column=0, sticky="nsew")
-        self.left_frame.grid_rowconfigure(11, weight=1) 
+        self.left_frame.grid_rowconfigure(11, weight=1)
         self.left_frame.grid_propagate(False)
+        # Tie the single column to the frame width so children can't push it
+        # past the fixed 260 px and get clipped.
+        self.left_frame.grid_columnconfigure(0, weight=1)
         
         ctk.CTkLabel(self.left_frame, text="Configuration", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, padx=20, pady=(20, 5), sticky="w")
         ctk.CTkLabel(self.left_frame, text="Current Datasheet:").grid(row=1, column=0, padx=20, pady=(5, 0), sticky="w")
         self.yaml_dropdown = ctk.CTkOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_yaml_select)
         self.yaml_dropdown.grid(row=2, column=0, padx=20, pady=(5, 10), sticky="ew")
         
-        self.btn_refresh = ctk.CTkButton(self.left_frame, text="Refresh Yamls", command=self.refresh_yamls, fg_color="transparent", border_width=1, text_color=("gray10", "#DCE4EE"))
-        self.btn_refresh.grid(row=3, column=0, padx=20, pady=(0, 15), sticky="ew")
+        yaml_btn_row = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        yaml_btn_row.grid(row=3, column=0, padx=20, pady=(0, 15), sticky="ew")
+        yaml_btn_row.grid_columnconfigure((0, 1), weight=1, uniform="yamlbtn")
+        # Explicit small widths: two default-width (140 px) buttons would
+        # request ~288 px and force the whole sidebar column past its 260 px
+        # frame, clipping every sidebar widget at the right edge.
+        self.btn_refresh = ctk.CTkButton(yaml_btn_row, text="↺ Refresh", width=100, command=self.refresh_yamls, fg_color="transparent", border_width=1, text_color=("gray10", "#DCE4EE"))
+        self.btn_refresh.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.btn_new_yaml = ctk.CTkButton(yaml_btn_row, text="+ New", width=100, command=self.action_new_datasheet, fg_color="transparent", border_width=1, text_color=("gray10", "#DCE4EE"))
+        self.btn_new_yaml.grid(row=0, column=1, sticky="ew", padx=(4, 0))
         
         self.btn_start = ctk.CTkButton(self.left_frame, text="Start Simulation", command=self.start_simulation)
         self.btn_start.grid(row=4, column=0, padx=20, pady=(5, 5), sticky="ew")
@@ -167,7 +195,9 @@ class ChipifyGUI(ctk.CTk):
         self.progress_bar.grid(row=12, column=0, padx=20, pady=(10, 0), sticky="ew")
         self.progress_bar.set(0)
         
-        self.lbl_status = ctk.CTkLabel(self.left_frame, text="Status: Ready", text_color="gray")
+        # wraplength keeps long status messages from widening the sidebar column.
+        self.lbl_status = ctk.CTkLabel(self.left_frame, text="Status: Ready", text_color="gray",
+                                       wraplength=215, justify="left", anchor="w")
         self.lbl_status.grid(row=13, column=0, padx=20, pady=(5, 20), sticky="w")
         
     def setup_right_panel(self):
@@ -648,6 +678,7 @@ class ChipifyGUI(ctk.CTk):
         self._eq_scroll = ctk.CTkScrollableFrame(self._scalar_eq_card, fg_color="transparent")
         self._eq_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
         self._eq_scroll.grid_columnconfigure(1, weight=1)
+        _bind_mousewheel(self._eq_scroll)
 
         # CTkTextbox accepts ``("light", "dark")`` tuples for fg/text colours
         # so the log box auto-tracks the appearance mode.
@@ -694,6 +725,7 @@ class ChipifyGUI(ctk.CTk):
         self._tran_eq_scroll = ctk.CTkScrollableFrame(self._tran_eq_card, fg_color="transparent")
         self._tran_eq_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
         self._tran_eq_scroll.grid_columnconfigure(1, weight=1)
+        _bind_mousewheel(self._tran_eq_scroll)
 
         self._tran_eq_log = ctk.CTkTextbox(
             self._tran_eq_card, height=80, state="disabled",
@@ -995,20 +1027,71 @@ class ChipifyGUI(ctk.CTk):
     # DATASHEET EDITOR
     # ==========================================
     def setup_editor_tab(self):
+        import chipify.gui.theme as _theme_mod
         self.tab_editor.grid_columnconfigure(0, weight=1)
         self.tab_editor.grid_rowconfigure(1, weight=1)
+
+        # ── Top bar: title · filename · view switch · save ────────────────────
         top_bar = ctk.CTkFrame(self.tab_editor, fg_color="transparent")
         top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        self.lbl_editor_title = ctk.CTkLabel(top_bar, text="Loading...", font=ctk.CTkFont(size=16, weight="bold"))
-        self.lbl_editor_title.pack(side="left", padx=5)
+        ctk.CTkLabel(top_bar, text="Datasheet",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(side="left", padx=(5, 10))
+        self.lbl_editor_title = ctk.CTkLabel(
+            top_bar, text="—", text_color=_theme_mod.TEXT_MUTED,
+            font=ctk.CTkFont(size=13))
+        self.lbl_editor_title.pack(side="left")
         self.editor_mode = ctk.StringVar(value="Form View")
-        self.mode_selector = ctk.CTkSegmentedButton(top_bar, values=["Form View", "Raw YAML"], variable=self.editor_mode, command=self.switch_editor_mode)
+        self.mode_selector = ctk.CTkSegmentedButton(
+            top_bar, values=["Form View", "Raw YAML"], variable=self.editor_mode,
+            command=self.switch_editor_mode, height=30)
         self.mode_selector.pack(side="left", padx=30)
-        btn_save = ctk.CTkButton(top_bar, text="Save Datasheet", command=self.save_yaml, fg_color="#2ecc71", hover_color="#27ae60")
+        btn_save = ctk.CTkButton(top_bar, text="Save Datasheet", width=130, height=30,
+                                 command=self.save_yaml,
+                                 fg_color="#2ecc71", hover_color="#27ae60")
         btn_save.pack(side="right", padx=5)
-        self.editor_scroll = ctk.CTkScrollableFrame(self.tab_editor, fg_color="transparent")
-        self.editor_scroll.grid(row=1, column=0, sticky="nsew")
-        self.editor_scroll.grid_columnconfigure(0, weight=1)
+
+        # ── Two-column form body: parameters left, testbenches right ─────────
+        self.editor_body = ctk.CTkFrame(self.tab_editor, fg_color="transparent")
+        self.editor_body.grid(row=1, column=0, sticky="nsew")
+        # 50:50 split between parameters and testbenches ("uniform" forces
+        # equal widths regardless of the columns' natural content size).
+        self.editor_body.grid_columnconfigure(0, weight=1, uniform="editorcol", minsize=380)
+        self.editor_body.grid_columnconfigure(1, weight=1, uniform="editorcol", minsize=380)
+        self.editor_body.grid_rowconfigure(1, weight=1)
+
+        param_hdr = ctk.CTkFrame(self.editor_body, fg_color="transparent")
+        param_hdr.grid(row=0, column=0, sticky="ew", padx=(5, 8), pady=(0, 6))
+        self._lbl_param_hdr = ctk.CTkLabel(
+            param_hdr, text="SWEEP PARAMETERS",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=_theme_mod.ACCENT)
+        self._lbl_param_hdr.pack(side="left")
+        ctk.CTkButton(param_hdr, text="+ Add", width=64, height=24,
+                      fg_color="transparent", border_width=1,
+                      text_color=("gray10", "#DCE4EE"),
+                      command=self.action_add_param).pack(side="right")
+
+        tests_hdr = ctk.CTkFrame(self.editor_body, fg_color="transparent")
+        tests_hdr.grid(row=0, column=1, sticky="ew", padx=(8, 5), pady=(0, 6))
+        self._lbl_tests_hdr = ctk.CTkLabel(
+            tests_hdr, text="TESTBENCHES",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=_theme_mod.ACCENT)
+        self._lbl_tests_hdr.pack(side="left")
+        ctk.CTkButton(tests_hdr, text="+ Add Testbench", width=124, height=24,
+                      fg_color="transparent", border_width=1,
+                      text_color=("gray10", "#DCE4EE"),
+                      command=self.action_add_test).pack(side="right")
+
+        self.param_scroll = ctk.CTkScrollableFrame(self.editor_body, fg_color="transparent")
+        self.param_scroll.grid(row=1, column=0, sticky="nsew", padx=(5, 8))
+        self.tests_scroll = ctk.CTkScrollableFrame(self.editor_body, fg_color="transparent")
+        self.tests_scroll.grid(row=1, column=1, sticky="nsew", padx=(8, 5))
+        _bind_mousewheel(self.param_scroll)
+        _bind_mousewheel(self.tests_scroll)
+
+        # Back-compat alias: mode switching / theming used to grid the single
+        # editor_scroll; the whole two-column body now plays that role.
+        self.editor_scroll = self.editor_body
+
         self.raw_editor = ctk.CTkTextbox(self.tab_editor, font=ctk.CTkFont(family="Courier", size=14))
 
     def switch_editor_mode(self, mode):
@@ -1067,7 +1150,7 @@ class ChipifyGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Load Error", f"Error loading {selected_yaml}:\n{e}")
             return
-        self.lbl_editor_title.configure(text=f"Editing: {selected_yaml}")
+        self.lbl_editor_title.configure(text=selected_yaml)
         self.raw_editor.delete("1.0", "end")
         self.raw_editor.insert("1.0", self.raw_yaml_text)
         self.build_editor_ui()
@@ -1080,71 +1163,118 @@ class ChipifyGUI(ctk.CTk):
 
     def gui_repr_param(self, x):
         return _ye_svc.gui_repr_param(x)
+
+    def action_new_datasheet(self):
+        """Create a new datasheet YAML from the starter template and open it."""
+        dialog = ctk.CTkInputDialog(text="Name for the new datasheet:",
+                                    title="New Datasheet")
+        name = dialog.get_input()
+        if not name or not name.strip():
+            return
+        try:
+            path = _ye_svc.create_datasheet(settings.IN_DIR, name)
+        except (ValueError, FileExistsError, OSError) as exc:
+            messagebox.showerror("New Datasheet", str(exc))
+            return
+        fname = os.path.basename(path)
+        self.refresh_yamls()
+        self.yaml_dropdown.set(fname)
+        self.on_yaml_select(fname)
+        self.tabs.set("Datasheet Editor")
+        self.lbl_status.configure(text=f"Status: Created {fname}", text_color="#2ecc71")
         
     def build_editor_ui(self):
-        for widget in self.editor_scroll.winfo_children(): widget.destroy()
+        import chipify.gui.theme as _theme_mod
+        for widget in self.param_scroll.winfo_children(): widget.destroy()
+        for widget in self.tests_scroll.winfo_children(): widget.destroy()
         self.param_vars = []
         self.test_vars = []
         self.param_key, params_dict = self.get_params_dict()
         self.test_key, tests_dict = self.get_tests_dict()
-        
-        param_header = ctk.CTkFrame(self.editor_scroll, fg_color="transparent")
-        param_header.pack(fill="x", pady=(10, 5))
-        ctk.CTkLabel(param_header, text="Sweep Parameters", font=ctk.CTkFont(size=16, weight="bold"), text_color="#3484F0").pack(side="left", padx=5)
-        ctk.CTkButton(param_header, text="+ Add Parameter", width=120, height=24, command=self.action_add_param, border_width=1).pack(side="right", padx=5)
-        
-        params_frame = ctk.CTkFrame(self.editor_scroll, fg_color=panel_color)
-        params_frame.pack(fill="x", padx=5, pady=5)
-        params_frame.grid_columnconfigure(1, weight=1)
-        
-        r = 0
+
+        muted = _theme_mod.TEXT_MUTED
+        card_bg = _theme_mod.CARD_BG
+        card_border = _theme_mod.CARD_BORDER
+        danger = _theme_mod.DANGER
+        small = ctk.CTkFont(size=11)
+        caption = ctk.CTkFont(size=10, weight="bold")
+
+        def _ghost_delete(parent, command):
+            return ctk.CTkButton(parent, text="✕", width=26, height=26,
+                                 fg_color="transparent", hover_color=card_border,
+                                 text_color=danger, command=command)
+
+        # ── Left column: sweep-parameters card ────────────────────────────────
+        pcard = ctk.CTkFrame(self.param_scroll, fg_color=card_bg, corner_radius=10,
+                             border_width=1, border_color=card_border)
+        pcard.pack(fill="x", pady=(0, 8))
+        pcard.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(pcard, text="Name", text_color=muted, font=small,
+                     anchor="w").grid(row=0, column=0, padx=(12, 4), pady=(10, 2), sticky="w")
+        ctk.CTkLabel(pcard, text="Values  (list or range DSL)", text_color=muted,
+                     font=small, anchor="w").grid(row=0, column=1, padx=4, pady=(10, 2), sticky="w")
+
+        r = 1
         for p_name, p_val in params_dict.items():
             key_var = ctk.StringVar(value=str(p_name))
             if not isinstance(p_val, list): val_str = self.gui_repr_param(p_val)
             else: val_str = ", ".join(self.gui_repr_param(x) for x in p_val)
             val_var = ctk.StringVar(value=val_str)
-            
-            ctk.CTkEntry(params_frame, textvariable=key_var, width=150).grid(row=r, column=0, padx=10, pady=5, sticky="w")
-            ctk.CTkEntry(params_frame, textvariable=val_var).grid(row=r, column=1, padx=10, pady=5, sticky="ew")
-            ctk.CTkButton(params_frame, text="×", width=30, fg_color="#e74c3c", hover_color="#c0392b", command=lambda idx=r: self.action_del_param(idx)).grid(row=r, column=2, padx=10, pady=5)
+
+            ctk.CTkEntry(pcard, textvariable=key_var, width=96, height=28,
+                         placeholder_text="name").grid(row=r, column=0, padx=(12, 4), pady=3, sticky="w")
+            ctk.CTkEntry(pcard, textvariable=val_var, height=28,
+                         placeholder_text="1.5, 2.0  or  range(10)").grid(row=r, column=1, padx=4, pady=3, sticky="ew")
+            _ghost_delete(pcard, lambda idx=r - 1: self.action_del_param(idx)).grid(
+                row=r, column=2, padx=(4, 10), pady=3)
             self.param_vars.append({'key': key_var, 'val': val_var})
             r += 1
-            
-        if r == 0:
-            ctk.CTkLabel(params_frame, text="No parameters defined.", text_color="gray").grid(row=0, column=0, padx=10, pady=10)
 
-        test_header = ctk.CTkFrame(self.editor_scroll, fg_color="transparent")
-        test_header.pack(fill="x", pady=(20, 5))
-        ctk.CTkLabel(test_header, text="Specifications (Boundaries)", font=ctk.CTkFont(size=16, weight="bold"), text_color="#3484F0").pack(side="left", padx=5)
-        ctk.CTkButton(test_header, text="+ Add Testbench", width=140, height=24, command=self.action_add_test).pack(side="right", padx=5)
+        if r == 1:
+            ctk.CTkLabel(pcard, text="No parameters yet — click  + Add",
+                         text_color=muted, font=small).grid(
+                row=1, column=0, columnspan=3, padx=12, pady=14, sticky="w")
+            r += 1
+        ctk.CTkFrame(pcard, fg_color="transparent", height=8).grid(row=r, column=0)
+
+        # ── Right column: one card per testbench ──────────────────────────────
+        # Keys handled by their own rows / not represented as boundary
+        # specs. 'measure' holds expression strings, not bounds — it is
+        # preserved untouched by sync_form_to_yaml.
+        _SKIP_KEYS = ('values', 'measure',
+                      'transient_signals', 'dc_signals', 'ac_signals')
 
         for t_idx, (tb_name, tb_data) in enumerate(tests_dict.items()):
             if not isinstance(tb_data, dict): tb_data = {}
-            frame = ctk.CTkFrame(self.editor_scroll, border_width=1, border_color="#565b5e")
-            frame.pack(fill="x", pady=10, padx=5)
-            frame.grid_columnconfigure(1, weight=1)
-            
+            card = ctk.CTkFrame(self.tests_scroll, fg_color=card_bg, corner_radius=10,
+                                border_width=1, border_color=card_border)
+            card.pack(fill="x", pady=(0, 10))
+
             tb_name_var = ctk.StringVar(value=str(tb_name))
-            row_header = ctk.CTkFrame(frame, fg_color="transparent")
-            row_header.pack(fill="x", padx=10, pady=(10, 5))
-            ctk.CTkLabel(row_header, text="Testbench Name:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 10))
-            ctk.CTkEntry(row_header, textvariable=tb_name_var, width=200).pack(side="left")
-            ctk.CTkButton(row_header, text="Delete Testbench", width=140, height=24, fg_color="#e74c3c", hover_color="#c0392b", command=lambda idx=t_idx: self.action_del_test(idx)).pack(side="right")
-            
-            val_frame = ctk.CTkFrame(frame, fg_color="transparent")
-            val_frame.pack(fill="x", padx=10, pady=5)
-            ctk.CTkLabel(val_frame, text="Measurement", text_color="gray").grid(row=0, column=0, padx=5, pady=2, sticky="w")
-            ctk.CTkLabel(val_frame, text="Min Spec", text_color="gray").grid(row=0, column=1, padx=5, pady=2, sticky="w")
-            ctk.CTkLabel(val_frame, text="Max Spec", text_color="gray").grid(row=0, column=2, padx=5, pady=2, sticky="w")
-            
-            # Keys handled by their own rows / not represented as boundary
-            # specs. 'measure' holds expression strings, not bounds — it is
-            # preserved untouched by sync_form_to_yaml.
-            _SKIP_KEYS = ('values', 'measure',
-                          'transient_signals', 'dc_signals', 'ac_signals')
+            hdr = ctk.CTkFrame(card, fg_color="transparent")
+            hdr.pack(fill="x", padx=12, pady=(10, 8))
+            ctk.CTkEntry(hdr, textvariable=tb_name_var, width=240, height=30,
+                         font=ctk.CTkFont(size=13, weight="bold"),
+                         placeholder_text="testbench name (tb/*.sch)").pack(side="left")
+            ctk.CTkButton(hdr, text="✕  Delete", width=86, height=26,
+                          fg_color="transparent", hover_color=card_border,
+                          text_color=danger,
+                          command=lambda idx=t_idx: self.action_del_test(idx)).pack(side="right")
+
+            # Measurements: Name | Min | Typ | Max | ✕ — trailing spacer column
+            # keeps rows left-aligned instead of stretching across the card.
+            val_frame = ctk.CTkFrame(card, fg_color="transparent")
+            val_frame.pack(fill="x", padx=12)
+            val_frame.grid_columnconfigure(5, weight=1)
+            for col, txt in enumerate(("Measurement", "Min", "Typ", "Max")):
+                ctk.CTkLabel(val_frame, text=txt, text_color=muted, font=small,
+                             anchor="w").grid(row=0, column=col, padx=(0, 6),
+                                              pady=(0, 2), sticky="w")
 
             test_val_vars = []
-            for v_idx, (v_name, v_data) in enumerate(tb_data.items()):
+            row_i = 1
+            for v_name, v_data in tb_data.items():
                 if v_name in _SKIP_KEYS:
                     continue
                 if not isinstance(v_data, dict): v_data = {}
@@ -1152,26 +1282,45 @@ class ChipifyGUI(ctk.CTk):
 
                 min_val = v_data.get('vmin', v_data.get('min', ''))
                 max_val = v_data.get('vmax', v_data.get('max', ''))
+                typ_val = v_data.get('vtyp', v_data.get('typ', ''))
 
-                v_min = ctk.StringVar(value=str(min_val) if min_val is not None else '')
-                v_max = ctk.StringVar(value=str(max_val) if max_val is not None else '')
+                v_min = ctk.StringVar(value=_ye_svc.fmt_bound(min_val))
+                v_max = ctk.StringVar(value=_ye_svc.fmt_bound(max_val))
+                v_typ = ctk.StringVar(value=_ye_svc.fmt_bound(typ_val))
 
-                ctk.CTkEntry(val_frame, textvariable=v_name_var, width=150).grid(row=1+v_idx, column=0, padx=5, pady=2)
-                ctk.CTkEntry(val_frame, textvariable=v_min, width=80).grid(row=1+v_idx, column=1, padx=5, pady=2)
-                ctk.CTkEntry(val_frame, textvariable=v_max, width=80).grid(row=1+v_idx, column=2, padx=5, pady=2)
-                ctk.CTkButton(val_frame, text="X", width=24, height=24, fg_color="transparent", border_width=1, command=lambda t=t_idx, v=v_name: self.action_del_value(t, v)).grid(row=1+v_idx, column=3, padx=5, pady=2)
+                ctk.CTkEntry(val_frame, textvariable=v_name_var, width=150,
+                             height=26).grid(row=row_i, column=0, padx=(0, 6), pady=2, sticky="w")
+                ctk.CTkEntry(val_frame, textvariable=v_min, width=80, height=26,
+                             justify="right").grid(row=row_i, column=1, padx=(0, 6), pady=2)
+                ctk.CTkEntry(val_frame, textvariable=v_typ, width=80, height=26,
+                             justify="right").grid(row=row_i, column=2, padx=(0, 6), pady=2)
+                ctk.CTkEntry(val_frame, textvariable=v_max, width=80, height=26,
+                             justify="right").grid(row=row_i, column=3, padx=(0, 6), pady=2)
+                _ghost_delete(val_frame,
+                              lambda t=t_idx, v=v_name: self.action_del_value(t, v)
+                              ).grid(row=row_i, column=4, pady=2)
 
                 # orig_name lets sync_form_to_yaml find the original spec dict
-                # after a rename, so typ:/extra keys survive the round-trip.
+                # after a rename, so measure:/extra keys survive the round-trip.
                 test_val_vars.append({'name': v_name_var, 'vmin': v_min,
-                                      'vmax': v_max, 'orig_name': str(v_name)})
+                                      'vmax': v_max, 'vtyp': v_typ,
+                                      'orig_name': str(v_name)})
+                row_i += 1
 
-            # One row per analysis kind. The YAML keys are 'transient_signals',
-            # 'dc_signals', 'ac_signals' — matching schema.py / analyses.py.
+            if row_i == 1:
+                ctk.CTkLabel(val_frame, text="No measurements yet",
+                             text_color=muted, font=small).grid(
+                    row=1, column=0, columnspan=4, pady=4, sticky="w")
+
+            # Captured-signals subsection — one compact row per analysis kind.
+            # The YAML keys are 'transient_signals', 'dc_signals', 'ac_signals'
+            # — matching schema.py / analyses.py.
+            ctk.CTkLabel(card, text="CAPTURED SIGNALS", text_color=muted,
+                         font=caption).pack(anchor="w", padx=12, pady=(10, 2))
             analysis_rows = (
-                ("transient_signals", "Transient Signals:", "e.g.  v(out), v(in), i(vdd)"),
-                ("dc_signals",        "DC Sweep Signals:",  "e.g.  i(vdd), v(out)"),
-                ("ac_signals",        "AC / Bode Signals:", "e.g.  v(out), v(in)"),
+                ("transient_signals", "Transient", "e.g.  v(out), v(in), i(vdd)"),
+                ("dc_signals",        "DC Sweep",  "e.g.  i(vdd), v(out)"),
+                ("ac_signals",        "AC / Bode", "e.g.  v(out), v(in)"),
             )
             analysis_vars: dict = {}
             for yaml_key, label, placeholder in analysis_rows:
@@ -1181,12 +1330,11 @@ class ChipifyGUI(ctk.CTk):
                 else:
                     initial = str(existing)
                 sig_var = ctk.StringVar(value=initial)
-                row = ctk.CTkFrame(frame, fg_color="transparent")
-                row.pack(fill="x", padx=10, pady=(4, 0))
-                ctk.CTkLabel(row, text=label, text_color="#3484F0",
-                             font=ctk.CTkFont(size=12), width=140, anchor="w"
-                             ).pack(side=tk.LEFT, padx=(0, 8))
-                ctk.CTkEntry(row, textvariable=sig_var,
+                row = ctk.CTkFrame(card, fg_color="transparent")
+                row.pack(fill="x", padx=12, pady=(0, 3))
+                ctk.CTkLabel(row, text=label, text_color=muted, font=small,
+                             width=70, anchor="w").pack(side=tk.LEFT, padx=(0, 8))
+                ctk.CTkEntry(row, textvariable=sig_var, height=26,
                              placeholder_text=placeholder
                              ).pack(side=tk.LEFT, fill="x", expand=True)
                 analysis_vars[yaml_key] = sig_var
@@ -1199,7 +1347,16 @@ class ChipifyGUI(ctk.CTk):
                 'tran_signals': analysis_vars['transient_signals'],
                 'analysis_signals': analysis_vars,
             })
-            ctk.CTkButton(frame, text="+ Add Measurement", width=140, height=24, fg_color="transparent", border_width=1, command=lambda idx=t_idx: self.action_add_value(idx)).pack(anchor="w", padx=10, pady=(5, 10))
+            ctk.CTkButton(card, text="+ Add Measurement", width=144, height=26,
+                          fg_color="transparent", border_width=1,
+                          text_color=("gray10", "#DCE4EE"),
+                          command=lambda idx=t_idx: self.action_add_value(idx)
+                          ).pack(anchor="w", padx=12, pady=(8, 12))
+
+        if not tests_dict:
+            ctk.CTkLabel(self.tests_scroll,
+                         text="No testbenches yet — click  + Add Testbench",
+                         text_color=muted, font=small).pack(pady=24)
 
     def sync_ui_to_state(self):
         if not isinstance(self.current_yaml_data, dict):
@@ -1360,6 +1517,7 @@ class ChipifyGUI(ctk.CTk):
         
         self.wc_scroll = ctk.CTkScrollableFrame(self.tab_worst, fg_color="transparent")
         self.wc_scroll.grid(row=1, column=0, sticky="nsew")
+        _bind_mousewheel(self.wc_scroll)
         self.lbl_wc_empty = ctk.CTkLabel(self.wc_scroll, text="Start a simulation to see outliers...", text_color="gray")
         self.lbl_wc_empty.pack(pady=50)
 
@@ -2276,7 +2434,8 @@ class ChipifyGUI(ctk.CTk):
         # ``fg_color="transparent"`` — force it to the panel colour so the
         # tab content area no longer shows the previous appearance's bg.
         for _sf in (
-            getattr(self, "editor_scroll", None),
+            getattr(self, "param_scroll", None),
+            getattr(self, "tests_scroll", None),
             getattr(self, "wc_scroll", None),
             getattr(self, "_eq_scroll", None),
             getattr(self, "_tran_eq_scroll", None),
@@ -2287,6 +2446,12 @@ class ChipifyGUI(ctk.CTk):
                 except Exception:
                     pass
 
+        # Muted/secondary labels track the theme's text token.
+        try:
+            self.lbl_editor_title.configure(text_color=_theme_mod.TEXT_MUTED)
+        except Exception:
+            pass
+
         # Refresh module globals so dynamically-rebuilt UI (e.g. params_frame
         # in build_editor_ui) picks up the new colours on its next rebuild.
         background_color = bg_fg
@@ -2295,7 +2460,7 @@ class ChipifyGUI(ctk.CTk):
         # Rebuild the YAML editor pane so its panel-coloured frames adopt the
         # new theme. sync_ui_to_state() flushes in-progress edits to the model
         # so the rebuild does not drop them.
-        if getattr(self, "current_yaml_path", None) and self.param_vars:
+        if getattr(self, "current_yaml_path", None) and (self.param_vars or self.test_vars):
             try:
                 self.sync_ui_to_state()
                 self.build_editor_ui()

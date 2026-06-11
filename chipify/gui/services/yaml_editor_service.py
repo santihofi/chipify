@@ -2,11 +2,16 @@
 yaml_editor_service.py – Pure-logic helpers for the YAML datasheet editor tab.
 
 No tkinter imports.  The editor tab calls these functions to translate between
-the raw YAML dict and the form-variable state.
+the raw YAML dict and the form-variable state, and to create new datasheet
+files from a starter template.
 """
 from __future__ import annotations
 
+import os
+import re
 from typing import Any
+
+_RE_BAD_FILENAME = re.compile(r'[\\/:*?"<>|]+')
 
 
 # ── Parameter display helpers ─────────────────────────────────────────────────
@@ -17,18 +22,79 @@ def gui_repr_param(x: Any) -> str:
 
     - Strings that look like DSL calls or plain numbers are left as-is.
     - Other strings are wrapped in single quotes.
+    - Numbers use compact %g formatting (1000000.0 → 1e+06).
     - Everything else uses ``str()``.
     """
     if isinstance(x, str):
         stripped = x.strip()
-        # DSL call (range/linspace/…) or numpy expression
-        if stripped.startswith("range(") or stripped.startswith("np."):
+        # DSL call (range/linspace/logspace) or numpy expression
+        if stripped.startswith(("range(", "linspace(", "logspace(", "np.")):
             return stripped
         # Plain numeric string
         if stripped.replace(".", "", 1).replace("-", "", 1).isdigit():
             return stripped
         return f"'{stripped}'"
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return f"{x:g}"
     return str(x)
+
+
+def fmt_bound(v: Any) -> str:
+    """Format a measurement bound for an entry field: compact for numbers."""
+    if v is None:
+        return ""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return f"{v:g}"
+    return str(v)
+
+
+# ── New-datasheet helpers ─────────────────────────────────────────────────────
+
+def new_datasheet_template() -> str:
+    """Return a commented starter datasheet (see examples/datasheet.yaml)."""
+    return (
+        "# Chipify datasheet — see examples/datasheet.yaml for the full,\n"
+        "# documented template.\n"
+        "\n"
+        "# Each entry becomes a swept dimension. Values may be a list of\n"
+        "# discrete values or a range DSL string: range(N), linspace(a, b, N),\n"
+        "# logspace(a, b, N).\n"
+        "parameters:\n"
+        "  temp: [27]\n"
+        "  seed: range(10)\n"
+        "\n"
+        "# Each key under tests is the name of an Xschem testbench schematic\n"
+        "# in your tb/ folder (without the .sch extension).\n"
+        "tests:\n"
+        "  tb_example:\n"
+        "    my_measurement:\n"
+        "      min: 0.0\n"
+        "      max: 1.0\n"
+        "      typ: 0.5\n"
+    )
+
+
+def create_datasheet(in_dir: str, name: str) -> str:
+    """Create ``<in_dir>/<name>.yaml`` from the starter template.
+
+    The name is sanitised (path separators and other illegal filename
+    characters become underscores; a ``.yaml``/``.yml`` extension is added if
+    missing). Raises ValueError for an empty name and FileExistsError if the
+    file already exists. Returns the path written.
+    """
+    base = _RE_BAD_FILENAME.sub("_", (name or "").strip()).strip("._ ")
+    if not base:
+        raise ValueError("Datasheet name must not be empty.")
+    if not base.lower().endswith((".yaml", ".yml")):
+        base += ".yaml"
+
+    os.makedirs(in_dir, exist_ok=True)
+    path = os.path.join(in_dir, base)
+    if os.path.exists(path):
+        raise FileExistsError(f"{base} already exists in {in_dir}.")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(new_datasheet_template())
+    return path
 
 
 # ── YAML structural helpers ───────────────────────────────────────────────────
@@ -140,7 +206,9 @@ def sync_form_to_yaml(
         if not k:
             continue
 
-        if v_str.startswith("range(") or v_str.startswith("np."):
+        # A DSL expression is a single value — never comma-split it
+        # (linspace/logspace contain commas inside the call).
+        if v_str.startswith(("range(", "linspace(", "logspace(", "np.")):
             yaml_data[param_key][k] = v_str
             continue
 
@@ -225,6 +293,8 @@ def sync_form_to_yaml(
             )
             _set_bound(v_data, "min", "vmin", v_dict["vmin"].get().strip())
             _set_bound(v_data, "max", "vmax", v_dict["vmax"].get().strip())
+            if "vtyp" in v_dict:  # older form states may not carry a typ field
+                _set_bound(v_data, "typ", "vtyp", v_dict["vtyp"].get().strip())
             tb_content[name] = v_data
 
         yaml_data[test_key][tb_name] = tb_content

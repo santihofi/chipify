@@ -20,6 +20,7 @@ from chipify import app_config as _app_config
 from chipify.gui.services import data_loader as _dl_mp
 from chipify.gui.services.throttled_redraw import ThrottledRedraw
 from chipify.gui.widgets.export_button import attach_export_button
+from chipify.gui.widgets.scrolling import bind_mousewheel as _bind_mousewheel
 
 # ── Shared style ──────────────────────────────────────────────────────────────
 # These remain as fallback defaults; live colours come from `_theme_colors()`
@@ -735,6 +736,7 @@ class MultiPlotWindow(ctk.CTkToplevel):
         self._scroll = ctk.CTkScrollableFrame(
             self, fg_color=bg, corner_radius=0)
         self._scroll.pack(side="top", fill="both", expand=True)
+        _bind_mousewheel(self._scroll)
 
         self.grid_frame = self._scroll
         for c in range(self._ncols):

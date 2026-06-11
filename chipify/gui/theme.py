@@ -17,10 +17,17 @@ import customtkinter as ctk
 # (gray92 ≈ #ebebeb, gray86 ≈ #dbdbdb, gray17 ≈ #2b2b2b, gray14 ≈ #242424).
 
 THEMES: dict[str, dict] = {
-    "night": {"ctk_mode": "dark",  "bg": "#000000", "panel": "#1a1a1a", "mpl_bg": "#1a1a1a", "mpl_fg": "white"},
-    "dark":  {"ctk_mode": "dark",  "bg": "#242424", "panel": "#2b2b2b", "mpl_bg": "#2b2b2b", "mpl_fg": "white"},
-    "light": {"ctk_mode": "light", "bg": "#ebebeb", "panel": "#dbdbdb", "mpl_bg": "white",   "mpl_fg": "#2b2b2b"},
+    "night": {"ctk_mode": "dark",  "bg": "#000000", "panel": "#1a1a1a", "mpl_bg": "#1a1a1a", "mpl_fg": "white",
+              "card_bg": "#111111", "card_border": "#2e2e2e", "text_muted": "#9a9a9a"},
+    "dark":  {"ctk_mode": "dark",  "bg": "#242424", "panel": "#2b2b2b", "mpl_bg": "#2b2b2b", "mpl_fg": "white",
+              "card_bg": "#232323", "card_border": "#3d3d3d", "text_muted": "#9a9a9a"},
+    "light": {"ctk_mode": "light", "bg": "#ebebeb", "panel": "#dbdbdb", "mpl_bg": "white",   "mpl_fg": "#2b2b2b",
+              "card_bg": "#f2f2f2", "card_border": "#c9c9c9", "text_muted": "#6b6b6b"},
 }
+
+# Theme-independent semantic colours.
+ACCENT: str = "#3484F0"
+DANGER: str = "#e74c3c"
 
 
 def _load_initial() -> str:
@@ -41,6 +48,9 @@ BACKGROUND_COLOR: str = _t["bg"]
 PANEL_COLOR: str = _t["panel"]
 MPL_BG_COLOR: str = _t["mpl_bg"]
 MPL_FG_COLOR: str = _t["mpl_fg"]
+CARD_BG: str = _t["card_bg"]
+CARD_BORDER: str = _t["card_border"]
+TEXT_MUTED: str = _t["text_muted"]
 CURRENT_MODE: str = _initial
 
 # Legacy aliases
@@ -51,6 +61,7 @@ panel_color = PANEL_COLOR
 def apply_theme(mode: str) -> None:
     """Update module globals and CTk appearance for *mode* (night|dark|light)."""
     global BACKGROUND_COLOR, PANEL_COLOR, MPL_BG_COLOR, MPL_FG_COLOR, CURRENT_MODE
+    global CARD_BG, CARD_BORDER, TEXT_MUTED
     global background_color, panel_color
     t = THEMES.get(mode, THEMES["night"])
     ctk.set_appearance_mode(t["ctk_mode"])
@@ -58,6 +69,9 @@ def apply_theme(mode: str) -> None:
     PANEL_COLOR = t["panel"]
     MPL_BG_COLOR = t["mpl_bg"]
     MPL_FG_COLOR = t["mpl_fg"]
+    CARD_BG = t["card_bg"]
+    CARD_BORDER = t["card_border"]
+    TEXT_MUTED = t["text_muted"]
     CURRENT_MODE = mode
     background_color = BACKGROUND_COLOR
     panel_color = PANEL_COLOR

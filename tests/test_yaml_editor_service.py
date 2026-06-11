@@ -107,6 +107,16 @@ def test_gui_repr_param_numpy_string() -> None:
     assert gui_repr_param("np.linspace(0, 1, 5)") == "np.linspace(0, 1, 5)"
 
 
+def test_gui_repr_param_dsl_strings_unquoted() -> None:
+    assert gui_repr_param("linspace(0.6, 0.9, 4)") == "linspace(0.6, 0.9, 4)"
+    assert gui_repr_param("logspace(0, 2, 3)") == "logspace(0, 2, 3)"
+
+
+def test_gui_repr_param_compact_floats() -> None:
+    assert gui_repr_param(1000000.0) == "1e+06"
+    assert gui_repr_param(0.75) == "0.75"
+
+
 def test_gui_repr_param_numeric_string() -> None:
     assert gui_repr_param("1.8") == "1.8"
 
@@ -148,10 +158,12 @@ def _form_state(yaml_data: dict) -> tuple[list, list]:
             v_data = v_data if isinstance(v_data, dict) else {}
             vmin = v_data.get("vmin", v_data.get("min", ""))
             vmax = v_data.get("vmax", v_data.get("max", ""))
+            vtyp = v_data.get("vtyp", v_data.get("typ", ""))
             values.append({
                 "name": _Var(str(v_name)),
                 "vmin": _Var(str(vmin) if vmin is not None else ""),
                 "vmax": _Var(str(vmax) if vmax is not None else ""),
+                "vtyp": _Var(str(vtyp) if vtyp is not None else ""),
                 "orig_name": str(v_name),
             })
         analysis_vars = {
@@ -224,9 +236,87 @@ def test_sync_clearing_bound_removes_it() -> None:
     assert tb["gain"]["min"] == 40.0
 
 
+def test_sync_keeps_dsl_params_intact() -> None:
+    # linspace/logspace contain commas — the sync must not comma-split them
+    # into a broken list (that silently corrupted datasheets on save).
+    data = {"parameters": {"vincm": "linspace(0.6, 0.9, 4)"}, "tests": {}}
+    pv = [{"key": _Var("vincm"), "val": _Var("linspace(0.6, 0.9, 4)")}]
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, [], str)
+    assert out["parameters"]["vincm"] == "linspace(0.6, 0.9, 4)"
+
+
 def test_sync_clearing_signals_removes_key() -> None:
     data = _sample_yaml()
     pv, tv = _form_state(data)
     tv[0]["analysis_signals"]["ac_signals"] = _Var("")
     out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
     assert "ac_signals" not in out["tests"]["tb_gain"]
+
+
+def test_sync_updates_typ() -> None:
+    data = _sample_yaml()
+    pv, tv = _form_state(data)
+    tv[0]["values"][0]["vtyp"] = _Var("65")
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
+    assert out["tests"]["tb_gain"]["gain"]["typ"] == 65.0
+
+
+def test_sync_clearing_typ_removes_it() -> None:
+    data = _sample_yaml()
+    pv, tv = _form_state(data)
+    tv[0]["values"][0]["vtyp"] = _Var("")
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
+    tb = out["tests"]["tb_gain"]
+    assert "typ" not in tb["gain"]
+    assert tb["gain"]["min"] == 40.0          # other bounds untouched
+
+
+def test_sync_without_vtyp_field_is_backcompat() -> None:
+    # Form states built before the Typ column carry no 'vtyp' key — the
+    # original typ value must survive untouched via the merge.
+    data = _sample_yaml()
+    pv, tv = _form_state(data)
+    del tv[0]["values"][0]["vtyp"]
+    out = sync_form_to_yaml(data, "parameters", "tests", pv, tv, str)
+    assert out["tests"]["tb_gain"]["gain"]["typ"] == 60.0
+
+
+# ── create_datasheet / new_datasheet_template ─────────────────────────────────
+
+def test_template_is_a_valid_datasheet() -> None:
+    import yaml
+    from chipify.gui.services.yaml_editor_service import new_datasheet_template
+    from chipify.schema import validate_datasheet
+    data = yaml.safe_load(new_datasheet_template())
+    stim = validate_datasheet(data)
+    assert stim.params and stim.tests
+    assert stim.tests[0].value_lst[0].vmin == 0.0
+
+
+def test_create_datasheet_writes_template(tmp_path) -> None:
+    from chipify.gui.services.yaml_editor_service import create_datasheet
+    path = create_datasheet(str(tmp_path), "my_design")
+    assert path.endswith("my_design.yaml")
+    text = open(path, encoding="utf-8").read()
+    assert "parameters:" in text and "tests:" in text
+
+
+def test_create_datasheet_sanitises_name(tmp_path) -> None:
+    from chipify.gui.services.yaml_editor_service import create_datasheet
+    path = create_datasheet(str(tmp_path), "  ../weird:name?  ")
+    import os
+    assert os.path.dirname(path) == str(tmp_path)       # no path escape
+    assert os.path.basename(path) == "weird_name.yaml"
+
+
+def test_create_datasheet_refuses_overwrite(tmp_path) -> None:
+    from chipify.gui.services.yaml_editor_service import create_datasheet
+    create_datasheet(str(tmp_path), "a")
+    with pytest.raises(FileExistsError):
+        create_datasheet(str(tmp_path), "a")
+
+
+def test_create_datasheet_rejects_empty_name(tmp_path) -> None:
+    from chipify.gui.services.yaml_editor_service import create_datasheet
+    with pytest.raises(ValueError):
+        create_datasheet(str(tmp_path), "   ")
