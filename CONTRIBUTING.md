@@ -24,7 +24,8 @@ not require them.
 - **Type-check the typed core:**
   ```bash
   python -m mypy chipify/expression.py chipify/schema.py chipify/util.py \
-      chipify/app_config.py chipify/settings.py chipify/gui/state.py
+      chipify/app_config.py chipify/settings.py chipify/gui/state.py \
+      chipify/gui/services/plugin_context.py
   ```
   CI runs both of these on every push and pull request.
 - Keep changes focused and describe *why* in the PR.

@@ -20,6 +20,7 @@ from __future__ import annotations
 import glob
 import logging
 import os
+from typing import Any
 
 import pandas as pd
 
@@ -31,7 +32,7 @@ log = logging.getLogger("chipify.gui.services.transient")
 # ── Generic helpers ──────────────────────────────────────────────────────────
 
 def resolve_analysis_dir(df: pd.DataFrame, out_dir: str, kind: str,
-                         meta: dict | None = None) -> str:
+                         meta: dict[str, Any] | None = None) -> str:
     """
     Find the per-run CSV directory for ``kind`` (transient/dc/ac).
 
@@ -51,23 +52,23 @@ def resolve_analysis_dir(df: pd.DataFrame, out_dir: str, kind: str,
     if hasattr(df, "attrs"):
         adirs = df.attrs.get("analysis_dirs", {})
         if isinstance(adirs, dict):
-            d = adirs.get(kind, "")
+            d = str(adirs.get(kind, "") or "")
             if d and os.path.isdir(d):
                 return d
         # 2. Back-compat alias for transient.
         if kind == "transient":
-            d = df.attrs.get("tran_dir", "")
+            d = str(df.attrs.get("tran_dir", "") or "")
             if d and os.path.isdir(d):
                 return d
 
     # 3. History run's meta sidecar.
     if isinstance(meta, dict):
         meta_adirs = meta.get("analysis_dirs", {})
-        d = meta_adirs.get(kind, "") if isinstance(meta_adirs, dict) else ""
+        d = str(meta_adirs.get(kind, "") or "") if isinstance(meta_adirs, dict) else ""
         if d and os.path.isdir(d):
             return d
         if kind == "transient":
-            d = meta.get("tran_dir", "")
+            d = str(meta.get("tran_dir", "") or "")
             if d and os.path.isdir(d):
                 return d
 

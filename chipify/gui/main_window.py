@@ -115,6 +115,21 @@ class ChipifyGUI(ctk.CTk):
         
     def _on_app_close(self):
         """Stop the mainloop reliably, then tear down the window."""
+        for name, (plugin, ctx) in getattr(self, "_tab_plugins", {}).items():
+            try:
+                plugin.on_close()
+            except Exception:
+                log.exception("Tab plugin %r on_close failed.", name)
+            try:
+                ctx.unsubscribe_all()
+            except Exception:
+                pass
+        # Cancel scheduled redraws so they can't fire into destroyed widgets.
+        for t in getattr(self, "_all_throttles", []) or []:
+            try:
+                t.cancel_pending()
+            except Exception:
+                pass
         try:
             self.quit()
         finally:
@@ -243,8 +258,81 @@ class ChipifyGUI(ctk.CTk):
         self.setup_adv_analytics_tab()
         self.setup_equations_tab()
         self.setup_transient_tab()
+        self.setup_plugin_tabs()
 
         self._wire_live_plotting_hooks()
+
+    # ── Tab plugins (see PLUGINS.md) ──────────────────────────────────────────
+
+    _BUILTIN_TAB_NAMES = ("Datasheet Editor", "Measurements", "Histograms",
+                          "Advanced Analytics", "Custom Equations", "Transient")
+
+    def setup_plugin_tabs(self):
+        """Create one tab per discovered TabPlugin.
+
+        Every plugin call is exception-guarded: a plugin that fails to build
+        gets an error panel in its own tab and the app keeps running.
+        """
+        self._tab_plugins: dict = {}
+        try:
+            from chipify.plugin_loader import get_tab_plugins
+            plugin_classes = get_tab_plugins()
+        except Exception:
+            log.exception("Tab-plugin discovery failed.")
+            return
+
+        from chipify.gui.services.plugin_context import PluginContext
+
+        for cls in plugin_classes:
+            name = str(getattr(cls, "name", "") or "").strip()
+            if not name or name in self._BUILTIN_TAB_NAMES or name in self._tab_plugins:
+                log.warning("Tab plugin %r skipped (missing or colliding tab name).", name)
+                continue
+            try:
+                frame = self.tabs.add(name)
+            except Exception:
+                log.exception("Could not create a tab for plugin %r.", name)
+                continue
+
+            ctx = PluginContext(
+                app_state=self.app_state,
+                get_yaml_path=lambda: self.current_yaml_path,
+                tk_after=self.after,
+                set_status=self._set_export_status,
+                plugin_name=name,
+            )
+            try:
+                plugin = cls()
+                plugin.build(frame, ctx)
+            except Exception as exc:
+                log.exception("Tab plugin %r failed to build.", name)
+                self._render_plugin_error(frame, name, exc)
+                continue
+            self._tab_plugins[name] = (plugin, ctx)
+            log.info("Tab plugin loaded: %s", name)
+
+    @staticmethod
+    def _render_plugin_error(frame, name: str, exc: Exception) -> None:
+        """Replace a broken plugin tab's content with an error panel."""
+        try:
+            for w in frame.winfo_children():
+                w.destroy()
+            ctk.CTkLabel(
+                frame,
+                text=(f"Plugin '{name}' failed to load:\n\n{exc}\n\n"
+                      f"See out/chipify.log for the full traceback."),
+                text_color="#e74c3c", justify="left",
+            ).pack(anchor="w", padx=24, pady=24)
+        except Exception:
+            log.exception("Could not render error panel for plugin %r.", name)
+
+    def _notify_tab_plugins(self) -> None:
+        """Fan out on_data_changed to every loaded TabPlugin (guarded)."""
+        for name, (plugin, ctx) in getattr(self, "_tab_plugins", {}).items():
+            try:
+                plugin.on_data_changed(ctx)
+            except Exception:
+                log.exception("Tab plugin %r on_data_changed failed.", name)
 
     def _wire_live_plotting_hooks(self) -> None:
         """Subscribe AppState signals and build throttled redraw schedulers."""
@@ -290,6 +378,7 @@ class ChipifyGUI(ctk.CTk):
         if self._resolve_tran_dir():
             self.update_transient_plot()
         self._notify_multiplot()
+        self._notify_tab_plugins()
 
     def _on_live_chunk(self, df=None, stim=None, chunk_len=0, **kwargs) -> None:
         del chunk_len
@@ -989,6 +1078,13 @@ class ChipifyGUI(ctk.CTk):
                 self.update_transient_plot()
         except Exception:
             pass
+        try:
+            entry = getattr(self, "_tab_plugins", {}).get(self.tabs.get())
+            if entry is not None:
+                plugin, ctx = entry
+                plugin.on_show(ctx)
+        except Exception:
+            log.exception("Tab plugin on_show failed.")
         try:
             if self.app_state.simulation_active and app_config.is_live_plotting_enabled():
                 active_tab = self.tabs.get()
@@ -2607,7 +2703,12 @@ def main():
     app_config.setup_logging()
     log.info("Chipify GUI starting up.")
     app = ChipifyGUI()
-    app.mainloop()
+    try:
+        app.mainloop()
+    except tk.TclError:
+        # Pending after-callbacks firing into destroyed widgets during
+        # shutdown can raise TclError out of mainloop — benign at this point.
+        log.debug("TclError during shutdown (ignored).", exc_info=True)
     log.info("Chipify GUI shut down.")
 
 if __name__ == "__main__":

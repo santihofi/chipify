@@ -11,11 +11,14 @@ Chipify supports user plugins that extend the GUI and report output without modi
 3. [ReportPlugin](#reportplugin)
 4. [ExpressionPlugin](#expressionplugin)
 5. [ExporterPlugin](#exporterplugin)
-6. [Data reference](#data-reference)
-7. [API versioning](#api-versioning)
-8. [Error behaviour](#error-behaviour)
-9. [Diagnostics](#diagnostics)
-10. [Security note](#security-note)
+6. [TabPlugin](#tabplugin)
+7. [PluginContext reference](#plugincontext-reference)
+8. [Example: AI review tab (Claude API)](#example-ai-review-tab-claude-api)
+9. [Data reference](#data-reference)
+10. [API versioning](#api-versioning)
+11. [Error behaviour](#error-behaviour)
+12. [Diagnostics](#diagnostics)
+13. [Security note](#security-note)
 
 ---
 
@@ -278,6 +281,227 @@ After restarting Chipify both formats appear in the Export menu of every plot.
 
 ---
 
+## TabPlugin
+
+`TabPlugin` adds a whole tab to the Chipify main window — the most powerful plugin type. The plugin builds its own UI (customtkinter / tkinter widgets) into a frame the host provides, and accesses simulation data exclusively through a [`PluginContext`](#plugincontext-reference) facade: results, datasheet specs, rendered SPICE netlists, history runs, waveforms, and a thread bridge for calling external APIs without freezing the GUI.
+
+### Class attributes
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | `str` | **Yes** | Tab title shown in the main window. Must be unique and must not collide with a built-in tab name (`Datasheet Editor`, `Measurements`, `Histograms`, `Advanced Analytics`, `Custom Equations`, `Transient`). |
+| `api_version` | `str` | No | Plugin API version. Default `"1"`. |
+
+### Methods
+
+#### `build` *(required)*
+
+```python
+def build(self, parent, context) -> None:
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `parent` | tk frame | The empty tab content area. Build your widgets into it (customtkinter recommended; plain tkinter works too). |
+| `context` | `PluginContext` | The data facade — see [PluginContext reference](#plugincontext-reference). The same instance is passed to every lifecycle call, so you may keep a reference. |
+
+Called exactly once at application startup. If `build()` raises, the host replaces the tab content with an error panel naming your plugin and the exception — the application keeps running.
+
+#### `on_data_changed` *(optional)*
+
+```python
+def on_data_changed(self, context) -> None:
+```
+
+Called on the Tk main thread whenever new simulation results are loaded or the active datasheet changes (a sweep finished, a history run was selected, custom equations were applied). Refresh your widgets from `context` here.
+
+#### `on_show` *(optional)*
+
+```python
+def on_show(self, context) -> None:
+```
+
+Called when the user switches to your tab. Useful for lazy refreshes.
+
+#### `on_close` *(optional)*
+
+```python
+def on_close(self) -> None:
+```
+
+Called once at application shutdown. Release external resources here (network sessions, subprocesses, open files).
+
+### Lifecycle
+
+- Tabs are created once at startup; restart Chipify to pick up new or changed plugin files (same as every other plugin type, `reload_plugins()` notwithstanding).
+- All lifecycle calls happen on the Tk main thread and are exception-guarded by the host — a raising plugin is logged (`out/chipify.log`) and skipped for that call; it never crashes the app.
+- **Never block the Tk main thread.** Anything slower than ~50 ms (HTTP calls, big file reads, LLM requests) belongs in `context.run_async(...)`.
+
+### Minimal example
+
+```python
+# ~/.chipify/plugins/run_counter_tab.py
+import customtkinter as ctk
+from chipify.plugin_loader import TabPlugin
+
+class RunCounter(TabPlugin):
+    name = "Run Counter"
+
+    def build(self, parent, context):
+        theme = context.theme()
+        self._lbl = ctk.CTkLabel(parent, text="No data loaded yet.",
+                                 text_color=theme["text_muted"])
+        self._lbl.pack(pady=40)
+        self.on_data_changed(context)
+
+    def on_data_changed(self, context):
+        s = context.summary()
+        self._lbl.configure(
+            text=f"{s['total']} runs — {s['passed']} passing ({s['yield_pct']}%)")
+```
+
+A complete, runnable example ships with the repository at `examples/plugins/run_info_tab.py` — copy it into your plugin directory as a starting point.
+
+---
+
+## PluginContext reference
+
+The `context` object handed to every TabPlugin call is the **only supported way** to read application data. Everything it returns is a defensive copy or plain serializable data — mutating it never affects the application — and its API is stable across chipify releases (`context.api_version`).
+
+### Results
+
+| Member | Returns |
+|--------|---------|
+| `results(valid_only=False)` | Copy of the loaded result DataFrame, or `None`. `valid_only=True` keeps only rows with `sim_error == 'None'`. |
+| `summary()` | `{"total", "crashes", "valid", "passed", "yield_pct"}` for the loaded run. |
+
+### Datasheet & specs
+
+| Member | Returns |
+|--------|---------|
+| `datasheet_path` | Absolute path of the selected datasheet YAML, or `None`. |
+| `datasheet_text()` | Raw YAML text (comments included); `""` when none. |
+| `specs()` | **JSON-serializable** dict of the parsed datasheet: `{"datasheet", "parameters", "tests": {tb: {"measurements": {name: {min, typ, max}}, "signals", "measure"}}}`. Designed to be dumped straight into an LLM prompt. |
+
+### Netlists & testbenches
+
+| Member | Returns |
+|--------|---------|
+| `netlists()` | `{tb_name: rendered SPICE netlist text}`. Available after at least one simulation in the project; `{}` before. |
+| `testbench_paths()` | `{tb_name: absolute path to the tb/*.sch schematic}` for files that exist. |
+
+### History & waveforms
+
+| Member | Returns |
+|--------|---------|
+| `history_runs()` | Run labels, newest first (same labels as the History dropdown). |
+| `load_run(label)` | DataFrame for one history run, or `None`. |
+| `run_meta(label)` | Sidecar metadata dict (`yaml`, `duration_s`, `global_yield`, …); `{}` when absent. |
+| `analysis_kinds()` | Which of `transient` / `dc` / `ac` have waveform data for the loaded run. |
+| `waveforms(kind, run_ids=None)` | Combined per-run waveform DataFrame (`run_id` + time/sweep/frequency + signals). Defaults to all valid runs — pass explicit `run_ids` to limit the load. |
+
+### Environment
+
+| Member | Returns |
+|--------|---------|
+| `dirs` | `{"in_dir", "out_dir", "tb_dir", "work_dir"}` absolute paths. |
+| `theme()` | Active palette: plot keys (`bg`, `fg`, `grid`, `spine`, `legend_*`, `accent`) plus widget tokens (`window_bg`, `panel`, `card_bg`, `card_border`, `text_muted`, `danger`). Use these so your tab matches the app theme. |
+| `chipify_version` / `api_version` | Version strings. |
+
+### Events & threading
+
+| Member | Behaviour |
+|--------|-----------|
+| `subscribe_data_changed(callback)` | Calls `callback()` (no args, Tk main thread) on data changes. Exceptions in your callback are logged, never raised. Auto-disconnected at shutdown. Most plugins should just implement `on_data_changed` instead. |
+| `run_async(work, on_done=None, on_error=None)` | Runs `work()` on a background daemon thread; delivers `on_done(result)` / `on_error(exception)` back **on the Tk main thread**. **Threading rule:** `work` must never touch widgets; mutate UI only inside `on_done` / `on_error`. This is the supported way to call external APIs. |
+| `set_status(text, color="#3484F0")` | Shows a message in the application status bar. |
+
+---
+
+## Example: AI review tab (Claude API)
+
+The intended flagship use of TabPlugin: a tab that sends the design's specs, results, and SPICE netlists to an LLM and shows the analysis. The skeleton below uses the official `anthropic` Python SDK (`pip install anthropic`, key from the `ANTHROPIC_API_KEY` environment variable) — note how all data gathering happens through `context`, and the API call runs through `run_async` so the GUI never freezes.
+
+```python
+# ~/.chipify/plugins/ai_review_tab.py
+import json
+import customtkinter as ctk
+from chipify.plugin_loader import TabPlugin
+
+
+class ClaudeReviewTab(TabPlugin):
+    name = "AI Review"
+
+    def build(self, parent, context):
+        theme = context.theme()
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
+        bar.pack(fill="x", padx=10, pady=10)
+        self._btn = ctk.CTkButton(bar, text="Analyze results with Claude",
+                                  command=lambda: self._analyze(context))
+        self._btn.pack(side="left")
+        self._out = ctk.CTkTextbox(parent, wrap="word")
+        self._out.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._out.insert("end", "Run a simulation, then click Analyze.")
+
+    def _analyze(self, context):
+        df = context.results(valid_only=True)
+        if df is None or df.empty:
+            context.set_status("AI Review: no results loaded", "#e74c3c")
+            return
+
+        # 1. Gather the payload on the main thread (cheap, copies only).
+        payload = {
+            "specs": context.specs(),                     # JSON-ready dict
+            "result_statistics": df.describe().to_string(),
+            "yield": context.summary(),
+            "netlists": context.netlists(),               # {tb: spice text}
+        }
+
+        self._btn.configure(state="disabled")
+        self._out.delete("1.0", "end")
+        self._out.insert("end", "Asking Claude…\n")
+
+        # 2. Call the API off-thread; 3. render the answer back on the UI.
+        context.run_async(
+            lambda: self._ask_claude(payload),
+            on_done=self._show_answer,
+            on_error=lambda exc: self._show_answer(f"Request failed: {exc}"),
+        )
+
+    @staticmethod
+    def _ask_claude(payload) -> str:
+        # Runs on a worker thread — no widget access here!
+        import anthropic
+        client = anthropic.Anthropic()  # key from ANTHROPIC_API_KEY
+        response = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=16000,
+            thinking={"type": "adaptive"},
+            system=("You are an analog IC design reviewer. You receive a "
+                    "chipify datasheet spec, Monte-Carlo/corner results, and "
+                    "SPICE netlists. Point out failing specs, marginal Cpk, "
+                    "and likely design causes. Be concrete."),
+            messages=[{
+                "role": "user",
+                "content": json.dumps(payload, default=str),
+            }],
+        )
+        return next((b.text for b in response.content if b.type == "text"), "")
+
+    def _show_answer(self, text):
+        self._btn.configure(state="normal")
+        self._out.delete("1.0", "end")
+        self._out.insert("end", str(text))
+```
+
+Tips for production use:
+
+- For long analyses, use the SDK's streaming helper inside the worker and forward chunks to the UI with repeated `run_async`-style `after()` posts, or buffer and show the final message.
+- `context.specs()` and `summary()` are small; `netlists()` and full DataFrames can be large — consider `df.describe()` / sampling before sending, and count tokens with `client.messages.count_tokens()` if needed.
+- Never hardcode the API key in the plugin file; read it from the environment.
+
+---
+
 ## Data reference
 
 ### `valid_df` — result DataFrame
@@ -305,8 +529,12 @@ Custom equations (from `settings.json` or `ExpressionPlugin`) append additional 
 |-----------|------|-------------|
 | `stim.params` | `dict[str, list]` | Parameter name → list of sweep values. |
 | `stim.tests` | `list[Test]` | One `Test` per testbench block in the YAML. |
-| `stim.tests[i].name` | `str` | Testbench identifier (used as column prefix). |
-| `stim.tests[i].values` | `list[Value]` | Measurement specs (`Value.name`, `Value.min`, `Value.typ`, `Value.max`). |
+| `stim.tests[i].tb_path` | `str` | Testbench identifier (used as column prefix). |
+| `stim.tests[i].value_lst` | `list[Value]` | Measurement specs (`Value.name`, `Value.vmin`, `Value.vtyp`, `Value.vmax`). |
+| `stim.tests[i].analyses` | `list[Analysis]` | Declared signal captures (`.kind` ∈ transient/dc/ac, `.signals`). |
+| `stim.tests[i].measure` | `dict[str, str]` | `measure:` expressions from the YAML. |
+
+TabPlugins should prefer `context.specs()` over walking `stim` directly — it returns the same information as a stable, JSON-serializable dict.
 
 ---
 
@@ -334,6 +562,10 @@ There is no hard rejection based on `api_version` — warnings only.
 | `render_pdf()` raises | PDF page skipped. Error logged. |
 | `ExpressionPlugin` expression fails | Column set to `NaN` for all rows. Warning logged. |
 | `ExporterPlugin.export()` raises | Save is cancelled; error message shown in a dialog. App remains running. |
+| `TabPlugin.build()` raises | The plugin's tab shows an error panel with the exception; full traceback logged. Other tabs unaffected. |
+| `TabPlugin.on_data_changed()` / `on_show()` / `on_close()` raises | Call skipped for that plugin; exception logged. |
+| A `run_async` worker or callback raises | Logged; `on_error` invoked for worker failures. The GUI never sees the exception. |
+| `TabPlugin.name` collides with a built-in tab | Plugin skipped. Warning logged. |
 | Two plugins with the same `name` | Second plugin is skipped. Warning logged. For exporters, a user plugin overrides a built-in of the same name. |
 
 Chipify never crashes due to a bad plugin.
@@ -358,6 +590,7 @@ Output example:
                    {'api_version': '1', 'name': 'WebP Image'}],
     'plot':       [{'api_version': '1', 'name': 'Gain Histogram'}],
     'report':     [{'api_version': '1', 'name': 'Extended Yield Summary'}],
+    'tab':        [{'api_version': '1', 'name': 'AI Review'}],
 }
 ```
 

@@ -16,7 +16,7 @@ import customtkinter as ctk
 # Hex codes are chosen to track CTk's built-in light/dark frame defaults
 # (gray92 ≈ #ebebeb, gray86 ≈ #dbdbdb, gray17 ≈ #2b2b2b, gray14 ≈ #242424).
 
-THEMES: dict[str, dict] = {
+THEMES: dict[str, dict[str, str]] = {
     "night": {"ctk_mode": "dark",  "bg": "#000000", "panel": "#1a1a1a", "mpl_bg": "#1a1a1a", "mpl_fg": "white",
               "card_bg": "#111111", "card_border": "#2e2e2e", "text_muted": "#9a9a9a"},
     "dark":  {"ctk_mode": "dark",  "bg": "#242424", "panel": "#2b2b2b", "mpl_bg": "#2b2b2b", "mpl_fg": "white",
@@ -33,7 +33,7 @@ DANGER: str = "#e74c3c"
 def _load_initial() -> str:
     try:
         from chipify import app_config
-        return app_config.load_config().get("theme", "night")
+        return str(app_config.load_config().get("theme", "night"))
     except Exception:
         return "night"
 
@@ -77,7 +77,7 @@ def apply_theme(mode: str) -> None:
     panel_color = PANEL_COLOR
 
 
-def plot_theme() -> dict:
+def plot_theme() -> dict[str, str]:
     """
     Return the active matplotlib palette as a dict.
 

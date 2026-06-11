@@ -37,7 +37,8 @@ gui/
 │   ├── data_loader.py      – load_csv, list_history_runs, compute_plot_cols, valid_rows
 │   ├── equation_service.py – apply_scalar_equations, apply_transient_equations (via SafeEvaluator)
 │   ├── yaml_editor_service.py – get_params_dict, get_tests_dict, gui_repr_param, sync_form_to_yaml
-│   └── transient_loader.py – resolve_analysis_dir, list_analysis_signals, load_analysis_df
+│   ├── transient_loader.py – resolve_analysis_dir, list_analysis_signals, load_analysis_df
+│   └── plugin_context.py   – PluginContext facade handed to TabPlugins (see PLUGINS.md)
 └── widgets/
     ├── settings_window.py  – Modal settings dialog (CTkToplevel)
     ├── treeview_styling.py – apply_dark_style(tree) for ttk.Treeview

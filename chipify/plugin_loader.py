@@ -59,6 +59,21 @@ Exporter plugin
     PNG and SVG ship as built-in exporters; user plugins of the same
     ``name`` override the built-in.
 
+Tab plugin
+^^^^^^^^^^
+    from chipify.plugin_loader import TabPlugin
+
+    class MyTab(TabPlugin):
+        name = "My Tab"            # tab title in the main window
+
+        def build(self, parent, context):
+            '''Build CTk/tk widgets into `parent`. `context` is the
+            PluginContext facade (results, specs, netlists, run_async, …).'''
+            import customtkinter as ctk
+            ctk.CTkLabel(parent, text="Hello").pack()
+
+    See PLUGINS.md for the full TabPlugin / PluginContext reference.
+
 Discovery
 ---------
 Plugins are loaded lazily on first call to ``get_plot_plugins()`` /
@@ -107,6 +122,7 @@ _plot_plugins:       list[Type["PlotPlugin"]]       | None = None
 _report_plugins:     list[Type["ReportPlugin"]]     | None = None
 _expression_plugins: list[Type["ExpressionPlugin"]] | None = None
 _exporter_plugins:   list[Type["ExporterPlugin"]]   | None = None
+_tab_plugins:        list[Type["TabPlugin"]]        | None = None
 
 
 # ── Base classes ──────────────────────────────────────────────────────────────
@@ -283,6 +299,66 @@ class ExporterPlugin:
         raise NotImplementedError
 
 
+class TabPlugin:
+    """
+    Base class for plugins that add a whole tab to the Chipify main window.
+
+    The tab is created once at application startup. The plugin builds its own
+    widgets (customtkinter / tkinter) into the provided frame and interacts
+    with simulation data exclusively through the
+    :class:`chipify.gui.services.plugin_context.PluginContext` facade — never
+    through the main-window object directly. The context hands out defensive
+    copies, so a plugin cannot corrupt the application's state, and every
+    lifecycle call below is exception-guarded by the host: a raising plugin
+    is logged and disabled for that call, the app keeps running.
+
+    Example
+    -------
+    ::
+
+        import customtkinter as ctk
+        from chipify.plugin_loader import TabPlugin
+
+        class RunCounter(TabPlugin):
+            name = "Run Counter"
+
+            def build(self, parent, context):
+                self._lbl = ctk.CTkLabel(parent, text="no data")
+                self._lbl.pack(pady=20)
+
+            def on_data_changed(self, context):
+                df = context.results()
+                self._lbl.configure(
+                    text=f"{0 if df is None else len(df)} runs loaded")
+    """
+
+    #: Tab title shown in the main window. Must be unique and must not
+    #: collide with a built-in tab name.
+    name: str = "Unnamed Tab Plugin"
+
+    #: Chipify plugin API version this plugin was written for.
+    api_version: str = "1"
+
+    def build(self, parent: Any, context: Any) -> None:
+        """Construct the tab's widgets into *parent* (a tk frame).
+
+        Called exactly once at startup. *context* is the PluginContext —
+        see PLUGINS.md for its full API. If this raises, the host replaces
+        the tab content with an error panel; the app does not crash.
+        """
+        raise NotImplementedError
+
+    def on_data_changed(self, context: Any) -> None:
+        """Optional: called on the Tk main thread whenever new simulation
+        results or a different datasheet are loaded."""
+
+    def on_show(self, context: Any) -> None:
+        """Optional: called when the user switches to this tab."""
+
+    def on_close(self) -> None:
+        """Optional: called once when the application shuts down."""
+
+
 # ── Discovery ────────────────────────────────────────────────────────────────
 
 def _plugin_dir() -> str:
@@ -390,13 +466,23 @@ def get_exporter_plugins() -> list[Type[ExporterPlugin]]:
     return _exporter_plugins  # type: ignore[return-value]
 
 
+def get_tab_plugins() -> list[Type[TabPlugin]]:
+    """Return all discovered TabPlugin subclasses (cached after first call)."""
+    global _tab_plugins
+    if _tab_plugins is None:
+        _tab_plugins = _discover(TabPlugin)  # type: ignore[assignment]
+    return _tab_plugins  # type: ignore[return-value]
+
+
 def reload_plugins() -> None:
     """Force re-discovery of all plugins on the next call."""
     global _plot_plugins, _report_plugins, _expression_plugins, _exporter_plugins
+    global _tab_plugins
     _plot_plugins        = None
     _report_plugins      = None
     _expression_plugins  = None
     _exporter_plugins    = None
+    _tab_plugins         = None
     log.info("Plugin cache cleared; plugins will reload on next access.")
 
 
@@ -411,8 +497,9 @@ def list_plugins() -> dict[str, list[dict[str, str]]]:
 
     Returns
     -------
-    dict with keys ``"plot"``, ``"report"``, ``"expression"``.
-    Each value is a list of dicts with ``"name"`` and ``"api_version"``.
+    dict with keys ``"plot"``, ``"report"``, ``"expression"``, ``"exporter"``,
+    ``"tab"``. Each value is a list of dicts with ``"name"`` and
+    ``"api_version"``.
 
     Example
     -------
@@ -433,4 +520,5 @@ def list_plugins() -> dict[str, list[dict[str, str]]]:
         "report":     _describe(get_report_plugins()),
         "expression": _describe(get_expression_plugins()),
         "exporter":   _describe(get_exporter_plugins()),
+        "tab":        _describe(get_tab_plugins()),
     }

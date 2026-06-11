@@ -36,4 +36,5 @@ jobs:
             chipify/util.py \
             chipify/app_config.py \
             chipify/settings.py \
-            chipify/gui/state.py
+            chipify/gui/state.py \
+            chipify/gui/services/plugin_context.py

@@ -5,6 +5,10 @@ datasheet format: a swept `parameters` block (lists and the `range`/`linspace`/
 `logspace` DSL) and a `tests` block with pass/fail specs, optional captured
 signals, and derived `measure` expressions.
 
+[`plugins/run_info_tab.py`](plugins/run_info_tab.py) is a complete TabPlugin
+example — copy it into `~/.chipify/plugins/` (or `$CHIPIFY_PLUGINS`) to get a
+"Run Info" tab in the GUI; see [PLUGINS.md](../PLUGINS.md) for the plugin API.
+
 ## Running it
 
 Chipify is a wrapper around external EDA tools, so to run a sweep end-to-end you
