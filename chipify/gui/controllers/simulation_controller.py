@@ -282,6 +282,7 @@ class SimulationController:
                 # Archive history run + write meta sidecar
                 try:
                     from chipify import run_meta
+                    from chipify.gui.services import netlist_export
 
                     history_dir = os.path.join(settings.OUT_DIR, "history")
                     os.makedirs(history_dir, exist_ok=True)
@@ -292,8 +293,16 @@ class SimulationController:
                     valid = int((df.get("sim_error", "None") == "None").sum()) if "sim_error" in df.columns else total
                     gpass = int(df["global_pass"].sum()) if "global_pass" in df.columns else None
                     gyield = (gpass / total * 100) if (gpass is not None and total > 0) else None
-                    run_meta.write_meta(
-                        history_file,
+                    # Persist this run's netlist templates so per-sample
+                    # exports from history stay faithful to what actually ran.
+                    try:
+                        templates_dir = netlist_export.persist_templates(
+                            stim, os.path.join(history_dir, f"run_{timestamp}_templates"),
+                        )
+                    except Exception as exc:
+                        log.warning("Could not persist netlist templates: %s", exc)
+                        templates_dir = ""
+                    meta_kwargs = dict(
                         yaml_name=os.path.basename(yaml_path),
                         duration_s=elapsed,
                         total_runs=total,
@@ -301,7 +310,13 @@ class SimulationController:
                         global_yield=gyield,
                         tran_dir=df.attrs.get("tran_dir", ""),
                         analysis_dirs=analysis_dirs,
+                        templates_dir=templates_dir,
                     )
+                    run_meta.write_meta(history_file, **meta_kwargs)
+                    # Sidecar for the live CSV too, so "Latest" can be
+                    # attributed to its datasheet (history filter) and keeps
+                    # its templates after a restart.
+                    run_meta.write_meta(csv_out, **meta_kwargs)
                 except Exception as exc:
                     log.warning("Could not save history: %s", exc)
 

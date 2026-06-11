@@ -22,6 +22,7 @@ from chipify.gui.services import netlist_export as _netlist_export
 from chipify.gui.services.scatter_hover import HoverState, ScatterHoverManager
 from chipify.gui.services.throttled_redraw import ThrottledRedraw
 from chipify.gui.widgets.export_button import attach_export_button
+from chipify.gui.widgets.scrollable_option_menu import ScrollableOptionMenu
 from chipify.gui.widgets.scrolling import bind_mousewheel as _bind_mousewheel
 
 # ── Shared style ──────────────────────────────────────────────────────────────
@@ -185,7 +186,7 @@ class PlotCell(ctk.CTkFrame):
                 ).grid(row=2, column=1, padx=(0, 10), pady=(4, 0))
 
                 ctk.CTkLabel(self._ctrl, text="Compare:").grid(row=2, column=2, padx=(0, 4), pady=(4, 0))
-                ctk.CTkOptionMenu(
+                ScrollableOptionMenu(
                     self._ctrl, variable=self._compare,
                     values=["None"], width=170, dynamic_resizing=False,
                     command=lambda *_: self._request_redraw(),
@@ -301,8 +302,11 @@ class PlotCell(ctk.CTkFrame):
         )
 
     def _on_scatter_point_click(self, row, state, event):
+        par = getattr(self._win, "_parent", None)
+        meta = getattr(par, "_viewed_run_meta", dict)() if par is not None else {}
         _netlist_export.show_export_menu(
-            self._mpl_canvas.get_tk_widget(), event, state.stim, row)
+            self._mpl_canvas.get_tk_widget(), event, state.stim, row,
+            templates_dir=meta.get("templates_dir", ""))
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 

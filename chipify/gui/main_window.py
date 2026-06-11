@@ -33,6 +33,7 @@ from chipify.gui.widgets.treeview_styling import apply_dark_style as _apply_dark
 from chipify.gui.widgets.export_button import attach_export_button
 from chipify.gui.widgets.scrolling import bind_mousewheel as _bind_mousewheel
 from chipify.gui.widgets.scrollable_option_menu import ScrollableOptionMenu
+from chipify.gui.widgets.run_annotation_dialog import RunAnnotationDialog
 from chipify.gui.services import data_loader as _dl
 from chipify.gui.services import equation_service as _eq_svc
 from chipify.gui.services import yaml_editor_service as _ye_svc
@@ -141,6 +142,12 @@ class ChipifyGUI(ctk.CTk):
             except Exception:
                 pass
 
+    def report_callback_exception(self, exc, val, tb):
+        """Tk routes unhandled callback/after exceptions of every widget in
+        the app through the root window's hook — log them to chipify.log so
+        GUI failures don't vanish on an unwatched console."""
+        log.error("Unhandled GUI exception", exc_info=(exc, val, tb))
+
     def _startup_load(self):
         self.refresh_yamls()
         self.refresh_history()
@@ -179,8 +186,17 @@ class ChipifyGUI(ctk.CTk):
         self.btn_stop.grid(row=5, column=0, padx=20, pady=(0, 20), sticky="ew")
         
         ctk.CTkLabel(self.left_frame, text="History & Export", font=ctk.CTkFont(size=18, weight="bold")).grid(row=6, column=0, padx=20, pady=(10, 5), sticky="w")
-        self.history_dropdown = ScrollableOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_history_select)
-        self.history_dropdown.grid(row=7, column=0, padx=20, pady=(5, 10), sticky="ew")
+        hist_row = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        hist_row.grid(row=7, column=0, padx=20, pady=(5, 10), sticky="ew")
+        hist_row.grid_columnconfigure(0, weight=1)
+        self.history_dropdown = ScrollableOptionMenu(hist_row, dynamic_resizing=False, command=self.on_history_select)
+        self.history_dropdown.grid(row=0, column=0, sticky="ew")
+        self.btn_annotate = ctk.CTkButton(
+            hist_row, text="✎", width=32, command=self.action_annotate_run,
+            fg_color="transparent", border_width=1,
+            text_color=("gray10", "#DCE4EE"),
+        )
+        self.btn_annotate.grid(row=0, column=1, padx=(6, 0))
         
         self.btn_pdf = ctk.CTkButton(self.left_frame, text="Export PDF Report", command=self.export_pdf, fg_color="#8e44ad", hover_color="#9b59b6")
         self.btn_pdf.grid(row=8, column=0, padx=20, pady=(0, 4), sticky="ew")
@@ -693,6 +709,16 @@ class ChipifyGUI(ctk.CTk):
 
     def on_history_select(self, selection, switch_tab=True):
         self._hist_ctrl.on_history_select(selection, switch_tab=switch_tab)
+
+    def action_annotate_run(self):
+        """Open the notes/tags editor for the run selected in the dropdown."""
+        selection = self.history_dropdown.get()
+        if not selection or selection == "No runs found":
+            return
+        csv_path = _dl.resolve_csv_path(selection, settings.OUT_DIR)
+        if csv_path is None:
+            return
+        RunAnnotationDialog(self, selection, csv_path)
 
     # ==========================================
     # PLOT-EXPORT HELPERS (shared with attach_export_button)
@@ -1957,9 +1983,21 @@ class ChipifyGUI(ctk.CTk):
             self.current_stim,
         )
 
+    def _viewed_run_meta(self) -> dict:
+        """Meta sidecar of the run currently shown (history or Latest), {} if none."""
+        selection = self.history_dropdown.get() if hasattr(self, "history_dropdown") else ""
+        if not selection or selection == "No runs found":
+            return {}
+        csv_path = _dl.resolve_csv_path(selection, settings.OUT_DIR)
+        if not csv_path:
+            return {}
+        from chipify import run_meta as _rm
+        return _rm.read_meta(csv_path)
+
     def _on_scatter_point_click(self, row, state, event):
         _netlist_export.show_export_menu(
-            self.adv_canvas.get_tk_widget(), event, state.stim, row)
+            self.adv_canvas.get_tk_widget(), event, state.stim, row,
+            templates_dir=self._viewed_run_meta().get("templates_dir", ""))
 
     # --- NEU: Dropdowns dynamisch filtern ---
     def on_adv_mode_change(self, mode):

@@ -64,3 +64,35 @@ def test_resolve_falls_back_to_fast_tmp(tmp_path, monkeypatch) -> None:
 def test_resolve_missing_everywhere_is_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "FAST_TMP", str(tmp_path))
     assert netlist_export.resolve_template_text(_FakeTest("")) == ""
+
+
+def test_resolve_prefers_persisted_run_templates(tmp_path) -> None:
+    # A run's persisted template beats the (possibly newer) in-memory one.
+    test = _FakeTest("in-memory {{ vdd }}", tb_path="dir/tb_amp")
+    fp = os.path.join(str(tmp_path), "dir__tb_amp.spice")
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write("persisted {{ vdd }}")
+    assert netlist_export.resolve_template_text(
+        test, templates_dir=str(tmp_path)) == "persisted {{ vdd }}"
+
+
+class _FakeStim:
+    def __init__(self, tests):
+        self.tests = tests
+
+
+def test_persist_templates_roundtrip(tmp_path) -> None:
+    stim = _FakeStim([
+        _FakeTest("Vdd vdd 0 {{ vdd }}", tb_path="dir/tb_amp"),
+        _FakeTest("", tb_path="tb_empty"),     # no template — skipped
+    ])
+    dest = os.path.join(str(tmp_path), "run_x_templates")
+    assert netlist_export.persist_templates(stim, dest) == dest
+    assert netlist_export.resolve_template_text(
+        _FakeTest("", tb_path="dir/tb_amp"), templates_dir=dest
+    ) == "Vdd vdd 0 {{ vdd }}"
+    # Nothing to persist → "" and no directory created.
+    empty_dest = os.path.join(str(tmp_path), "run_y_templates")
+    assert netlist_export.persist_templates(
+        _FakeStim([_FakeTest("")]), empty_dest) == ""
+    assert not os.path.exists(empty_dest)

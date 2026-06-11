@@ -79,5 +79,27 @@ def test_filter_with_unknown_datasheet_hides_history(tmp_path) -> None:
     assert runs == ["Latest (simulation_results)"]
 
 
+def _write_latest_meta(out_dir: str, yaml_name: str) -> None:
+    with open(os.path.join(out_dir, "simulation_results.meta.json"), "w",
+              encoding="utf-8") as f:
+        json.dump({"schema_version": 1, "yaml": yaml_name}, f)
+
+
+def test_latest_with_matching_meta_stays_visible(tmp_path) -> None:
+    out_dir = _setup_out_dir(tmp_path)
+    _write_latest_meta(out_dir, "amp.yaml")
+    runs = list_history_runs(out_dir, yaml_name="amp.yaml")
+    assert runs[0] == "Latest (simulation_results)"
+
+
+def test_latest_with_mismatching_meta_is_hidden(tmp_path) -> None:
+    out_dir = _setup_out_dir(tmp_path)
+    _write_latest_meta(out_dir, "filter.yaml")
+    runs = list_history_runs(out_dir, yaml_name="amp.yaml")
+    assert "Latest (simulation_results)" not in runs
+    # Unfiltered listing still shows it.
+    assert list_history_runs(out_dir)[0] == "Latest (simulation_results)"
+
+
 def test_empty_out_dir(tmp_path) -> None:
     assert list_history_runs(str(tmp_path)) == []

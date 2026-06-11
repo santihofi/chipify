@@ -147,12 +147,13 @@ def list_history_runs(out_dir: str, yaml_name: str | None = None) -> list[str]:
     """
     Return run labels for the history dropdown, newest first.
 
-    Always puts ``'Latest (simulation_results)'`` at position 0 if it exists
-    (it has no meta sidecar — only history copies get one).
+    Puts ``'Latest (simulation_results)'`` at position 0 if it exists.
 
     If *yaml_name* is given, only history runs whose ``.meta.json`` sidecar
     records that datasheet are returned; runs with missing or different
-    metadata are hidden.
+    metadata are hidden. "Latest" is held to the same standard when its
+    sidecar attributes it to a datasheet, but stays visible when it has no
+    (or pre-sidecar) metadata — it is the live run, not archive clutter.
     """
     import glob as _glob
 
@@ -161,7 +162,9 @@ def list_history_runs(out_dir: str, yaml_name: str | None = None) -> list[str]:
     runs: list[str] = []
     latest = os.path.join(out_dir, "simulation_results.csv")
     if os.path.exists(latest):
-        runs.append("Latest (simulation_results)")
+        latest_yaml = run_meta.read_meta(latest).get("yaml", "") if yaml_name else ""
+        if not yaml_name or not latest_yaml or latest_yaml == yaml_name:
+            runs.append("Latest (simulation_results)")
 
     history_dir = os.path.join(out_dir, "history")
     if os.path.exists(history_dir):

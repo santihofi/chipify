@@ -69,6 +69,7 @@ class SettingsWindow(ctk.CTkToplevel):
         tab_sim = self._tabs.add("Simulation")
         tab_perf = self._tabs.add("Performance")
         tab_ui = self._tabs.add("Interface")
+        tab_paths = self._tabs.add("Paths")
 
         # ── num_cores section ───────────────────────────────────────────────
         cores_outer = ctk.CTkFrame(tab_sim, fg_color="transparent")
@@ -241,6 +242,37 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color="gray", font=ctk.CTkFont(size=11),
         ).pack(anchor="w")
 
+        # ── Project paths ────────────────────────────────────────────────────
+        paths_outer = ctk.CTkFrame(tab_paths, fg_color="transparent")
+        paths_outer.pack(fill="x", padx=16, pady=(8, 0))
+        self._path_vars: dict[str, ctk.StringVar] = {}
+        for key, label, default in (
+            ("in_dir", "Datasheets:", "datasheets"),
+            ("out_dir", "Output:", "out"),
+            ("work_dir", "Scratch:", "tmp"),
+            ("tb_dir", "Testbenches:", "tb"),
+        ):
+            row = ctk.CTkFrame(paths_outer, fg_color="transparent")
+            row.pack(fill="x", pady=(0, 8))
+            ctk.CTkLabel(row, text=label, anchor="w", width=100).pack(side="left")
+            var = ctk.StringVar(value=str(self._config.get(key) or ""))
+            self._path_vars[key] = var
+            ctk.CTkEntry(
+                row, textvariable=var, placeholder_text=default,
+            ).pack(side="left", fill="x", expand=True, padx=(8, 6))
+            ctk.CTkButton(
+                row, text="…", width=30,
+                command=lambda k=key: self._browse_path(k),
+            ).pack(side="left")
+        ctk.CTkLabel(
+            paths_outer,
+            text="Blank = default structure under the project root. Relative "
+                 "paths resolve against the project root. Changes take effect "
+                 "on the next launch.",
+            text_color="gray", font=ctk.CTkFont(size=11),
+            wraplength=400, justify="left",
+        ).pack(anchor="w", pady=(6, 0))
+
         # ── Buttons ─────────────────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=36, pady=(8, 16))
@@ -282,6 +314,12 @@ class SettingsWindow(ctk.CTkToplevel):
             except Exception:
                 pass
 
+    def _browse_path(self, key: str) -> None:
+        from tkinter import filedialog
+        chosen = filedialog.askdirectory(parent=self)
+        if chosen:
+            self._path_vars[key].set(chosen)
+
     def _on_engine_change(self, choice: str) -> None:
         self._sim_engine_hint.configure(text=self._ENGINE_HINTS.get(choice, ""))
         if choice == "vacask":
@@ -306,6 +344,9 @@ class SettingsWindow(ctk.CTkToplevel):
             self._config["live_plot_throttle_ms"] = 1500
         new_theme = self._theme_var.get()
         self._config["theme"] = new_theme
+        for key, var in self._path_vars.items():
+            value = var.get().strip()
+            self._config[key] = value or None
 
         app_config.save_config(self._config)
         if hasattr(self._main_app, "change_theme"):

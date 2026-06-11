@@ -18,6 +18,7 @@ Schema (v1)
   "total_runs":     500,
   "valid_runs":     497,
   "global_yield":   99.4,
+  "templates_dir":  "",            // persisted netlist templates of this run
   "notes":          "",
   "tags":           []
 }
@@ -93,6 +94,7 @@ def write_meta(
     global_yield: float | None = None,
     tran_dir: str = "",
     analysis_dirs: dict | None = None,
+    templates_dir: str = "",
 ) -> str:
     """
     Write a sidecar .meta.json next to *csv_path*.
@@ -100,7 +102,8 @@ def write_meta(
     ``analysis_dirs`` maps analysis kind (transient/dc/ac) to the per-run CSV
     directory of this run, so the GUI can resolve waveform data for any kind
     when a history run is re-loaded. ``tran_dir`` is the legacy
-    transient-only alias.
+    transient-only alias. ``templates_dir`` holds this run's persisted Jinja2
+    netlist templates (one ``<safe_tb>.spice|.sim`` per testbench).
 
     Returns the path written, or "" on failure.
     """
@@ -119,6 +122,7 @@ def write_meta(
         "global_yield": global_yield,
         "tran_dir": tran_dir,
         "analysis_dirs": dict(analysis_dirs or {}),
+        "templates_dir": templates_dir,
         "notes": "",
         "tags": [],
     }
@@ -131,6 +135,30 @@ def write_meta(
     except Exception as exc:
         log.warning("Could not write run metadata %s: %s", path, exc)
         return ""
+
+
+def update_meta(csv_path: str, **fields) -> dict:
+    """
+    Merge *fields* (e.g. ``notes=...``, ``tags=[...]``) into the sidecar of
+    *csv_path*, creating a minimal sidecar if none exists yet.
+
+    Returns the resulting meta dict ({} on write failure).
+    """
+    meta = read_meta(csv_path)
+    if not meta:
+        meta = {
+            "schema_version": _SCHEMA_VERSION,
+            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+    meta.update(fields)
+    path = _meta_path(csv_path)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        return meta
+    except Exception as exc:
+        log.warning("Could not update run metadata %s: %s", path, exc)
+        return {}
 
 
 def read_meta(csv_path: str) -> dict:
