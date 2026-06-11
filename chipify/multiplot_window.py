@@ -18,6 +18,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from chipify.plot_manager import PlotManager
 from chipify import app_config as _app_config
 from chipify.gui.services import data_loader as _dl_mp
+from chipify.gui.services import netlist_export as _netlist_export
+from chipify.gui.services.scatter_hover import HoverState, ScatterHoverManager
 from chipify.gui.services.throttled_redraw import ThrottledRedraw
 from chipify.gui.widgets.export_button import attach_export_button
 from chipify.gui.widgets.scrolling import bind_mousewheel as _bind_mousewheel
@@ -91,11 +93,11 @@ class PlotCell(ctk.CTkFrame):
         self._target  = ctk.StringVar(value="-")
         self._sc_plot = None
         self._scatter_df = None
-        self._scatter_annot = None
         # Transient-specific state
         self._tran_signals = ctk.StringVar(value="")
-        self._tran_run_mode = ctk.StringVar(value="All Valid")
-        self._tran_n = ctk.StringVar(value="50")
+        # Default to "First N" with a small N to keep dashboard updates cheap.
+        self._tran_run_mode = ctk.StringVar(value="First N")
+        self._tran_n = ctk.StringVar(value="10")
 
         self._build_header()
         self._build_controls()
@@ -257,17 +259,15 @@ class PlotCell(ctk.CTkFrame):
         self._mpl_canvas = FigureCanvasTkAgg(self._fig, master=self)
         self._mpl_canvas.get_tk_widget().grid(
             row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
-        self._mpl_canvas.mpl_connect("motion_notify_event", self._on_hover_scatter)
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        self._scatter_annot = self._ax.annotate(
-            "", xy=(0, 0), xytext=(14, 14), textcoords="offset points",
-            bbox=dict(boxstyle="round,pad=0.4", fc="#1c1c1c", ec=_ACCENT, lw=1, alpha=0.95),
-            color="white",
-            arrowprops=dict(arrowstyle="-|>", color=_ACCENT),
+        self._hover = ScatterHoverManager(
+            self._mpl_canvas, self._fig,
+            get_state=self._scatter_hover_state,
+            on_point_click=self._on_scatter_point_click,
         )
-        self._scatter_annot.set_visible(False)
+        self._hover.connect()
 
     def apply_theme(self):
         """Re-colour cell frame + matplotlib figure to match the current theme."""
@@ -286,22 +286,23 @@ class PlotCell(ctk.CTkFrame):
         # Re-render so axis labels / spines pick up the dark/light style.
         self._request_redraw()
 
-    def _create_scatter_annot(self):
-        """Create tooltip annotation on the current active axis."""
-        self._scatter_annot = self._ax.annotate(
-            "", xy=(0, 0), xytext=(14, 14), textcoords="offset points",
-            bbox=dict(boxstyle="round,pad=0.5", fc="#1c1c1c", ec=_ACCENT, lw=1, alpha=0.95),
-            color="white",
-            arrowprops=dict(arrowstyle="-|>", color=_ACCENT),
+    def _scatter_hover_state(self):
+        """HoverState for the shared scatter hover/click manager."""
+        if self._mode.get() != "Scatter Plot":
+            return None
+        if self._sc_plot is None or self._scatter_df is None:
+            return None
+        par = getattr(self._win, "_parent", None)
+        pst = getattr(par, "app_state", None) if par is not None else None
+        stim = pst.current_stim if pst is not None else getattr(par, "current_stim", None)
+        return HoverState(
+            self._sc_plot, self._scatter_df,
+            self._x_col.get(), self._y_col.get(), stim,
         )
-        self._scatter_annot.set_visible(False)
 
-    @staticmethod
-    def _fmt_hover_value(v):
-        try:
-            return f"{float(v):.4g}"
-        except Exception:
-            return str(v)
+    def _on_scatter_point_click(self, row, state, event):
+        _netlist_export.show_export_menu(
+            self._mpl_canvas.get_tk_widget(), event, state.stim, row)
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -323,74 +324,6 @@ class PlotCell(ctk.CTkFrame):
         """Attach/replace close callback for this plot cell."""
         self._remove_cb = cb
         self._btn_close.configure(command=self._remove_cb)
-
-    def _on_hover_scatter(self, event):
-        """Enable scatter hover tooltip similar to the main Advanced Analytics tab."""
-        if self._mode.get() != "Scatter Plot":
-            if self._scatter_annot is not None and self._scatter_annot.get_visible():
-                self._scatter_annot.set_visible(False)
-                self._mpl_canvas.draw_idle()
-            return
-        if self._sc_plot is None or self._scatter_df is None:
-            return
-        if not self._fig.axes:
-            return
-        if event.inaxes != self._fig.axes[0]:
-            if self._scatter_annot is not None and self._scatter_annot.get_visible():
-                self._scatter_annot.set_visible(False)
-                self._mpl_canvas.draw_idle()
-            return
-
-        cont, ind = self._sc_plot.contains(event)
-        hit_indices = ind.get("ind", []) if isinstance(ind, dict) else []
-        if not cont or len(hit_indices) == 0:
-            if self._scatter_annot is not None and self._scatter_annot.get_visible():
-                self._scatter_annot.set_visible(False)
-                self._mpl_canvas.draw_idle()
-            return
-
-        if self._scatter_annot is None:
-            self._create_scatter_annot()
-
-        i = int(hit_indices[0])
-        row = self._scatter_df.iloc[i]
-        x_col = self._x_col.get()
-        y_col = self._y_col.get()
-        x_val = row.get(x_col, "-")
-        y_val = row.get(y_col, "-")
-        status = "PASS" if bool(row.get("global_pass", False)) else "FAIL"
-
-        text_lines = [
-            f"Run #{row.name}",
-            "-" * 15,
-            f"{x_col}: {self._fmt_hover_value(x_val)}",
-            f"{y_col}: {self._fmt_hover_value(y_val)}",
-            "-" * 15,
-            status,
-        ]
-        par = getattr(self._win, "_parent", None)
-        pst = getattr(par, "app_state", None) if par is not None else None
-        stim = pst.current_stim if pst is not None else getattr(par, "current_stim", None)
-        if stim is not None:
-            for p in stim.params.keys():
-                try:
-                    if p in row and self._scatter_df[p].nunique() > 1:
-                        text_lines.append(f"{p}: {row[p]}")
-                except Exception:
-                    continue
-
-        self._scatter_annot.xy = (row[x_col], row[y_col])
-        self._scatter_annot.set_text("\n".join(text_lines))
-        # Mirror tooltip near axes borders to avoid clipping.
-        ax_bbox = self._fig.axes[0].get_window_extent()
-        x_off = -14 if event.x > (ax_bbox.x0 + ax_bbox.width * 0.70) else 14
-        y_off = -14 if event.y > (ax_bbox.y0 + ax_bbox.height * 0.70) else 14
-        self._scatter_annot.set_position((x_off, y_off))
-        self._scatter_annot.set_ha("right" if x_off < 0 else "left")
-        self._scatter_annot.set_va("top" if y_off < 0 else "bottom")
-        self._scatter_annot.set_annotation_clip(False)
-        self._scatter_annot.set_visible(True)
-        self._mpl_canvas.draw_idle()
 
     def _populate_dropdowns(self, valid_df, stim, sweep_params, derived_cols, tran_dir=""):
         """Fill option-menu values without triggering a redraw."""
@@ -474,7 +407,7 @@ class PlotCell(ctk.CTkFrame):
         self._ax.set_facecolor(mpl_bg)
         self._sc_plot = None
         self._scatter_df = None
-        self._scatter_annot = None
+        self._hover.invalidate()  # fig.clf() destroyed the tooltip annotation
 
         try:
             if mode == "Histogram":
@@ -539,7 +472,7 @@ class PlotCell(ctk.CTkFrame):
                         try:
                             n = int(self._tran_n.get())
                         except ValueError:
-                            n = 50
+                            n = 10
                         run_ids = list(
                             parent_df[parent_df.get("sim_error", "None") == "None"]["run_id"]
                             .astype(str).head(n)
@@ -576,8 +509,6 @@ class PlotCell(ctk.CTkFrame):
                 bg_color=mpl_bg,
                 theme=plot_th,
             )
-            if mode == "Scatter Plot" and self._sc_plot is not None:
-                self._create_scatter_annot()
             # Fill available panel space better for adv plots.
             if mode == "Correlation Heatmap":
                 self._fig.subplots_adjust(left=0.20, right=0.96, bottom=0.22, top=0.90)
@@ -636,8 +567,8 @@ class PlotCell(ctk.CTkFrame):
         self._y_col.set(cfg.get("y_col", "-"))
         self._target.set(cfg.get("target", "-"))
         self._tran_signals.set(cfg.get("tran_signals", ""))
-        self._tran_run_mode.set(cfg.get("tran_run_mode", "All Valid"))
-        self._tran_n.set(cfg.get("tran_n", "50"))
+        self._tran_run_mode.set(cfg.get("tran_run_mode", "First N"))
+        self._tran_n.set(cfg.get("tran_n", "10"))
         self._rebuild_controls()
 
 

@@ -7,6 +7,7 @@ all data I/O to ``data_loader`` and all UI updates to ``app``.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from chipify import settings, util
@@ -32,9 +33,15 @@ class HistoryController:
         self.app = app
 
     def refresh_history(self) -> None:
-        """Re-populate the history dropdown from the output directory."""
+        """Re-populate the history dropdown from the output directory.
+
+        Only runs recorded with the currently selected datasheet are listed
+        (plus "Latest", which has no meta sidecar).
+        """
         app = self.app  # type: ignore[attr-defined]
-        runs = _dl.list_history_runs(settings.OUT_DIR)
+        yaml_path = getattr(app, "current_yaml_path", None)
+        yaml_name = os.path.basename(yaml_path) if yaml_path else None
+        runs = _dl.list_history_runs(settings.OUT_DIR, yaml_name=yaml_name)
         if not runs:
             app.history_dropdown.configure(values=["No runs found"])
             app.history_dropdown.set("No runs found")

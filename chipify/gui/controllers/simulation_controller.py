@@ -107,6 +107,8 @@ class SimulationController:
         app.app_state.current_stim = stim
         app.app_state.promote_partial(final_df=df, emit=False)
         app.update_ui_results(df, stim, True)
+        app.lbl_current_run.configure(text="Viewing: Latest (simulation_results)")
+        app.history_dropdown.set("Latest (simulation_results)")
         app.lbl_status.configure(
             text=f"Status: Completed in {elapsed:.1f}s",
             text_color="#2ecc71",

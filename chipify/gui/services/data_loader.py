@@ -143,13 +143,20 @@ def load_csv(csv_path: str) -> pd.DataFrame:
     return df
 
 
-def list_history_runs(out_dir: str) -> list[str]:
+def list_history_runs(out_dir: str, yaml_name: str | None = None) -> list[str]:
     """
     Return run labels for the history dropdown, newest first.
 
-    Always puts ``'Latest (simulation_results)'`` at position 0 if it exists.
+    Always puts ``'Latest (simulation_results)'`` at position 0 if it exists
+    (it has no meta sidecar — only history copies get one).
+
+    If *yaml_name* is given, only history runs whose ``.meta.json`` sidecar
+    records that datasheet are returned; runs with missing or different
+    metadata are hidden.
     """
     import glob as _glob
+
+    from chipify import run_meta
 
     runs: list[str] = []
     latest = os.path.join(out_dir, "simulation_results.csv")
@@ -160,6 +167,11 @@ def list_history_runs(out_dir: str) -> list[str]:
     if os.path.exists(history_dir):
         hist_files = _glob.glob(os.path.join(history_dir, "run_*.csv"))
         hist_files.sort(reverse=True)
+        if yaml_name:
+            hist_files = [
+                f for f in hist_files
+                if run_meta.read_meta(f).get("yaml") == yaml_name
+            ]
         runs.extend(os.path.basename(f) for f in hist_files)
 
     return runs

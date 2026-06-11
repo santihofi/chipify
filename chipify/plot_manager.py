@@ -1,3 +1,4 @@
+import copy
 import os
 import pandas as pd
 import numpy as np
@@ -288,7 +289,12 @@ class PlotManager:
                 ax.text(0.5, 0.5, "Not enough varying data for correlation map.", color=fg, ha='center', va='center', transform=ax.transAxes)
             else:
                 corr = valid_df[active_cols].corr()
-                cax = ax.matshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
+                # Mask the self-correlation diagonal (always 1.0 → deep red);
+                # grey reads as "not informative" instead of "strongly correlated".
+                masked = np.ma.masked_where(np.eye(len(active_cols), dtype=bool), corr.values)
+                cmap = copy.copy(plt.cm.coolwarm)
+                cmap.set_bad('#7f7f7f')
+                cax = ax.matshow(masked, cmap=cmap, vmin=-1, vmax=1)
                 cbar = fig.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
                 cbar.ax.yaxis.set_tick_params(color=fg)
                 cbar.outline.set_edgecolor(th["spine"])

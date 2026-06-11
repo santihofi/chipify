@@ -25,7 +25,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk) -> None:
         super().__init__(parent)
         self.title("Global Settings")
-        self.geometry("520x1160")
+        self.geometry("520x600")
         self.resizable(False, False)
 
         # grab_set needs a small delay so the window is fully mapped first
@@ -61,11 +61,18 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(
             self, text="Global Settings",
             font=ctk.CTkFont(size=17, weight="bold")
-        ).pack(pady=(22, 18))
+        ).pack(pady=(22, 10))
+
+        # ── Tabs ────────────────────────────────────────────────────────────
+        self._tabs = ctk.CTkTabview(self)
+        self._tabs.pack(fill="both", expand=True, padx=14, pady=(0, 4))
+        tab_sim = self._tabs.add("Simulation")
+        tab_perf = self._tabs.add("Performance")
+        tab_ui = self._tabs.add("Interface")
 
         # ── num_cores section ───────────────────────────────────────────────
-        cores_outer = ctk.CTkFrame(self, fg_color="transparent")
-        cores_outer.pack(fill="x", padx=36)
+        cores_outer = ctk.CTkFrame(tab_sim, fg_color="transparent")
+        cores_outer.pack(fill="x", padx=16, pady=(8, 0))
 
         row = ctk.CTkFrame(cores_outer, fg_color="transparent")
         row.pack(fill="x")
@@ -91,8 +98,8 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(anchor="w")
 
         # ── simulator engine section ────────────────────────────────────────
-        self._sim_outer = ctk.CTkFrame(self, fg_color="transparent")
-        self._sim_outer.pack(fill="x", padx=36, pady=(18, 0))
+        self._sim_outer = ctk.CTkFrame(tab_sim, fg_color="transparent")
+        self._sim_outer.pack(fill="x", padx=16, pady=(18, 0))
         ctk.CTkLabel(self._sim_outer, text="Simulation Engine:", anchor="w").pack(anchor="w")
         self._sim_engine_var = ctk.StringVar(value=simulator_engine)
         self._sim_engine_menu = ctk.CTkOptionMenu(
@@ -112,7 +119,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._sim_engine_hint.pack(anchor="w")
 
         # ── VACASK-specific settings ─────────────────────────────────────────
-        self._vacask_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._vacask_frame = ctk.CTkFrame(tab_sim, fg_color="transparent")
 
         vc_bin_row = ctk.CTkFrame(self._vacask_frame, fg_color="transparent")
         vc_bin_row.pack(fill="x")
@@ -142,12 +149,12 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(anchor="w", pady=(6, 0))
 
         if simulator_engine == "vacask":
-            self._vacask_frame.pack(fill="x", padx=36, pady=(8, 0),
+            self._vacask_frame.pack(fill="x", padx=16, pady=(8, 0),
                                     after=self._sim_outer)
 
         # ── process start method section ────────────────────────────────────
-        proc_outer = ctk.CTkFrame(self, fg_color="transparent")
-        proc_outer.pack(fill="x", padx=36, pady=(18, 0))
+        proc_outer = ctk.CTkFrame(tab_perf, fg_color="transparent")
+        proc_outer.pack(fill="x", padx=16, pady=(8, 0))
         ctk.CTkLabel(proc_outer, text="Multiprocessing Start Method:", anchor="w").pack(anchor="w")
         self._proc_mode_var = ctk.StringVar(value=process_mode)
         self._proc_mode_menu = ctk.CTkOptionMenu(
@@ -165,8 +172,8 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(anchor="w")
 
         # ── chunk size section ───────────────────────────────────────────────
-        chunk_outer = ctk.CTkFrame(self, fg_color="transparent")
-        chunk_outer.pack(fill="x", padx=36, pady=(18, 0))
+        chunk_outer = ctk.CTkFrame(tab_perf, fg_color="transparent")
+        chunk_outer.pack(fill="x", padx=16, pady=(18, 0))
         ctk.CTkLabel(chunk_outer, text="Batch Chunk Size:", anchor="w").pack(anchor="w")
         self._chunk_var = ctk.StringVar(value=chunk_size_mode)
         self._chunk_menu = ctk.CTkOptionMenu(
@@ -184,8 +191,8 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(anchor="w")
 
         # ── Live plotting ─────────────────────────────────────────────────────
-        live_outer = ctk.CTkFrame(self, fg_color="transparent")
-        live_outer.pack(fill="x", padx=36, pady=(18, 0))
+        live_outer = ctk.CTkFrame(tab_ui, fg_color="transparent")
+        live_outer.pack(fill="x", padx=16, pady=(8, 0))
         ctk.CTkLabel(
             live_outer,
             text="Live plotting during simulation",
@@ -217,8 +224,8 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(anchor="w", pady=(4, 0))
 
         # ── Appearance Theme ─────────────────────────────────────────────────
-        theme_outer = ctk.CTkFrame(self, fg_color="transparent")
-        theme_outer.pack(fill="x", padx=36, pady=(18, 0))
+        theme_outer = ctk.CTkFrame(tab_ui, fg_color="transparent")
+        theme_outer.pack(fill="x", padx=16, pady=(18, 0))
         ctk.CTkLabel(theme_outer, text="Appearance Theme:", anchor="w").pack(anchor="w")
         self._theme_var = ctk.StringVar(value=current_theme)
         ctk.CTkOptionMenu(
@@ -236,7 +243,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         # ── Buttons ─────────────────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=36, pady=(28, 0))
+        btn_row.pack(fill="x", padx=36, pady=(8, 16))
 
         ctk.CTkButton(
             btn_row, text="Cancel", command=self.destroy,
@@ -278,7 +285,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def _on_engine_change(self, choice: str) -> None:
         self._sim_engine_hint.configure(text=self._ENGINE_HINTS.get(choice, ""))
         if choice == "vacask":
-            self._vacask_frame.pack(fill="x", padx=36, pady=(8, 0),
+            self._vacask_frame.pack(fill="x", padx=16, pady=(8, 0),
                                     after=self._sim_outer)
         else:
             self._vacask_frame.pack_forget()

@@ -32,10 +32,13 @@ from chipify.gui.widgets.yaml_dumper import QuotedString
 from chipify.gui.widgets.treeview_styling import apply_dark_style as _apply_dark_style, apply_treeview_style as _apply_treeview_style
 from chipify.gui.widgets.export_button import attach_export_button
 from chipify.gui.widgets.scrolling import bind_mousewheel as _bind_mousewheel
+from chipify.gui.widgets.scrollable_option_menu import ScrollableOptionMenu
 from chipify.gui.services import data_loader as _dl
 from chipify.gui.services import equation_service as _eq_svc
 from chipify.gui.services import yaml_editor_service as _ye_svc
 from chipify.gui.services import transient_loader as _tl
+from chipify.gui.services import netlist_export as _netlist_export
+from chipify.gui.services.scatter_hover import HoverState, ScatterHoverManager
 from chipify.gui.controllers.simulation_controller import SimulationController
 from chipify.gui.controllers.history_controller import HistoryController
 from chipify.gui.state import AppState
@@ -176,7 +179,7 @@ class ChipifyGUI(ctk.CTk):
         self.btn_stop.grid(row=5, column=0, padx=20, pady=(0, 20), sticky="ew")
         
         ctk.CTkLabel(self.left_frame, text="History & Export", font=ctk.CTkFont(size=18, weight="bold")).grid(row=6, column=0, padx=20, pady=(10, 5), sticky="w")
-        self.history_dropdown = ctk.CTkOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_history_select)
+        self.history_dropdown = ScrollableOptionMenu(self.left_frame, dynamic_resizing=False, command=self.on_history_select)
         self.history_dropdown.grid(row=7, column=0, padx=20, pady=(5, 10), sticky="ew")
         
         self.btn_pdf = ctk.CTkButton(self.left_frame, text="Export PDF Report", command=self.export_pdf, fg_color="#8e44ad", hover_color="#9b59b6")
@@ -675,9 +678,9 @@ class ChipifyGUI(ctk.CTk):
         self._refresh_worst_case_cards(stim, meas_cols, failed_params, valid_df, total, fmt)
 
         if switch_tab:
+            # Which run is being viewed (label + dropdown) is owned by the
+            # caller — a history selection must not be reset to "Latest" here.
             self.tabs.set("Measurements")
-            self.lbl_current_run.configure(text="Viewing: Latest (simulation_results)")
-            self.history_dropdown.set("Latest (simulation_results)")
 
     # ==========================================
     # HISTORY & DATA LOADING
@@ -1278,6 +1281,8 @@ class ChipifyGUI(ctk.CTk):
         else:
             self.editor_scroll.grid_remove()
             self.raw_editor.grid(row=1, column=0, sticky="nsew")
+        # History is filtered to the selected datasheet — re-list on switch.
+        self.refresh_history()
 
     def gui_repr_param(self, x):
         return _ye_svc.gui_repr_param(x)
@@ -1752,7 +1757,7 @@ class ChipifyGUI(ctk.CTk):
 
         ctk.CTkLabel(row2, text="Compare (Ref):", text_color="#f1c40f").pack(side=tk.LEFT, padx=(0, 5))
         self.compare_var = ctk.StringVar(value="None")
-        self.compare_dropdown = ctk.CTkOptionMenu(row2, variable=self.compare_var, command=self.update_plot, dynamic_resizing=False, fg_color="#d35400", button_color="#8e44ad", button_hover_color="#9b59b6", width=140)
+        self.compare_dropdown = ScrollableOptionMenu(row2, variable=self.compare_var, command=self.update_plot, dynamic_resizing=False, fg_color="#d35400", button_color="#8e44ad", button_hover_color="#9b59b6", width=140)
         self.compare_dropdown.pack(side=tk.LEFT, padx=(0, 20))
         
         ctk.CTkLabel(row2, text="Bins:").pack(side=tk.LEFT, padx=(5, 5))
@@ -1931,47 +1936,30 @@ class ChipifyGUI(ctk.CTk):
         self.adv_canvas = FigureCanvasTkAgg(self.adv_fig, master=self.tab_adv)
         self.adv_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
-        self.scatter_annot = self.adv_fig.add_subplot(111).annotate("", xy=(0,0), xytext=(15,15), textcoords="offset points", bbox=dict(boxstyle="round,pad=0.5", fc="#1c1c1c", ec="#3484F0", lw=1, alpha=0.9), color="white", arrowprops=dict(arrowstyle="-|>", color="#3484F0"))
-        self.scatter_annot.set_visible(False)
-        self.adv_canvas.mpl_connect("motion_notify_event", self.on_hover_scatter)
+        self.adv_fig.add_subplot(111)
+        self._scatter_hover = ScatterHoverManager(
+            self.adv_canvas, self.adv_fig,
+            get_state=self._scatter_hover_state,
+            on_point_click=self._on_scatter_point_click,
+        )
+        self._scatter_hover.connect()
 
-    def on_hover_scatter(self, event):
-        if self.adv_mode_var.get() != "Scatter Plot": return
-        if not hasattr(self, 'sc_plot') or not hasattr(self, 'scatter_df'): return
-        if self.sc_plot is None: return
-        
-        vis = self.scatter_annot.get_visible()
-        if event.inaxes == self.adv_fig.axes[0]:
-            cont, ind = self.sc_plot.contains(event)
-            if cont:
-                idx = ind["ind"][0] 
-                row = self.scatter_df.iloc[idx]
-                run_id = row.name 
-                x_col, y_col = self.scatter_x_var.get(), self.scatter_y_var.get()
-                x_val, y_val = row[x_col], row[y_col]
-                
-                text_lines = [f"Run #{run_id}", "-"*15, f"{x_col}: {x_val:.4g}", f"{y_col}: {y_val:.4g}", "-"*15]
-                if self.current_stim:
-                    for p in self.current_stim.params.keys():
-                        if p in row and self.scatter_df[p].nunique() > 1:
-                            text_lines.append(f"{p}: {row[p]}")
-                            
-                self.scatter_annot.xy = (x_val, y_val)
-                self.scatter_annot.set_text("\n".join(text_lines))
-                # Mirror tooltip near edges so it does not get clipped.
-                ax_bbox = self.adv_fig.axes[0].get_window_extent()
-                x_off = -15 if event.x > (ax_bbox.x0 + ax_bbox.width * 0.70) else 15
-                y_off = -15 if event.y > (ax_bbox.y0 + ax_bbox.height * 0.70) else 15
-                self.scatter_annot.set_position((x_off, y_off))
-                self.scatter_annot.set_ha("right" if x_off < 0 else "left")
-                self.scatter_annot.set_va("top" if y_off < 0 else "bottom")
-                self.scatter_annot.set_annotation_clip(False)
-                self.scatter_annot.set_visible(True)
-                self.adv_canvas.draw_idle()
-            else:
-                if vis:
-                    self.scatter_annot.set_visible(False)
-                    self.adv_canvas.draw_idle()
+    def _scatter_hover_state(self):
+        if self.adv_mode_var.get() != "Scatter Plot":
+            return None
+        sc_plot = getattr(self, "sc_plot", None)
+        scatter_df = getattr(self, "scatter_df", None)
+        if sc_plot is None or scatter_df is None:
+            return None
+        return HoverState(
+            sc_plot, scatter_df,
+            self.scatter_x_var.get(), self.scatter_y_var.get(),
+            self.current_stim,
+        )
+
+    def _on_scatter_point_click(self, row, state, event):
+        _netlist_export.show_export_menu(
+            self.adv_canvas.get_tk_widget(), event, state.stim, row)
 
     # --- NEU: Dropdowns dynamisch filtern ---
     def on_adv_mode_change(self, mode):
@@ -2047,9 +2035,8 @@ class ChipifyGUI(ctk.CTk):
             bg_color=_pt["bg"], theme=_pt,
         )
         
-        if mode == "Scatter Plot":
-            self.scatter_annot = self.adv_fig.axes[0].annotate("", xy=(0,0), xytext=(15,15), textcoords="offset points", bbox=dict(boxstyle="round,pad=0.4", fc="#1c1c1c", ec="#3484F0", lw=1, alpha=0.95), color="white", arrowprops=dict(arrowstyle="-|>", color="#3484F0"))
-            self.scatter_annot.set_visible(False)
+        # draw_adv_plot did fig.clf() — the old tooltip annotation is gone.
+        self._scatter_hover.invalidate()
 
     # ==========================================
     # TRANSIENT TAB
@@ -2077,7 +2064,9 @@ class ChipifyGUI(ctk.CTk):
 
         # Run-selection mode
         ctk.CTkLabel(ctrl, text="Runs:").pack(side=tk.LEFT, padx=(0, 4))
-        self._tran_mode_var = ctk.StringVar(value="All Valid")
+        # Default to "First N" with a small N — loading every transient on
+        # each update is expensive; the other modes remain selectable.
+        self._tran_mode_var = ctk.StringVar(value="First N")
         self._tran_mode_btn = ctk.CTkSegmentedButton(
             ctrl,
             values=["All Valid", "Failing Only", "First N", "Custom IDs"],
@@ -2088,7 +2077,7 @@ class ChipifyGUI(ctk.CTk):
         self._tran_mode_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         # N / custom-id entry (visible for "First N" and "Custom IDs")
-        self._tran_n_var = ctk.StringVar(value="50")
+        self._tran_n_var = ctk.StringVar(value="10")
         self._tran_n_entry = ctk.CTkEntry(
             ctrl, textvariable=self._tran_n_var, width=90,
             placeholder_text="N or ids…"
@@ -2176,6 +2165,10 @@ class ChipifyGUI(ctk.CTk):
         self._tran_annot = None
         self.tran_canvas.mpl_connect("motion_notify_event", self._on_tran_hover)
 
+        # Show/hide the N entry to match the default mode (the callback
+        # otherwise only fires on user interaction).
+        self._on_tran_mode_change(self._tran_mode_var.get())
+
     def _on_tran_mode_change(self, mode):
         if mode in ("First N", "Custom IDs"):
             self._tran_n_entry.pack(side=tk.LEFT, padx=(0, 10))
@@ -2238,7 +2231,7 @@ class ChipifyGUI(ctk.CTk):
             try:
                 n = int(self._tran_n_var.get())
             except ValueError:
-                n = 50
+                n = 10
             run_ids = list(df[df['sim_error'] == 'None']['run_id'].astype(str).head(n))
         else:  # Custom IDs
             raw = self._tran_n_var.get()
@@ -2384,7 +2377,7 @@ class ChipifyGUI(ctk.CTk):
             try:
                 n = int(self._tran_n_var.get())
             except ValueError:
-                n = 50
+                n = 10
             run_ids = list(df[df['sim_error'] == 'None']['run_id'].astype(str).head(n))
         else:  # Custom IDs
             raw = self._tran_n_var.get()
