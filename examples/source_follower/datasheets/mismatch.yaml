@@ -1,12 +1,12 @@
 parameters:
-  temp: [-40, 27, 100]
-  seed: range(1)
-  vdd: [1.45, 1.5, 1.55]
+  temp: [27]
+  seed: range(1000)
+  vdd: [1.5]
   vincm: [0.75]
+  corner_mos: ['tt_mismatch']
   sigma: [1]
-  corner_mos: ['tt', 'ss', 'ff']
 tests:
-  tb_csa_op:
+  tb_sf_op:
     ve:
       min: 0.3
       max: 0.5
@@ -15,9 +15,6 @@ tests:
       min: -0.1
       max: 0.1
       typ: 0.0
-  tb_csa_comp:
-    p1db:
-      min: 0.1
-  tb_csa_gain:
+  tb_sf_gain:
     gain: {}
     bandwidth: {}

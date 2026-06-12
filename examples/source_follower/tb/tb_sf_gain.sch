@@ -68,7 +68,7 @@ value="
 .lib cornerMOShv.lib mos_\{\{ corner_mos \}\}
 "
       }
-C {chipify/examples/common_source_amplifier/sch/common_source_amplifier.sym} 150 -120 0 0 {name=x1}
 C {vsource.sym} 240 -210 0 0 {name=V5 value=0.35 savecurrent=true}
 C {gnd.sym} 240 -180 0 0 {name=l6 lab=GND}
 C {vsource.sym} -180 -200 0 0 {name=VIN value=ac 1 savecurrent=true}
+C {chipify/examples/source_follower/sch/source_follower.sym} 150 -120 0 0 {name=x1}
