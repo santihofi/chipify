@@ -1,7 +1,18 @@
 # Chipify
-
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+
+(c) 2026 Santiago Hofwimmer
+Institute for Integrated Circuits and Quantum Computing, Johannes Kepler University (JKU), Linz, Austria
+
+> [!WARNING]
+> This repository is a Work in Progress.
+
+> [!IMPORTANT]
+> It is recomended to use the [IIC-OSIC-TOOLS](https://github.com/iic-jku/iic-osic-tools) container. Otherwise, you have to install [Ngspice](https://github.com/ngspice/ngspice), [Xschem](https://github.com/StefanSchippers/xschem) and [IHP-Open-PDK](https://github.com/IHP-GmbH/IHP-Open-PDK) manually as prerequisites.
+
+> [!IMPORTANT]
+> Currently, only the [IHP-Open-PDK](https://github.com/IHP-GmbH/IHP-Open-PDK) is fully supported, but more will follow soon
 
 ![GUI](./doc/images/chipify.png)
 
