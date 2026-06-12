@@ -426,10 +426,20 @@ def _discover(base_class: type) -> list[type]:
 
 
 def get_plot_plugins() -> list[Type[PlotPlugin]]:
-    """Return all discovered PlotPlugin subclasses (cached after first call)."""
+    """
+    Return every available PlotPlugin: built-in distribution plots first,
+    then user-supplied plugins discovered in the plugin directory. If a
+    user plugin uses the same ``name`` as a built-in, the user plugin wins.
+
+    Cached after the first call; clear via :func:`reload_plugins`.
+    """
     global _plot_plugins
     if _plot_plugins is None:
-        _plot_plugins = _discover(PlotPlugin)  # type: ignore[assignment]
+        from chipify.plot_plugins import BUILTIN_PLOT_PLUGINS
+        discovered: list[Type[PlotPlugin]] = _discover(PlotPlugin)  # type: ignore[assignment]
+        discovered_names = {p.name for p in discovered}
+        builtins = [p for p in BUILTIN_PLOT_PLUGINS if p.name not in discovered_names]
+        _plot_plugins = builtins + discovered
     return _plot_plugins  # type: ignore[return-value]
 
 

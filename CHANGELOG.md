@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Preparation for the initial public release.
 
 ### Added
+- Built-in distribution plot modes registered via the PlotPlugin interface
+  (`chipify/plot_plugins/`): QQ plot (normality check), ECDF with spec
+  limits, and yield-vs-spec curve. User plugins with the same name override
+  the built-ins.
 - `README.md` with project overview, prerequisites, install, and quick-start.
 - Apache-2.0 `LICENSE`.
 - `CONTRIBUTING.md` and GitHub issue/PR templates.

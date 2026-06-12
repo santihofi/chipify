@@ -51,11 +51,13 @@ Every `.py` file in that directory is imported when the first plugin is requeste
 
 `PlotPlugin` adds a custom entry to the plot-mode dropdown in the GUI.
 
+Three plot modes ship as built-in PlotPlugins: `"QQ Plot (Normality)"`, `"ECDF + Spec Limits"`, and `"Yield vs Spec Curve"` (see `chipify/plot_plugins/`). They register through this same interface — a user plugin whose `name` matches a built-in **overrides** the built-in.
+
 ### Class attributes
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `name` | `str` | **Yes** | Label shown in the mode selector. Must be unique across all loaded plugins. |
+| `name` | `str` | **Yes** | Label shown in the mode selector. Must be unique across all loaded plugins. A user plugin whose `name` matches a built-in mode overrides the built-in. |
 | `api_version` | `str` | No | Plugin API version. Default `"1"`. |
 
 ### Method
@@ -588,7 +590,10 @@ Output example:
     'exporter':   [{'api_version': '1', 'name': 'PNG Image'},
                    {'api_version': '1', 'name': 'SVG Vector'},
                    {'api_version': '1', 'name': 'WebP Image'}],
-    'plot':       [{'api_version': '1', 'name': 'Gain Histogram'}],
+    'plot':       [{'api_version': '1', 'name': 'QQ Plot (Normality)'},
+                   {'api_version': '1', 'name': 'ECDF + Spec Limits'},
+                   {'api_version': '1', 'name': 'Yield vs Spec Curve'},
+                   {'api_version': '1', 'name': 'Gain Histogram'}],
     'report':     [{'api_version': '1', 'name': 'Extended Yield Summary'}],
     'tab':        [{'api_version': '1', 'name': 'AI Review'}],
 }
