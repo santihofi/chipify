@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 analyses.py – Analysis-type abstraction for Chipify.
 

@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 netlist_export.py – Export the rendered SPICE netlist for one Monte-Carlo
 sample (scatter-plot point), with that sample's parameter values filled in.

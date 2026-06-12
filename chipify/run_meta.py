@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 run_meta.py – Sidecar metadata for simulation history runs.
 

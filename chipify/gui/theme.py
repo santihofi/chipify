@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 theme.py – Application-wide colour constants and CTk appearance bootstrap.
 

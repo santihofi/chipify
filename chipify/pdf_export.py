@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 pdf_export.py – Professional IC-datasheet-style PDF report for Chipify.
 

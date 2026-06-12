@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 expression.py – Sandboxed expression evaluator for Chipify.
 

@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 plugin_context.py – Stable data facade handed to TabPlugin instances.
 

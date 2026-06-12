@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 equation_service.py – Sandboxed evaluation of custom scalar and transient equations.
 

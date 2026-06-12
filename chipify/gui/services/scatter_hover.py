@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 scatter_hover.py – Shared hover tooltip + click handling for scatter plots.
 

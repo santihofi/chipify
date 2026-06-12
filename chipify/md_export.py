@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 md_export.py – Plain Markdown report generator for Chipify.
 

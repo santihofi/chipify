@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 simulation_controller.py – Orchestrates simulation start/stop.
 

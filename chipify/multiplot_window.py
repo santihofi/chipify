@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 multiplot_window.py – Multi-Plot Dashboard secondary window for Chipify.
 

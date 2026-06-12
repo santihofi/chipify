@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """analyzer.py – Console summary of simulation results.
 
 Prints a human-readable run summary (total iterations, failed runs, and

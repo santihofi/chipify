@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """Tests for chipify.simulator analysis-capture diagnostics.
 
 Covers _persist_analyses (writes per-run CSVs and, crucially, records a reason on

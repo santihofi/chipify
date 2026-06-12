@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 plugin_loader.py – Lightweight plugin system for Chipify.
 

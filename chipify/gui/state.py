@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 state.py – Application state model and minimal pub/sub bus.
 

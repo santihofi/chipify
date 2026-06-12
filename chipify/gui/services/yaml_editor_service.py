@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 yaml_editor_service.py – Pure-logic helpers for the YAML datasheet editor tab.
 

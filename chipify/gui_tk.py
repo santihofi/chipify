@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 gui_tk.py – Backward-compatibility shim.
 

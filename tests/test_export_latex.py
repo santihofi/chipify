@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """Tests for chipify.export_latex waveform-overlay export.
 
 Regression coverage: every run must be exported against its own X vector —

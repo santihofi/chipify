@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 import customtkinter as ctk
 from tkinter import ttk, messagebox
 import tkinter as tk

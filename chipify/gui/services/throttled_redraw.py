@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 throttled_redraw.py – Debounced redraw scheduler for Matplotlib-heavy views.
 

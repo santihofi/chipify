@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """Tests for chipify.simulator case-evaluation and raw-file parsing.
 
 Covers:

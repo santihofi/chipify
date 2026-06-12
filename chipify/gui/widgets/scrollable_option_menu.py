@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 scrollable_option_menu.py – CTkOptionMenu drop-in with a scrollable dropdown.
 

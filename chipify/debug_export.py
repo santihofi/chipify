@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """debug_export.py – Export failing simulation runs for debugging.
 
 Writes the failed runs of a results DataFrame to a CSV and generates a ready-to-run

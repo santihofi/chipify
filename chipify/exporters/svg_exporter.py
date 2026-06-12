@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """Built-in SVG exporter."""
 
 from __future__ import annotations

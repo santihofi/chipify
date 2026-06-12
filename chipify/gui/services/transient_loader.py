@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 transient_loader.py – Helpers for loading analysis-result CSV files.
 

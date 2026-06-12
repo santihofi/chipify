@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 run_annotation_dialog.py – View/edit the notes and tags of a history run.
 

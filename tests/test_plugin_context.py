@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """Tests for the TabPlugin interface: PluginContext facade + discovery.
 
 PluginContext is tkinter-free by design (the Tk dependency is an injected

@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 scrolling.py – Mouse-wheel support for CTkScrollableFrame.
 

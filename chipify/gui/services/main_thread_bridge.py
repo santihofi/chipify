@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 main_thread_bridge.py – Thread-safe DataFrame transfer from background
 threads to the Tkinter main thread via queue.Queue + widget.after().

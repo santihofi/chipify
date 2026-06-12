@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 schema.py – TypedDicts and validation helpers for the Chipify datasheet YAML.
 

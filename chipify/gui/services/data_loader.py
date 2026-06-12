@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 data_loader.py – Load simulation result CSVs and compute plot-column metadata.
 

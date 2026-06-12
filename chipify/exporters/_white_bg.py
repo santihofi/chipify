@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 _white_bg.py – Helper that saves a Matplotlib Figure with a forced
 white background, regardless of the active GUI theme.

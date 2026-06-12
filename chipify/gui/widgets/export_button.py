@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 export_button.py – Shared "Export" button widget for plots.
 

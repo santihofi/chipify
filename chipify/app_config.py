@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 app_config.py – Persistent user preferences + application-wide logging setup.
 

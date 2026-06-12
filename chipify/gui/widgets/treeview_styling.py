@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 treeview_styling.py – Apply the Chipify theme to a ttk.Treeview widget.
 

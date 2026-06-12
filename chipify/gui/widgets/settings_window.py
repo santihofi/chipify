@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 settings_window.py – Modal settings dialog for persistent user preferences.
 

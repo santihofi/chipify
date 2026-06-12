@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 history_controller.py – Manages run-history loading and CSV selection.
 

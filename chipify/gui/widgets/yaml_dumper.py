@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 yaml_dumper.py – Custom YAML dumper for the datasheet editor.
 

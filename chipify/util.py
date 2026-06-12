@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 util.py – Core domain objects and utilities for Chipify.
 

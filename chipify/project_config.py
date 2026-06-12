@@ -1,3 +1,4 @@
+﻿# Copyright (c) 2026 Santiago Hofwimmer
 """
 project_config.py – Optional per-project configuration for Chipify.
 
