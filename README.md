@@ -137,6 +137,10 @@ absolute or relative path, e.g.:
 Any key that is missing or blank falls back to its default. Paths are resolved
 when Chipify starts, so changes take effect on the next launch.
 
+## Running the example project
+
+A source follower example is included. to run the example, navigate to ``/chipify/examples/source_follower`` and run ``chipify`` in this directory. You can select between two datasheets describing a corner case and a mismatch simulation.
+
 ## Project layout
 
 ```
