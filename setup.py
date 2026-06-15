@@ -31,6 +31,7 @@ setup(
         "jinja2",
         "pyyaml",
         "customtkinter",
+        "PySide6",
         "matplotlib",
         "scipy",
         "asteval",
@@ -45,6 +46,10 @@ setup(
         "console_scripts": [
             "chipify-cli=chipify.cli:main",
             "chipify=chipify.cli:run_gui",
+            # Temporary launcher for the PySide6 rebuild; runs side by side with
+            # the CustomTkinter GUI until the Qt rebuild reaches parity, at which
+            # point `chipify` is repointed here and this entry is removed.
+            "chipify-qt=chipify.gui_qt.app:main",
         ]
     },
     classifiers=[

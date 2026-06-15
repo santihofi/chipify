@@ -124,6 +124,7 @@ _report_plugins:     list[Type["ReportPlugin"]]     | None = None
 _expression_plugins: list[Type["ExpressionPlugin"]] | None = None
 _exporter_plugins:   list[Type["ExporterPlugin"]]   | None = None
 _tab_plugins:        list[Type["TabPlugin"]]        | None = None
+_qt_tab_plugins:     list[Type["QtTabPlugin"]]      | None = None
 
 
 # ── Base classes ──────────────────────────────────────────────────────────────
@@ -360,6 +361,66 @@ class TabPlugin:
         """Optional: called once when the application shuts down."""
 
 
+class QtTabPlugin:
+    """
+    Base class for plugins that add a whole tab to the PySide6 (Qt) GUI.
+
+    Identical contract to :class:`TabPlugin`, except ``build`` receives a
+    ``PySide6.QtWidgets.QWidget`` as *parent* instead of a Tk frame — the
+    plugin lays its Qt widgets into it (e.g. with a ``QVBoxLayout``). The
+    :class:`~chipify.gui.services.plugin_context.PluginContext` facade is
+    unchanged, so data access, ``run_async`` and ``subscribe_data_changed``
+    behave exactly as documented in PLUGINS.md.
+
+    Legacy Tk :class:`TabPlugin`\\ s are **not** loaded by the Qt GUI (it warns
+    and skips them); port them by changing the base class to ``QtTabPlugin`` and
+    building Qt widgets.
+
+    Example
+    -------
+    ::
+
+        from PySide6.QtWidgets import QLabel, QVBoxLayout
+        from chipify.plugin_loader import QtTabPlugin
+
+        class RunCounter(QtTabPlugin):
+            name = "Run Counter"
+
+            def build(self, parent, context):
+                self._lbl = QLabel("no data", parent)
+                QVBoxLayout(parent).addWidget(self._lbl)
+
+            def on_data_changed(self, context):
+                df = context.results()
+                self._lbl.setText(f"{0 if df is None else len(df)} runs loaded")
+    """
+
+    #: Tab title shown in the main window. Must be unique and must not collide
+    #: with a built-in tab name.
+    name: str = "Unnamed Qt Tab Plugin"
+
+    #: Chipify plugin API version this plugin was written for.
+    api_version: str = "1"
+
+    def build(self, parent: Any, context: Any) -> None:
+        """Construct the tab's widgets into *parent* (a ``QWidget``).
+
+        Called once at startup. If this raises, the host replaces the tab
+        content with an error panel; the app does not crash.
+        """
+        raise NotImplementedError
+
+    def on_data_changed(self, context: Any) -> None:
+        """Optional: called on the GUI thread when new results / a different
+        datasheet are loaded."""
+
+    def on_show(self, context: Any) -> None:
+        """Optional: called when the user switches to this tab."""
+
+    def on_close(self) -> None:
+        """Optional: called once when the application shuts down."""
+
+
 # ── Discovery ────────────────────────────────────────────────────────────────
 
 def _plugin_dir() -> str:
@@ -485,15 +546,39 @@ def get_tab_plugins() -> list[Type[TabPlugin]]:
     return _tab_plugins  # type: ignore[return-value]
 
 
+def get_qt_tab_plugins() -> list[Type[QtTabPlugin]]:
+    """Return all discovered QtTabPlugin subclasses (cached after first call)."""
+    global _qt_tab_plugins
+    if _qt_tab_plugins is None:
+        _qt_tab_plugins = _discover(QtTabPlugin)  # type: ignore[assignment]
+    return _qt_tab_plugins  # type: ignore[return-value]
+
+
+def warn_unsupported_tab_plugins() -> list[str]:
+    """Log a warning for each legacy Tk :class:`TabPlugin` found.
+
+    Tk tab plugins cannot run under the Qt GUI; the host calls this once at
+    startup so users see an actionable message. Returns the offending names.
+    """
+    names = [p.name for p in get_tab_plugins()]
+    for name in names:
+        log.warning(
+            "Tk TabPlugin %r is not supported by the Qt GUI — port it to "
+            "QtTabPlugin (see PLUGINS.md).", name,
+        )
+    return names
+
+
 def reload_plugins() -> None:
     """Force re-discovery of all plugins on the next call."""
     global _plot_plugins, _report_plugins, _expression_plugins, _exporter_plugins
-    global _tab_plugins
+    global _tab_plugins, _qt_tab_plugins
     _plot_plugins        = None
     _report_plugins      = None
     _expression_plugins  = None
     _exporter_plugins    = None
     _tab_plugins         = None
+    _qt_tab_plugins      = None
     log.info("Plugin cache cleared; plugins will reload on next access.")
 
 
@@ -532,4 +617,5 @@ def list_plugins() -> dict[str, list[dict[str, str]]]:
         "expression": _describe(get_expression_plugins()),
         "exporter":   _describe(get_exporter_plugins()),
         "tab":        _describe(get_tab_plugins()),
+        "qt_tab":     _describe(get_qt_tab_plugins()),
     }
