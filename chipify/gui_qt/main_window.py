@@ -15,11 +15,12 @@ import glob
 import logging
 import os
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -71,6 +72,8 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self.app_state.status_changed.connect(self._on_status_changed)
+        self.app_state.data_changed.connect(self.update_run_summary)
+        self.app_state.on_data_chunk_added.connect(self.update_run_summary)
 
         # Populate selectors, then auto-load the last run once the loop is idle.
         self.refresh_datasheets()
@@ -129,7 +132,7 @@ class MainWindow(QMainWindow):
 
         # ── Datasheet selector ────────────────────────────────────────────────
         layout.addSpacing(6)
-        layout.addWidget(QLabel("Datasheet"))
+        layout.addWidget(self._section("DATASHEET"))
         ds_row = QHBoxLayout()
         ds_row.setSpacing(6)
         self.datasheet_combo = QComboBox()
@@ -161,9 +164,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
 
+        # ── Results summary (always visible) ──────────────────────────────────
+        layout.addSpacing(12)
+        layout.addWidget(self._section("RESULTS"))
+        layout.addWidget(self._build_summary_card())
+
         # ── History ───────────────────────────────────────────────────────────
         layout.addSpacing(12)
-        layout.addWidget(QLabel("History"))
+        layout.addWidget(self._section("HISTORY"))
         hist_row = QHBoxLayout()
         hist_row.setSpacing(6)
         self.history_combo = QComboBox()
@@ -194,6 +202,65 @@ class MainWindow(QMainWindow):
 
         layout.addStretch(1)
         return panel
+
+    @staticmethod
+    def _section(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("Section")
+        return lbl
+
+    def _build_summary_card(self) -> QFrame:
+        """Always-visible run summary: duration, samples, valid, yield."""
+        card = QFrame()
+        card.setObjectName("Card")
+        grid = QGridLayout(card)
+        grid.setContentsMargins(12, 10, 12, 10)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+
+        self.sum_duration = QLabel("—")
+        self.sum_samples = QLabel("—")
+        self.sum_valid = QLabel("—")
+        self.sum_yield = QLabel("—")
+        rows = (
+            ("Duration", self.sum_duration),
+            ("Samples", self.sum_samples),
+            ("Valid", self.sum_valid),
+            ("Yield", self.sum_yield),
+        )
+        for r, (label, value) in enumerate(rows):
+            name = QLabel(label)
+            name.setObjectName("Stat")
+            value.setObjectName("StatValue")
+            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            grid.addWidget(name, r, 0)
+            grid.addWidget(value, r, 1)
+        grid.setColumnStretch(1, 1)
+        return card
+
+    def update_run_summary(self, **_kwargs) -> None:
+        """Refresh the left-panel run summary from the active results."""
+        df = self.app_state.active_df
+        if df is None or len(df) == 0:
+            for lbl in (self.sum_duration, self.sum_samples,
+                        self.sum_valid, self.sum_yield):
+                lbl.setText("—")
+            self.sum_yield.setStyleSheet("")
+            return
+        total = len(df)
+        valid = len(_dl.valid_rows(df))
+        dur = self.app_state.last_sim_duration_sec
+        self.sum_duration.setText(f"{dur:.1f} s" if dur else "—")
+        self.sum_samples.setText(str(total))
+        self.sum_valid.setText(str(valid))
+        if "global_pass" in df.columns and total:
+            yld = float(df["global_pass"].sum()) / total * 100.0
+            self.sum_yield.setText(f"{yld:.1f} %")
+            color = "#2ecc71" if yld >= 99.0 else ("#f1c40f" if yld >= 90.0 else "#e74c3c")
+            self.sum_yield.setStyleSheet(f"color: {color};")
+        else:
+            self.sum_yield.setText("—")
+            self.sum_yield.setStyleSheet("")
 
     # ── Plugin tabs ───────────────────────────────────────────────────────────
 
@@ -268,14 +335,18 @@ class MainWindow(QMainWindow):
         """Active matplotlib palette for the plot tabs."""
         return theme.plot_theme(self.theme_name)
 
-    def apply_theme(self, name: str) -> None:
-        """Switch the live theme: restyle the app and repaint the plots."""
+    def _apply_appearance_now(self) -> None:
+        """Apply the current theme + font size (palette, QSS, app font) and
+        repaint the plots."""
         from PySide6.QtWidgets import QApplication
-        self.theme_name = name
+        font_size = int(app_config.load_config().get("font_size", 13))
         app = QApplication.instance()
         if app is not None:
-            app.setPalette(theme.build_palette(name))
-            app.setStyleSheet(theme.build_qss(name))
+            font = app.font()
+            font.setPointSize(font_size)
+            app.setFont(font)
+            app.setPalette(theme.build_palette(self.theme_name))
+            app.setStyleSheet(theme.build_qss(self.theme_name, font_size))
         # Re-emit so the plot tabs redraw with the new matplotlib palette.
         if self.app_state.current_df is not None:
             self.app_state.data_changed.emit(
@@ -283,6 +354,16 @@ class MainWindow(QMainWindow):
                 stim=self.app_state.current_stim,
                 switch_tab=False,
             )
+
+    def apply_theme(self, name: str) -> None:
+        """Switch the live theme by name and restyle the app."""
+        self.theme_name = name
+        self._apply_appearance_now()
+
+    def apply_appearance(self) -> None:
+        """Re-read theme + font size from config and restyle the app."""
+        self.theme_name = theme.load_theme_name()
+        self._apply_appearance_now()
 
     # ── Actions ───────────────────────────────────────────────────────────────
 

@@ -127,20 +127,22 @@ def build_palette(mode: str):
     return qp
 
 
-def build_qss(mode: str) -> str:
-    """Build the application-wide Qt style sheet for *mode*.
+def build_qss(mode: str, font_size: int = 13) -> str:
+    """Build the application-wide Qt style sheet for *mode* at *font_size* (pt).
 
     Object-name hooks used by widgets across the app:
       * ``QFrame#LeftPanel`` / ``QFrame#Card`` – panelled containers
       * ``QPushButton#Accent`` – primary action (Run); ``#Danger`` – Stop
       * ``QLabel#Muted`` – secondary text; ``QLabel#Heading`` – section titles
+      * ``QLabel#Section`` – small sidebar section captions
+      * ``QLabel#Stat`` / ``QLabel#StatValue`` – run-summary rows
     """
     p = palette(mode)
     return f"""
     QWidget {{
         background-color: {p['bg']};
         color: {p['text']};
-        font-size: 13px;
+        font-size: {font_size}px;
         selection-background-color: {ACCENT};
         selection-color: #ffffff;
     }}
@@ -158,8 +160,14 @@ def build_qss(mode: str) -> str:
     }}
 
     QLabel {{ background: transparent; }}
-    QLabel#Heading {{ font-size: 15px; font-weight: 600; }}
+    QLabel#Heading {{ font-size: {font_size + 3}px; font-weight: 600; }}
     QLabel#Muted {{ color: {p['text_muted']}; }}
+    QLabel#Section {{
+        color: {p['text_muted']}; font-size: {font_size - 2}px;
+        font-weight: 700; letter-spacing: 1px;
+    }}
+    QLabel#Stat {{ color: {p['text_muted']}; }}
+    QLabel#StatValue {{ font-weight: 600; }}
 
     QPushButton {{
         background-color: {p['card_bg']};
@@ -188,18 +196,22 @@ def build_qss(mode: str) -> str:
         padding: 4px 6px;
     }}
 
-    QTabWidget::pane {{ border: 1px solid {p['card_border']}; border-radius: 6px; }}
-    QTabBar::tab {{
-        background: {p['card_bg']};
-        color: {p['text_muted']};
-        padding: 7px 14px;
-        border: 1px solid {p['card_border']};
-        border-bottom: none;
-        border-top-left-radius: 6px;
-        border-top-right-radius: 6px;
-        margin-right: 2px;
+    /* Flat underline-style tab bar (cleaner than boxed tabs under Fusion). */
+    QTabWidget::pane {{
+        border: none;
+        border-top: 1px solid {p['card_border']};
+        top: -1px;
     }}
-    QTabBar::tab:selected {{ background: {p['panel']}; color: {p['text']}; }}
+    QTabBar {{ qproperty-drawBase: 0; }}
+    QTabBar::tab {{
+        background: transparent;
+        color: {p['text_muted']};
+        padding: 8px 18px;
+        border: none;
+        border-bottom: 2px solid transparent;
+        margin: 0;
+    }}
+    QTabBar::tab:selected {{ color: {p['text']}; border-bottom: 2px solid {ACCENT}; }}
     QTabBar::tab:hover {{ color: {p['text']}; }}
 
     QTreeView, QTableView, QListView {{

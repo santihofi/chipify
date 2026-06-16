@@ -74,9 +74,14 @@ def main() -> int:
     # identically across platforms.
     app.setStyle("Fusion")
 
+    cfg = app_config.load_config()
     mode = theme.load_theme_name()
+    font_size = int(cfg.get("font_size", 13))
+    font = app.font()
+    font.setPointSize(font_size)
+    app.setFont(font)
     app.setPalette(theme.build_palette(mode))
-    app.setStyleSheet(theme.build_qss(mode))
+    app.setStyleSheet(theme.build_qss(mode, font_size))
     log.info("Starting Chipify Qt GUI (theme=%s, PySide6).", mode)
 
     window = MainWindow()

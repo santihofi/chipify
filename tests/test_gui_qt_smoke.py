@@ -228,6 +228,54 @@ def test_datasheet_editor_loads_and_saves(qt_app, tmp_path, monkeypatch):
         win.close()
 
 
+def test_run_summary_updates(window):
+    window.show_results(_sample_df(), _FakeStim(), switch_tab=False)
+    assert window.sum_samples.text() == "4"
+    assert window.sum_valid.text() == "4"
+    assert "%" in window.sum_yield.text()      # yield rendered
+
+
+def test_font_size_setting_persists_and_applies(window, monkeypatch):
+    from chipify import app_config
+    from chipify.gui_qt.widgets.settings_dialog import SettingsDialog
+    store = {"theme": "night", "font_size": 13}
+    monkeypatch.setattr(app_config, "load_config", lambda: dict(store))
+    monkeypatch.setattr(app_config, "save_config", lambda cfg: store.update(cfg))
+
+    dlg = SettingsDialog(window)
+    dlg.font_spin.setValue(16)
+    dlg._save()
+    assert store["font_size"] == 16
+
+
+def test_dashboard_histogram_has_compare(qt_app, monkeypatch):
+    from chipify import app_config
+    monkeypatch.setattr(app_config, "load_config", lambda: {})
+    monkeypatch.setattr(app_config, "save_config", lambda _cfg: None)
+    from chipify.gui_qt.multiplot_window import PlotCell
+    cell = PlotCell(AppState_for_cell(), lambda: _night_theme(), lambda _c: None)
+    try:
+        cell.mode_combo.setCurrentText("Histogram")
+        cell._apply_mode_visibility()
+        # group, fit (dist) and compare are all available for histogram cells.
+        assert cell.compare_combo.isVisibleTo(cell)
+        assert cell.group_combo.isVisibleTo(cell)
+        assert cell.dist_combo.isVisibleTo(cell)
+        assert "compare" in cell.get_config()
+    finally:
+        cell.deleteLater()
+
+
+def _night_theme():
+    from chipify.gui_qt import theme
+    return theme.plot_theme("night")
+
+
+def AppState_for_cell():
+    from chipify.gui.state import AppState
+    return AppState()
+
+
 def test_apply_theme_switches_palette(window):
     window.apply_theme("light")
     assert window.theme_name == "light"

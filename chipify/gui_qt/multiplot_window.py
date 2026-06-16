@@ -109,18 +109,27 @@ class PlotCell(QFrame):
         # Context controls (shown/hidden per mode).
         self.controls = QHBoxLayout()
         self.param_combo = QComboBox()
-        self.dist_combo = QComboBox(); self.dist_combo.addItems(_FIT_CURVES)
-        self.bins_combo = QComboBox(); self.bins_combo.addItems(_BINS)
         self.group_combo = QComboBox()
+        self.dist_combo = QComboBox(); self.dist_combo.addItems(_FIT_CURVES)
+        self.compare_combo = QComboBox()
+        self.bins_combo = QComboBox(); self.bins_combo.addItems(_BINS)
         self.x_combo = QComboBox()
         self.y_combo = QComboBox()
         self.target_combo = QComboBox()
         self.tran_signal_combo = QComboBox()
         self.tran_mode_combo = QComboBox(); self.tran_mode_combo.addItems(_TRAN_RUN_MODES)
         self.tran_n_edit = QLineEdit("10"); self.tran_n_edit.setFixedWidth(56)
+        for combo, tip in (
+            (self.param_combo, "Parameter"), (self.group_combo, "Group by"),
+            (self.dist_combo, "Fit curve"), (self.compare_combo, "Compare run"),
+            (self.bins_combo, "Bins"), (self.x_combo, "X axis"),
+            (self.y_combo, "Y axis"), (self.target_combo, "Target"),
+            (self.tran_signal_combo, "Signal"), (self.tran_mode_combo, "Runs"),
+        ):
+            combo.setToolTip(tip)
         self._ctl_widgets = [
-            self.param_combo, self.dist_combo, self.bins_combo, self.group_combo,
-            self.x_combo, self.y_combo, self.target_combo,
+            self.param_combo, self.group_combo, self.dist_combo, self.compare_combo,
+            self.bins_combo, self.x_combo, self.y_combo, self.target_combo,
             self.tran_signal_combo, self.tran_mode_combo, self.tran_n_edit,
         ]
         for w in self._ctl_widgets:
@@ -134,10 +143,9 @@ class PlotCell(QFrame):
         layout.addWidget(self.canvas, stretch=1)
 
         self.mode_combo.currentIndexChanged.connect(deferred(self._on_mode_change))
-        for w in (self.param_combo, self.dist_combo, self.bins_combo, self.group_combo,
-                  self.x_combo, self.y_combo, self.target_combo,
-                  self.tran_signal_combo, self.tran_mode_combo):
-            w.currentIndexChanged.connect(deferred(self._request_redraw))
+        for w in self._ctl_widgets:
+            if isinstance(w, QComboBox):
+                w.currentIndexChanged.connect(deferred(self._request_redraw))
         self.tran_n_edit.editingFinished.connect(self._request_redraw)
         self._apply_mode_visibility()
 
@@ -145,7 +153,8 @@ class PlotCell(QFrame):
         mode = self.mode_combo.currentText()
         vis = {w: False for w in self._ctl_widgets}
         if mode == "Histogram":
-            for w in (self.param_combo, self.dist_combo, self.bins_combo, self.group_combo):
+            for w in (self.param_combo, self.group_combo, self.dist_combo,
+                      self.compare_combo, self.bins_combo):
                 vis[w] = True
         elif mode in ("Scatter Plot", "Corner Yield Matrix"):
             vis[self.x_combo] = vis[self.y_combo] = True
@@ -194,6 +203,7 @@ class PlotCell(QFrame):
 
         self._set(self.param_combo, params)
         self._set(self.group_combo, ["None"] + sweep_params)
+        self._set(self.compare_combo, ["None"] + _dl.list_history_runs(settings.OUT_DIR))
         self._set(self.x_combo, xy)
         self._set(self.y_combo, xy)
         self._set(self.target_combo, meas or ["-"])
@@ -229,7 +239,8 @@ class PlotCell(QFrame):
                     PlotManager.draw_histogram(
                         fig, ax, canvas, valid_df, stim, param,
                         self.dist_combo.currentText(), self.group_combo.currentText(),
-                        self.bins_combo.currentText(), False, "None", theme=theme,
+                        self.bins_combo.currentText(), False,
+                        self.compare_combo.currentText(), theme=theme,
                     )
                 else:
                     canvas.draw_idle()
@@ -310,6 +321,7 @@ class PlotCell(QFrame):
             "dist": self.dist_combo.currentText(),
             "bins": self.bins_combo.currentText(),
             "group": self.group_combo.currentText(),
+            "compare": self.compare_combo.currentText(),
             "x_col": self.x_combo.currentText(),
             "y_col": self.y_combo.currentText(),
             "target": self.target_combo.currentText(),
@@ -335,6 +347,7 @@ class PlotCell(QFrame):
             return
         for combo, key in (
             (self.param_combo, "param"), (self.group_combo, "group"),
+            (self.compare_combo, "compare"),
             (self.x_combo, "x_col"), (self.y_combo, "y_col"),
             (self.target_combo, "target"), (self.tran_signal_combo, "tran_signals"),
         ):

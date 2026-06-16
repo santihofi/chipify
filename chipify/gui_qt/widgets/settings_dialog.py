@@ -138,6 +138,12 @@ class SettingsDialog(QDialog):
         self.theme_combo.addItems(_theme.available_themes())
         self.theme_combo.setCurrentText(self._cfg.get("theme", _theme.DEFAULT_THEME))
         form.addRow("Theme", self.theme_combo)
+
+        self.font_spin = QSpinBox()
+        self.font_spin.setRange(8, 20)
+        self.font_spin.setSuffix(" px")
+        self.font_spin.setValue(int(self._cfg.get("font_size", 13)))
+        form.addRow("Font size", self.font_spin)
         return w
 
     def _build_paths_tab(self) -> QWidget:
@@ -173,11 +179,10 @@ class SettingsDialog(QDialog):
         for key, edit in self.path_edits.items():
             cfg[key] = edit.text().strip()
 
-        new_theme = self.theme_combo.currentText()
-        theme_changed = new_theme != cfg.get("theme")
-        cfg["theme"] = new_theme
+        cfg["theme"] = self.theme_combo.currentText()
+        cfg["font_size"] = self.font_spin.value()
 
         app_config.save_config(cfg)
-        if theme_changed:
-            self._window.apply_theme(new_theme)
+        # Re-apply theme + font size live.
+        self._window.apply_appearance()
         self.accept()

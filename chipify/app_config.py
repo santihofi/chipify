@@ -32,6 +32,7 @@ DEFAULTS: dict[str, Any] = {
     "transient_equations": [],        # [{"name": "vdiff", "expr": "v(outp) - v(outn)"}, ...]
     "multiplot_config": [],           # persisted PlotCell configs for Multi-Plot Dashboard
     "theme": "night",                 # appearance theme: night|dark|light
+    "font_size": 13,                  # base UI font size in px (8–20)
     # ── Project folders (None/absent/blank ⇒ default structure; see settings.py) ──
     "in_dir": None,                   # input datasheets   (default: datasheets/)
     "out_dir": None,                  # simulation output  (default: out/)
