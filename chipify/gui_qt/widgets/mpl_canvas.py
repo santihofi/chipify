@@ -28,7 +28,11 @@ class MplCanvas(QWidget):
         toolbar: bool = True,
     ) -> None:
         super().__init__(parent)
-        self.figure = Figure(figsize=figsize, layout="tight")
+        # No layout engine here: the PlotManager.draw_* methods manage spacing
+        # themselves via tight_layout()/subplots_adjust(), and setting a "tight"
+        # engine at construction conflicts with those calls (matplotlib then
+        # silently drops the adjustment, distorting margins and legends).
+        self.figure = Figure(figsize=figsize)
         self.canvas = FigureCanvasQTAgg(self.figure)
 
         layout = QVBoxLayout(self)
@@ -43,6 +47,15 @@ class MplCanvas(QWidget):
         """Reset the figure to a single axes and return it."""
         self.figure.clf()
         return self.figure.add_subplot(111)
+
+    def set_background(self, color: str) -> None:
+        """Paint the figure patch (the frame around the axes) the theme colour.
+
+        Without this the figure defaults to white, leaving a white border around
+        the dark axes — the PlotManager only themes the axes, not the figure.
+        """
+        self.figure.set_facecolor(color)
+        self.canvas.setStyleSheet(f"background-color: {color};")
 
     def draw(self) -> None:
         self.canvas.draw_idle()

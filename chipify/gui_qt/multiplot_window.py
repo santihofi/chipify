@@ -35,7 +35,7 @@ from chipify.gui.services import transient_loader as _tl
 from chipify.gui.services.scatter_hover import HoverState, ScatterHoverManager
 from chipify.gui.state import AppState
 from chipify.gui_qt.services import canvas_menu
-from chipify.gui_qt.widgets.helpers import compact_combo
+from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas
 from chipify.plot_manager import PlotManager
 
@@ -81,6 +81,7 @@ class PlotCell(QFrame):
 
         self._build_ui()
         self.canvas.figure.add_subplot(111)
+        self.canvas.set_background(self._plot_theme()["bg"])
         self._hover = ScatterHoverManager(
             self.canvas.canvas, self.canvas.figure,
             get_state=self._hover_state, on_point_click=self._on_point_click,
@@ -132,11 +133,11 @@ class PlotCell(QFrame):
         self.canvas = MplCanvas(figsize=(4, 3), toolbar=False)
         layout.addWidget(self.canvas, stretch=1)
 
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
+        self.mode_combo.currentIndexChanged.connect(deferred(self._on_mode_change))
         for w in (self.param_combo, self.dist_combo, self.bins_combo, self.group_combo,
                   self.x_combo, self.y_combo, self.target_combo,
                   self.tran_signal_combo, self.tran_mode_combo):
-            w.currentIndexChanged.connect(self._request_redraw)
+            w.currentIndexChanged.connect(deferred(self._request_redraw))
         self.tran_n_edit.editingFinished.connect(self._request_redraw)
         self._apply_mode_visibility()
 
@@ -214,6 +215,7 @@ class PlotCell(QFrame):
         self._populate(valid_df, stim, sweep_params, derived_cols)
         mode = self.mode_combo.currentText()
         theme = self._plot_theme()
+        self.canvas.set_background(theme["bg"])
         fig, canvas = self.canvas.figure, self.canvas.canvas
         self._sc_plot = self._scatter_df = None
         self._hover.invalidate()

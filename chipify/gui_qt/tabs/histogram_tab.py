@@ -27,7 +27,7 @@ from chipify.gui.services import data_loader as _dl
 from chipify.gui.services import measurements as _meas
 from chipify.gui.state import AppState
 from chipify.gui_qt.services.throttle import Throttle
-from chipify.gui_qt.widgets.helpers import compact_combo, elide_horizontally
+from chipify.gui_qt.widgets.helpers import compact_combo, deferred, elide_horizontally
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas
 from chipify.plot_manager import PlotManager
 
@@ -67,6 +67,7 @@ class HistogramTab(QWidget):
 
         self._build_ui()
         self.ax = self.canvas.figure.add_subplot(111)
+        self.canvas.set_background(self._plot_theme()["bg"])
 
         self._throttle = Throttle(self._redraw, app_config.get_live_throttle_ms(), self)
         self._state.data_changed.connect(self._on_data_changed)
@@ -120,7 +121,7 @@ class HistogramTab(QWidget):
 
         for combo in (self.param_combo, self.group_combo, self.fit_combo,
                       self.compare_combo, self.bins_combo):
-            combo.currentIndexChanged.connect(self._redraw)
+            combo.currentIndexChanged.connect(deferred(self._redraw))
         self.zoom_check.toggled.connect(self._redraw)
 
     # ── Option population ─────────────────────────────────────────────────────
@@ -172,6 +173,8 @@ class HistogramTab(QWidget):
             return
 
         self._update_kpis(valid_df, stim, param)
+        theme = self._plot_theme()
+        self.canvas.set_background(theme["bg"])
         PlotManager.draw_histogram(
             self.canvas.figure, self.ax, self.canvas.canvas, valid_df, stim,
             param,
@@ -180,7 +183,7 @@ class HistogramTab(QWidget):
             self.bins_combo.currentText(),
             self.zoom_check.isChecked(),
             self.compare_combo.currentText(),
-            theme=self._plot_theme(),
+            theme=theme,
         )
 
     def _export(self) -> None:

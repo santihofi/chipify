@@ -40,10 +40,12 @@ from chipify.gui_qt import theme
 from chipify.gui_qt.controllers.history_controller import HistoryController
 from chipify.gui_qt.controllers.simulation_controller import SimulationController
 from chipify.gui_qt.tabs.analytics_tab import AnalyticsTab
+from chipify.gui_qt.tabs.editor_tab import DatasheetEditorTab
 from chipify.gui_qt.tabs.equations_tab import EquationsTab
 from chipify.gui_qt.tabs.histogram_tab import HistogramTab
 from chipify.gui_qt.tabs.measurements_tab import MeasurementsTab
 from chipify.gui_qt.tabs.transient_tab import TransientTab
+from chipify.gui_qt.widgets.helpers import deferred
 
 log = logging.getLogger("chipify.gui_qt.main_window")
 
@@ -73,6 +75,7 @@ class MainWindow(QMainWindow):
         # Populate selectors, then auto-load the last run once the loop is idle.
         self.refresh_datasheets()
         self.refresh_history()
+        self.editor_tab.load_datasheet()
         self.set_status(f"Chipify {__version__} — ready.")
         QTimer.singleShot(0, self.history_controller.auto_load_latest)
         log.debug("MainWindow constructed (theme=%s).", self.theme_name)
@@ -88,11 +91,13 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.editor_tab = DatasheetEditorTab(self)
         self.measurements_tab = MeasurementsTab(self.app_state)
         self.histogram_tab = HistogramTab(self.app_state, self.plot_theme)
         self.analytics_tab = AnalyticsTab(self.app_state, self.plot_theme)
         self.transient_tab = TransientTab(self.app_state, self.plot_theme)
         self.equations_tab = EquationsTab(self.reapply_equations)
+        self.tabs.addTab(self.editor_tab, "Datasheet Editor")
         self.tabs.addTab(self.measurements_tab, "Measurements")
         self.tabs.addTab(self.histogram_tab, "Histogram")
         self.tabs.addTab(self.analytics_tab, "Analytics")
@@ -128,7 +133,7 @@ class MainWindow(QMainWindow):
         ds_row = QHBoxLayout()
         ds_row.setSpacing(6)
         self.datasheet_combo = QComboBox()
-        self.datasheet_combo.textActivated.connect(self._on_datasheet_changed)
+        self.datasheet_combo.textActivated.connect(deferred(self._on_datasheet_changed))
         ds_row.addWidget(self.datasheet_combo, stretch=1)
         self.btn_refresh = QPushButton("↺")
         self.btn_refresh.setFixedWidth(36)
@@ -161,7 +166,7 @@ class MainWindow(QMainWindow):
         hist_row = QHBoxLayout()
         hist_row.setSpacing(6)
         self.history_combo = QComboBox()
-        self.history_combo.textActivated.connect(self.history_controller.on_select)
+        self.history_combo.textActivated.connect(deferred(self.history_controller.on_select))
         hist_row.addWidget(self.history_combo, stretch=1)
         self.btn_annotate = QPushButton("✎")
         self.btn_annotate.setFixedWidth(36)
@@ -356,6 +361,15 @@ class MainWindow(QMainWindow):
 
     def _on_datasheet_changed(self, _text: str) -> None:
         self.refresh_history()
+        self.editor_tab.load_datasheet()
+
+    def set_active_datasheet(self, name: str) -> None:
+        """Rescan datasheets, select *name*, and load it into the editor."""
+        self.refresh_datasheets()
+        if name:
+            self.datasheet_combo.setCurrentText(name)
+        self.refresh_history()
+        self.editor_tab.load_datasheet()
 
     # ── Results surface (called by controllers) ───────────────────────────────
 

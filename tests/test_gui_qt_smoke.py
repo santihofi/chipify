@@ -69,7 +69,7 @@ def window(qt_app):
 def test_window_constructs(window):
     assert window.windowTitle() == "Chipify EDA Dashboard"
     assert window.tabs.count() >= 1
-    assert window.tabs.tabText(0) == "Measurements"
+    assert window.tabs.tabText(0) == "Datasheet Editor"
 
 
 def test_theme_qss_builds_for_all_themes():
@@ -100,7 +100,8 @@ def test_measurement_rows_service():
 
 def test_plot_tabs_present(window):
     titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-    assert titles == ["Measurements", "Histogram", "Analytics", "Transient", "Equations"]
+    assert titles == ["Datasheet Editor", "Measurements", "Histogram",
+                      "Analytics", "Transient", "Equations"]
 
 
 def test_transient_tab_empty_state(window):
@@ -157,6 +158,20 @@ def test_equations_tab_applies_derived_column(window, monkeypatch):
     assert window.histogram_tab.param_combo.findText("gain2") >= 0
 
 
+def test_deferred_runs_on_next_tick(qt_app):
+    """`deferred` must not run inline (so a combo popup can close first)."""
+    from chipify.gui_qt.widgets.helpers import deferred
+    calls = []
+    slot = deferred(lambda x: calls.append(x))
+    slot(42)
+    assert calls == []                      # not synchronous
+    for _ in range(10):
+        qt_app.processEvents()
+        if calls:
+            break
+    assert calls == [42]                    # ran on a later event-loop tick
+
+
 def test_compact_combo_bounds_width(qt_app):
     """A compact combo must not widen to its longest item (Wayland surface
     overflow regression)."""
@@ -167,6 +182,37 @@ def test_compact_combo_bounds_width(qt_app):
     combo.addItem("x")
     combo.addItem("a really really really long history run label.csv")
     assert combo.sizeHint().width() < 220
+
+
+def test_datasheet_editor_loads_and_saves(qt_app, tmp_path, monkeypatch):
+    import yaml as _yaml
+
+    from chipify import settings
+    monkeypatch.setattr(settings, "IN_DIR", str(tmp_path))
+    ds = tmp_path / "demo.yaml"
+    ds.write_text(
+        "parameters:\n  temp: [27, 85]\n"
+        "tests:\n  tb_sf:\n    gain:\n      min: 0.8\n      max: 1.0\n",
+        encoding="utf-8",
+    )
+
+    from chipify.gui_qt.main_window import MainWindow
+    win = MainWindow()
+    try:
+        win.set_active_datasheet("demo.yaml")
+        ed = win.editor_tab
+        assert ed.current_yaml_path == str(ds)
+        # Form populated from the file.
+        assert any(v["key"].get() == "temp" for v in ed.param_vars)
+        assert ed.test_vars and ed.test_vars[0]["tb_name"].get() == "tb_sf"
+
+        # Edit a measurement bound in the form and save.
+        ed.test_vars[0]["values"][0]["vmax"]._w.setText("1.5")
+        ed._save()
+        reloaded = _yaml.safe_load(ds.read_text())
+        assert reloaded["tests"]["tb_sf"]["gain"]["max"] == 1.5
+    finally:
+        win.close()
 
 
 def test_apply_theme_switches_palette(window):
@@ -265,6 +311,18 @@ def test_qt_tab_plugin_loads_and_receives_data(qt_app, tmp_path, monkeypatch):
     finally:
         win.close()
         plugin_loader.reload_plugins()
+
+
+def test_histogram_themed_frame_and_legend(window):
+    """Regression: figure frame must be themed (not white) and the histogram
+    must render a legend."""
+    window.show_results(_sample_df(), _FakeStim(), switch_tab=False)
+    window.histogram_tab._redraw()
+    fig = window.histogram_tab.canvas.figure
+    r, g, b, _a = fig.get_facecolor()
+    assert (r, g, b) != (1.0, 1.0, 1.0)      # not the default white frame
+    assert r < 0.5 and g < 0.5 and b < 0.5   # dark (night theme)
+    assert fig.axes[0].get_legend() is not None
 
 
 def test_simulation_worker_end_to_end(window, monkeypatch):

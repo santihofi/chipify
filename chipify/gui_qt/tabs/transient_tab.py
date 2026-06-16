@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 from chipify import app_config, settings
 from chipify.gui.services import transient_loader as _tl
 from chipify.gui.state import AppState
-from chipify.gui_qt.widgets.helpers import compact_combo
+from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas
 from chipify.plot_manager import PlotManager
 
@@ -57,6 +57,7 @@ class TransientTab(QWidget):
         self._plot_theme = plot_theme
 
         self._build_ui()
+        self.canvas.set_background(self._plot_theme()["bg"])
         self._state.data_changed.connect(self._on_data_changed)
 
     # ── Layout ────────────────────────────────────────────────────────────────
@@ -110,8 +111,8 @@ class TransientTab(QWidget):
         body.addWidget(self.canvas, stretch=1)
         layout.addLayout(body, stretch=1)
 
-        self.kind_combo.currentIndexChanged.connect(self._on_kind_change)
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
+        self.kind_combo.currentIndexChanged.connect(deferred(self._on_kind_change))
+        self.mode_combo.currentIndexChanged.connect(deferred(self._on_mode_change))
         self.btn_refresh.clicked.connect(self._redraw)
         self.btn_select_all.clicked.connect(self.signal_list.selectAll)
         self._apply_mode_visibility()
@@ -201,6 +202,7 @@ class TransientTab(QWidget):
     def _redraw(self, *_args) -> None:
         kind = self._current_kind()
         theme = self._plot_theme()
+        self.canvas.set_background(theme["bg"])
         draw_fn = {
             "transient": PlotManager.draw_transient_plot,
             "dc": PlotManager.draw_dc_sweep,

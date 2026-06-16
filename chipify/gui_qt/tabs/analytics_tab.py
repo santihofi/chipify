@@ -28,7 +28,7 @@ from chipify.gui.services.scatter_hover import HoverState, ScatterHoverManager
 from chipify.gui.state import AppState
 from chipify.gui_qt.services import canvas_menu
 from chipify.gui_qt.services.throttle import Throttle
-from chipify.gui_qt.widgets.helpers import compact_combo
+from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas
 from chipify.plot_manager import PlotManager
 
@@ -62,6 +62,7 @@ class AnalyticsTab(QWidget):
 
         self._build_ui()
         self.canvas.figure.add_subplot(111)
+        self.canvas.set_background(self._plot_theme()["bg"])
 
         self._hover = ScatterHoverManager(
             self.canvas.canvas, self.canvas.figure,
@@ -110,9 +111,9 @@ class AnalyticsTab(QWidget):
         self.canvas = MplCanvas(figsize=(8, 5))
         layout.addWidget(self.canvas, stretch=1)
 
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
+        self.mode_combo.currentIndexChanged.connect(deferred(self._on_mode_change))
         for combo in (self.x_combo, self.y_combo, self.target_combo):
-            combo.currentIndexChanged.connect(self._redraw)
+            combo.currentIndexChanged.connect(deferred(self._redraw))
         self._apply_mode_visibility()
 
     @staticmethod
@@ -193,6 +194,7 @@ class AnalyticsTab(QWidget):
             return
 
         theme = self._plot_theme()
+        self.canvas.set_background(theme["bg"])
         self._sc_plot, self._scatter_df = PlotManager.draw_adv_plot(
             self.canvas.figure, None, self.canvas.canvas, valid_df, stim,
             self.mode_combo.currentText(),

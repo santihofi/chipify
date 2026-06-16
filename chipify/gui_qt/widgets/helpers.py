@@ -4,7 +4,24 @@ helpers.py – Small Qt widget helpers shared across tabs.
 """
 from __future__ import annotations
 
+from typing import Callable
+
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QComboBox, QSizePolicy, QWidget
+
+
+def deferred(fn: Callable) -> Callable:
+    """Wrap *fn* so it runs on the next event-loop tick instead of inline.
+
+    Connect this to a ``QComboBox`` selection signal when the handler does
+    non-trivial work (a redraw, a data load): running heavy work synchronously
+    inside the selection handler blocks the event loop while the popup is
+    closing, which on Wayland leaves the dropdown surface visibly stuck open.
+    Deferring lets the popup finish closing first.
+    """
+    def _slot(*args, **kwargs):
+        QTimer.singleShot(0, lambda: fn(*args, **kwargs))
+    return _slot
 
 
 def compact_combo(combo: QComboBox, length: int = 10) -> QComboBox:
