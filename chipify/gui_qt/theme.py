@@ -88,6 +88,45 @@ def plot_theme(mode: str) -> dict[str, str]:
     }
 
 
+def build_palette(mode: str):
+    """Build a QPalette for *mode* so the Fusion style renders native widgets
+    (combo boxes, spin boxes, inputs, menus) in the theme's colours.
+
+    Theming via the palette — rather than QSS on every complex widget — keeps
+    those widgets' sub-controls (spin arrows, combo popups) native and working.
+    """
+    from PySide6.QtGui import QColor, QPalette
+
+    p = palette(mode)
+    bg = QColor(p["bg"])
+    base = QColor(p["input_bg"])
+    text = QColor(p["text"])
+    panel = QColor(p["panel"])
+    button = QColor(p["card_bg"])
+    muted = QColor(p["text_muted"])
+    accent = QColor(ACCENT)
+    white = QColor("#ffffff")
+
+    qp = QPalette()
+    qp.setColor(QPalette.Window, bg)
+    qp.setColor(QPalette.WindowText, text)
+    qp.setColor(QPalette.Base, base)
+    qp.setColor(QPalette.AlternateBase, panel)
+    qp.setColor(QPalette.ToolTipBase, button)
+    qp.setColor(QPalette.ToolTipText, text)
+    qp.setColor(QPalette.Text, text)
+    qp.setColor(QPalette.Button, button)
+    qp.setColor(QPalette.ButtonText, text)
+    qp.setColor(QPalette.BrightText, white)
+    qp.setColor(QPalette.Highlight, accent)
+    qp.setColor(QPalette.HighlightedText, white)
+    qp.setColor(QPalette.PlaceholderText, muted)
+    qp.setColor(QPalette.Link, accent)
+    for role in (QPalette.Text, QPalette.WindowText, QPalette.ButtonText):
+        qp.setColor(QPalette.Disabled, role, muted)
+    return qp
+
+
 def build_qss(mode: str) -> str:
     """Build the application-wide Qt style sheet for *mode*.
 
@@ -137,18 +176,16 @@ def build_qss(mode: str) -> str:
     QPushButton#Danger {{ background-color: {DANGER}; border-color: {DANGER}; color: #ffffff; }}
     QPushButton#Danger:hover {{ background-color: {DANGER_HOVER}; border-color: {DANGER_HOVER}; }}
 
-    QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
+    /* Only plain text inputs are styled here. Combo boxes and spin boxes are
+       intentionally left to the Fusion style + palette: border/background QSS
+       on those complex widgets breaks their sub-controls (the spin up/down
+       arrows stop rendering/working, dropdown popups misbehave) unless every
+       sub-control is also styled with arrow images. */
+    QLineEdit, QPlainTextEdit, QTextEdit {{
         background-color: {p['input_bg']};
         border: 1px solid {p['card_border']};
         border-radius: 5px;
         padding: 4px 6px;
-    }}
-    QComboBox::drop-down {{ border: none; width: 18px; }}
-    QComboBox QAbstractItemView {{
-        background-color: {p['card_bg']};
-        border: 1px solid {p['card_border']};
-        selection-background-color: {ACCENT};
-        selection-color: #ffffff;
     }}
 
     QTabWidget::pane {{ border: 1px solid {p['card_border']}; border-radius: 6px; }}

@@ -1,5 +1,11 @@
 # Chipify uses setup.py for packaging metadata and dependencies.
 # This file only carries developer-tooling configuration (mypy + pytest).
+#
+# System dependency (cannot be declared here — pip only installs Python wheels):
+# the Qt GUI's xcb platform plugin needs the libxcb-cursor0 system library
+# (Qt >= 6.5). `./install.sh` installs it automatically on Debian/Ubuntu; on
+# other systems install it via your package manager. Without it, on a Wayland
+# session the GUI falls back to native Wayland where dropdown popups don't close.
 
 # ── mypy strict config ────────────────────────────────────────────────────────
 [tool.mypy]

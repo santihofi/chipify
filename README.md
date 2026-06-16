@@ -51,6 +51,11 @@ available on your `PATH`:
 - **[Ngspice](https://ngspice.sourceforge.io/)** — the SPICE simulator
 - **[Xschem](https://xschem.sourceforge.io/)** — schematic capture / netlist generation
 - *(optional)* **[VACASK](https://vacask.fke.uni-lj.si/)** + PyOPUS — alternative simulation backend
+- *(Linux GUI)* **`libxcb-cursor0`** — system library required by Qt's `xcb`
+  platform plugin (Qt ≥ 6.5). `install.sh` installs it automatically on
+  Debian/Ubuntu; without it the GUI falls back to native Wayland, where
+  dropdown menus don't close on selection. (System libraries can't be declared
+  in `setup.py`/`pyproject.toml`, so they're handled by `install.sh`.)
 
 It is highly recommended to install and run Chipify inside the [IIC-OSIC-TOOLS](https://github.com/iic-jku/iic-osic-tools) docker container. This way, all the required tools plus a bunch of open source PDKs are already installed.
 

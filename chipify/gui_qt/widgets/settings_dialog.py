@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from chipify import app_config
 from chipify.gui_qt import theme as _theme
+from chipify.gui_qt.widgets.helpers import autoclose_combo
 
 if TYPE_CHECKING:
     from chipify.gui_qt.main_window import MainWindow
@@ -51,6 +52,8 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_performance_tab(), "Performance")
         tabs.addTab(self._build_interface_tab(), "Interface")
         tabs.addTab(self._build_paths_tab(), "Paths")
+        for cb in self.findChildren(QComboBox):
+            autoclose_combo(cb)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Save | QDialogButtonBox.Cancel

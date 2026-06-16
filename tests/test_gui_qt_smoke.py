@@ -172,6 +172,19 @@ def test_deferred_runs_on_next_tick(qt_app):
     assert calls == [42]                    # ran on a later event-loop tick
 
 
+def test_qss_excludes_complex_widgets_and_palette_builds(qt_app):
+    """QComboBox/QSpinBox must be themed via the palette, not QSS, so their
+    sub-controls (popups, spin arrows) keep working under Fusion."""
+    from PySide6.QtGui import QColor, QPalette
+    from chipify.gui_qt import theme
+    for mode in theme.available_themes():
+        qss = theme.build_qss(mode)
+        assert "QComboBox" not in qss
+        assert "QSpinBox" not in qss
+        pal = theme.build_palette(mode)
+        assert pal.color(QPalette.Base) == QColor(theme.palette(mode)["input_bg"])
+
+
 def test_compact_combo_bounds_width(qt_app):
     """A compact combo must not widen to its longest item (Wayland surface
     overflow regression)."""

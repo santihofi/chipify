@@ -45,7 +45,7 @@ from chipify.gui_qt.tabs.equations_tab import EquationsTab
 from chipify.gui_qt.tabs.histogram_tab import HistogramTab
 from chipify.gui_qt.tabs.measurements_tab import MeasurementsTab
 from chipify.gui_qt.tabs.transient_tab import TransientTab
-from chipify.gui_qt.widgets.helpers import deferred
+from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 
 log = logging.getLogger("chipify.gui_qt.main_window")
 
@@ -133,6 +133,7 @@ class MainWindow(QMainWindow):
         ds_row = QHBoxLayout()
         ds_row.setSpacing(6)
         self.datasheet_combo = QComboBox()
+        compact_combo(self.datasheet_combo, length=16)
         self.datasheet_combo.textActivated.connect(deferred(self._on_datasheet_changed))
         ds_row.addWidget(self.datasheet_combo, stretch=1)
         self.btn_refresh = QPushButton("↺")
@@ -166,6 +167,7 @@ class MainWindow(QMainWindow):
         hist_row = QHBoxLayout()
         hist_row.setSpacing(6)
         self.history_combo = QComboBox()
+        compact_combo(self.history_combo, length=16)
         self.history_combo.textActivated.connect(deferred(self.history_controller.on_select))
         hist_row.addWidget(self.history_combo, stretch=1)
         self.btn_annotate = QPushButton("✎")
@@ -272,6 +274,7 @@ class MainWindow(QMainWindow):
         self.theme_name = name
         app = QApplication.instance()
         if app is not None:
+            app.setPalette(theme.build_palette(name))
             app.setStyleSheet(theme.build_qss(name))
         # Re-emit so the plot tabs redraw with the new matplotlib palette.
         if self.app_state.current_df is not None:

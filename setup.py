@@ -31,7 +31,10 @@ setup(
         "jinja2",
         "pyyaml",
         "customtkinter",
-        "PySide6",
+        # Qt GUI. >=6.7 has improved Wayland popup handling; the xcb platform
+        # plugin additionally needs the libxcb-cursor0 *system* library (see
+        # install.sh / README — system libs can't be declared here).
+        "PySide6>=6.7",
         "matplotlib",
         "scipy",
         "asteval",

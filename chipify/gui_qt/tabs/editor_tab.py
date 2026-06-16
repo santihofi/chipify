@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 from chipify import settings
 from chipify.gui.services import yaml_editor_service as _ye
 from chipify.gui.widgets.yaml_dumper import ChipifyDumper, QuotedString, register
-from chipify.gui_qt.widgets.helpers import deferred
+from chipify.gui_qt.widgets.helpers import autoclose_combo, deferred
 
 log = logging.getLogger("chipify.gui_qt.tabs.editor")
 
@@ -109,6 +109,7 @@ class DatasheetEditorTab(QWidget):
         top.addSpacing(20)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Form View", "Raw YAML"])
+        autoclose_combo(self.mode_combo)
         self.mode_combo.currentIndexChanged.connect(deferred(self._on_mode_change))
         top.addWidget(self.mode_combo)
         top.addStretch(1)

@@ -75,6 +75,7 @@ def main() -> int:
     app.setStyle("Fusion")
 
     mode = theme.load_theme_name()
+    app.setPalette(theme.build_palette(mode))
     app.setStyleSheet(theme.build_qss(mode))
     log.info("Starting Chipify Qt GUI (theme=%s, PySide6).", mode)
 
