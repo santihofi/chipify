@@ -42,7 +42,6 @@ from chipify.gui_qt.controllers.history_controller import HistoryController
 from chipify.gui_qt.controllers.simulation_controller import SimulationController
 from chipify.gui_qt.tabs.analytics_tab import AnalyticsTab
 from chipify.gui_qt.tabs.editor_tab import DatasheetEditorTab
-from chipify.gui_qt.tabs.equations_tab import EquationsTab
 from chipify.gui_qt.tabs.histogram_tab import HistogramTab
 from chipify.gui_qt.tabs.measurements_tab import MeasurementsTab
 from chipify.gui_qt.tabs.transient_tab import TransientTab
@@ -95,17 +94,18 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.editor_tab = DatasheetEditorTab(self)
+        # The equations editor is embedded as the editor's third column; alias it
+        # so show_results() can report derived columns back to it.
+        self.equations_tab = self.editor_tab.equations_panel
         self.measurements_tab = MeasurementsTab(self.app_state)
         self.histogram_tab = HistogramTab(self.app_state, self.plot_theme)
         self.analytics_tab = AnalyticsTab(self.app_state, self.plot_theme)
         self.transient_tab = TransientTab(self.app_state, self.plot_theme)
-        self.equations_tab = EquationsTab(self.reapply_equations)
         self.tabs.addTab(self.editor_tab, "Datasheet Editor")
         self.tabs.addTab(self.measurements_tab, "Measurements")
         self.tabs.addTab(self.histogram_tab, "Histogram")
         self.tabs.addTab(self.analytics_tab, "Analytics")
         self.tabs.addTab(self.transient_tab, "Transient")
-        self.tabs.addTab(self.equations_tab, "Equations")
         self._setup_plugin_tabs()
         root.addWidget(self.tabs, stretch=1)
 

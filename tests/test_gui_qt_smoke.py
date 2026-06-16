@@ -101,7 +101,9 @@ def test_measurement_rows_service():
 def test_plot_tabs_present(window):
     titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
     assert titles == ["Datasheet Editor", "Measurements", "Histogram",
-                      "Analytics", "Transient", "Equations"]
+                      "Analytics", "Transient"]
+    # Equations editor is embedded as the editor's third column, not a tab.
+    assert window.editor_tab.equations_panel is window.equations_tab
 
 
 def test_transient_tab_empty_state(window):

@@ -122,10 +122,21 @@ class DatasheetEditorTab(QWidget):
         top.addWidget(self.btn_save)
         root.addLayout(top)
 
+        # Body: datasheet (form/raw stack) on the left, equations on the right.
+        # In Form view this reads as three columns: parameters · testbenches ·
+        # equations. (Equations live in settings.json, not the datasheet, so the
+        # panel stays visible in Raw view too.)
+        body = QHBoxLayout()
+        body.setSpacing(10)
         self.stack = QStackedWidget()
         self.stack.addWidget(self._build_form_page())   # index 0 = Form
         self.stack.addWidget(self._build_raw_page())     # index 1 = Raw
-        root.addWidget(self.stack, stretch=1)
+        body.addWidget(self.stack, stretch=2)
+
+        from chipify.gui_qt.tabs.equations_tab import EquationsTab
+        self.equations_panel = EquationsTab(self._window.reapply_equations)
+        body.addWidget(self.equations_panel, stretch=1)
+        root.addLayout(body, stretch=1)
 
     def _build_form_page(self) -> QWidget:
         scroll = QScrollArea()
