@@ -90,6 +90,9 @@ class TransientTab(QWidget):
         self.btn_export = QPushButton("Export…")
         self.btn_export.clicked.connect(self._export)
         controls.addWidget(self.btn_export)
+        self.btn_latex = QPushButton("TeX Export")
+        self.btn_latex.clicked.connect(self._export_latex)
+        controls.addWidget(self.btn_latex)
         controls.addWidget(self.btn_refresh)
         layout.addLayout(controls)
 
@@ -198,6 +201,20 @@ class TransientTab(QWidget):
             self, self.canvas.figure,
             self.kind_combo.currentText().lower().replace(" ", "_"), self._plot_theme(),
         )
+
+    def _export_latex(self) -> None:
+        """Export the current overlay selection as pgfplots CSV + .tex."""
+        from chipify.gui_qt.services.latex_export import export_overlay_latex
+        df = self._state.active_df
+        kind = self._current_kind()
+        adir = self._resolve_dir() if df is not None else ""
+        signals = [i.text() for i in self.signal_list.selectedItems()]
+        run_ids = self._selected_run_ids(df) if df is not None else []
+        equations = (
+            app_config.load_config().get("transient_equations", [])
+            if kind == "transient" else []
+        )
+        export_overlay_latex(self, kind, adir, run_ids, signals, equations)
 
     def _redraw(self, *_args) -> None:
         kind = self._current_kind()

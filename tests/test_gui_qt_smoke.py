@@ -101,6 +101,33 @@ def test_measurement_rows_service():
     assert r.cpk_str not in ("-", "")        # finite spread → numeric Cpk
 
 
+def test_histogram_latex_export(window, tmp_path, monkeypatch):
+    from chipify import settings
+    from chipify.gui_qt.services import latex_export
+    monkeypatch.setattr(settings, "OUT_DIR", str(tmp_path))
+    monkeypatch.setattr(latex_export.QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(latex_export.QMessageBox, "critical", lambda *a, **k: None)
+
+    window.show_results(_sample_df(), _FakeStim(), switch_tab=False)
+    h = window.histogram_tab
+    h.param_combo.setCurrentText("gain")
+    h._export_latex()
+
+    out = tmp_path / "latex"
+    assert (out / "gain_plot.tex").exists()
+    assert (out / "gain_plot.csv").exists()
+
+
+def test_transient_latex_export_no_data_is_graceful(window, monkeypatch):
+    # With no loaded data the overlay export must warn, not raise.
+    from chipify.gui_qt.services import latex_export
+    seen = {}
+    monkeypatch.setattr(latex_export.QMessageBox, "information",
+                        lambda *a, **k: seen.setdefault("info", a))
+    window.transient_tab._export_latex()
+    assert "info" in seen
+
+
 def test_plot_tabs_present(window):
     titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
     assert titles == ["Datasheet Editor", "Measurements", "Histogram",

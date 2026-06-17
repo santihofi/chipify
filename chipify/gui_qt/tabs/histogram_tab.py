@@ -90,6 +90,8 @@ class HistogramTab(QWidget):
         self.zoom_check = QCheckBox("Zoom to data")
         self.btn_export = QPushButton("Export…")
         self.btn_export.clicked.connect(self._export)
+        self.btn_latex = QPushButton("TeX Export")
+        self.btn_latex.clicked.connect(self._export_latex)
         for _c in (self.param_combo, self.group_combo, self.fit_combo,
                    self.compare_combo, self.bins_combo):
             compact_combo(_c)
@@ -119,6 +121,7 @@ class HistogramTab(QWidget):
             row2.addWidget(w)
         row2.addWidget(self.zoom_check)
         row2.addWidget(self.btn_export)
+        row2.addWidget(self.btn_latex)
         row2.addStretch(1)
 
         self.kpi_label = QLabel("")
@@ -205,6 +208,20 @@ class HistogramTab(QWidget):
             self, self.canvas.figure,
             f"histogram_{self.param_combo.currentText()}", self._plot_theme(),
         )
+
+    def _export_latex(self) -> None:
+        """Export the current distribution + fit as pgfplots CSV + .tex."""
+        from chipify.gui_qt.services.latex_export import export_histogram_latex
+        df = self._state.active_df
+        param = self.param_combo.currentText()
+        data = None
+        if df is not None and param and param != "-":
+            valid_df = _dl.valid_rows(df)
+            if param in valid_df.columns:
+                data = valid_df[param].dropna()
+        bins_text = self.bins_combo.currentText()
+        bins = "auto" if bins_text == "Auto" else int(bins_text)
+        export_histogram_latex(self, param, data, self.fit_combo.currentText(), bins)
 
     def _update_kpis(self, valid_df, stim, param: str) -> None:
         data = valid_df[param].dropna()
