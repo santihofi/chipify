@@ -85,7 +85,10 @@ def main() -> int:
     log.info("Starting Chipify Qt GUI (theme=%s, PySide6).", mode)
 
     window = MainWindow()
-    window.show()
+    # Start maximized so the window always fits the screen regardless of
+    # resolution; the title bar and window controls stay available, and the
+    # user can un-maximize to the clamped restored size set in MainWindow.
+    window.showMaximized()
     return app.exec()
 
 

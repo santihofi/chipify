@@ -80,9 +80,6 @@ class HistogramTab(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        controls = QHBoxLayout()
-        controls.setSpacing(8)
-
         self.param_combo = QComboBox()
         self.group_combo = QComboBox()
         self.fit_combo = QComboBox()
@@ -91,30 +88,46 @@ class HistogramTab(QWidget):
         self.bins_combo = QComboBox()
         self.bins_combo.addItems(_BINS)
         self.zoom_check = QCheckBox("Zoom to data")
+        self.btn_export = QPushButton("Export…")
+        self.btn_export.clicked.connect(self._export)
         for _c in (self.param_combo, self.group_combo, self.fit_combo,
                    self.compare_combo, self.bins_combo):
             compact_combo(_c)
 
+        # Two rows: five compact combos each carry a ~170px minimum, so a single
+        # row would force the tab (and thus the window) wider than a small
+        # screen. Splitting in two keeps the minimum width well under typical
+        # displays so the window can size down to fit.
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
         for label, w in (
             ("Meas:", self.param_combo),
             ("Group:", self.group_combo),
             ("Fit:", self.fit_combo),
+        ):
+            row1.addWidget(QLabel(label))
+            row1.addWidget(w)
+        row1.addStretch(1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        for label, w in (
             ("Compare:", self.compare_combo),
             ("Bins:", self.bins_combo),
         ):
-            controls.addWidget(QLabel(label))
-            controls.addWidget(w)
-        controls.addWidget(self.zoom_check)
-        self.btn_export = QPushButton("Export…")
-        self.btn_export.clicked.connect(self._export)
-        controls.addWidget(self.btn_export)
-        controls.addStretch(1)
+            row2.addWidget(QLabel(label))
+            row2.addWidget(w)
+        row2.addWidget(self.zoom_check)
+        row2.addWidget(self.btn_export)
+        row2.addStretch(1)
 
         self.kpi_label = QLabel("")
         self.kpi_label.setObjectName("Muted")
         elide_horizontally(self.kpi_label)
-        controls.addWidget(self.kpi_label)
-        layout.addLayout(controls)
+        row2.addWidget(self.kpi_label)
+
+        layout.addLayout(row1)
+        layout.addLayout(row2)
 
         self.canvas = MplCanvas(figsize=(6, 4))
         layout.addWidget(self.canvas, stretch=1)

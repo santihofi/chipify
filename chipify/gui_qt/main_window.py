@@ -16,7 +16,7 @@ import logging
 import os
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -60,7 +60,10 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Chipify EDA Dashboard")
-        self.resize(1300, 950)
+        # Preferred restored (un-maximized) size, clamped to the screen so it
+        # never overflows a small display. app.py shows the window maximized;
+        # this is the size it returns to when the user un-maximizes.
+        self._set_initial_size(1300, 950)
 
         #: Single source of truth, shared with controllers and tab views.
         self.app_state = AppState()
@@ -83,6 +86,25 @@ class MainWindow(QMainWindow):
         log.debug("MainWindow constructed (theme=%s).", self.theme_name)
 
     # ── Layout ────────────────────────────────────────────────────────────────
+
+    def _set_initial_size(self, width: int, height: int) -> None:
+        """Resize to (*width*, *height*) but never larger than the screen.
+
+        Caps the requested size to ~95% of the available geometry (work area,
+        i.e. excluding the taskbar) of the screen the window will appear on, so
+        the restored window fits even on a small display.
+        """
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            width = min(width, int(avail.width() * 0.95))
+            height = min(height, int(avail.height() * 0.95))
+            log.info("Initial window size %dx%d (screen work area %dx%d).",
+                     width, height, avail.width(), avail.height())
+        else:
+            log.warning("No screen available; using requested size %dx%d.",
+                        width, height)
+        self.resize(width, height)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
