@@ -32,7 +32,7 @@ from chipify.gui_qt.services.throttle import Throttle
 
 log = logging.getLogger("chipify.gui_qt.tabs.measurements")
 
-_COLUMNS = ["Parameter", "Sim Min", "Sim Typ", "Sim Max",
+_COLUMNS = ["Parameter", "Unit", "Sim Min", "Sim Typ", "Sim Max",
             "Spec Min", "Spec Max", "Cpk", "Sigma", "Status"]
 
 _PASS_COLOR = QColor("#2ecc71")
@@ -111,6 +111,7 @@ class MeasurementsTab(QWidget):
         for r in rows:
             item = QTreeWidgetItem([
                 r.name,
+                r.unit or "-",
                 _meas.fmt_value(r.sim_min),
                 _meas.fmt_value(r.sim_typ),
                 _meas.fmt_value(r.sim_max),

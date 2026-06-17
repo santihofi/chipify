@@ -37,6 +37,7 @@ class MeasurementRow:
     sigma_str: str
     status: str        # "PASS" | "FAIL"
     fail_n: int
+    unit: str = ""     # optional engineering unit ("" when unspecified)
 
 
 def fmt_value(val: Any) -> str:
@@ -97,11 +98,14 @@ def measurement_rows(valid_df: pd.DataFrame, stim: Any) -> list[MeasurementRow]:
             else:
                 passed, fail_n = True, 0
 
+            unit = getattr(val_obj, "unit", None) or ""
+
             rows.append(MeasurementRow(
                 name=name,
                 sim_min=sim_min, sim_typ=sim_typ, sim_max=sim_max,
                 spec_min=v_min, spec_max=v_max,
                 cpk_str=cpk_str, sigma_str=sigma_str,
                 status="PASS" if passed else "FAIL", fail_n=fail_n,
+                unit=str(unit),
             ))
     return rows

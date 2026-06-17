@@ -26,14 +26,18 @@ parameters:
 tests:
   tb_ota_op:
     # Measurement boundary specs: min/max define pass/fail, typ is the target.
+    # `unit` is optional and display-only — it labels the value in the
+    # Measurements table and never affects pass/fail.
     ve:
       min: 0.7
       max: 0.8
       typ: 0.75
+      unit: V
     vd:
       min: -0.02
       max: 0.02
       typ: 0.0
+      unit: V
 
   tb_ota_gain:
     # Optional: signals to capture for plotting (transient_signals / dc_signals /
@@ -43,10 +47,12 @@ tests:
       min: 40
       max: 80
       typ: 60
+      unit: dB
     bandwidth:                        # YAML supports scientific notation
       min: 1.0e+6
       max: 1.0e+9
       typ: 1.0e+7
+      unit: Hz
     # Optional: derive extra metrics from measured values with sandboxed
     # expressions (name: expression).
     measure:

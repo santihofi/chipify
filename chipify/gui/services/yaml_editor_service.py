@@ -72,6 +72,7 @@ def new_datasheet_template() -> str:
         "      min: 0.0\n"
         "      max: 1.0\n"
         "      typ: 0.5\n"
+        "      unit: V        # optional, display-only label\n"
     )
 
 
@@ -296,6 +297,13 @@ def sync_form_to_yaml(
             _set_bound(v_data, "max", "vmax", v_dict["vmax"].get().strip())
             if "vtyp" in v_dict:  # older form states may not carry a typ field
                 _set_bound(v_data, "typ", "vtyp", v_dict["vtyp"].get().strip())
+            if "unit" in v_dict:  # optional engineering unit, quoted for safety
+                unit_raw = v_dict["unit"].get().strip()
+                if unit_raw:
+                    v_data["unit"] = QuotedString(unit_raw)
+                else:
+                    v_data.pop("unit", None)
+                    v_data.pop("units", None)
             tb_content[name] = v_data
 
         yaml_data[test_key][tb_name] = tb_content

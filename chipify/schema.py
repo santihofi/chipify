@@ -252,7 +252,11 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
                 raise SchemaError(
                     f"tests.{tb_path}.{val_name}: {exc}"
                 ) from exc
-            value_lst.append(Value(name=str(val_name), vmin=vmin, vmax=vmax, vtyp=vtyp))
+            unit_raw = bounds.get("unit", bounds.get("units"))
+            unit = str(unit_raw).strip() or None if unit_raw is not None else None
+            value_lst.append(
+                Value(name=str(val_name), vmin=vmin, vmax=vmax, vtyp=vtyp, unit=unit)
+            )
 
         t = Test(tb_path, value_lst)
         t.analyses = analyses

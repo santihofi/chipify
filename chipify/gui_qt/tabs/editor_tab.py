@@ -284,7 +284,7 @@ class DatasheetEditorTab(QWidget):
         v.addLayout(hdr)
 
         grid = QGridLayout()
-        for col, txt in enumerate(("Measurement", "Min", "Typ", "Max")):
+        for col, txt in enumerate(("Measurement", "Min", "Typ", "Max", "Unit")):
             lbl = QLabel(txt)
             lbl.setObjectName("Muted")
             grid.addWidget(lbl, 0, col)
@@ -299,8 +299,11 @@ class DatasheetEditorTab(QWidget):
             min_v = QLineEdit(_ye.fmt_bound(v_data.get("vmin", v_data.get("min", ""))))
             typ_v = QLineEdit(_ye.fmt_bound(v_data.get("vtyp", v_data.get("typ", ""))))
             max_v = QLineEdit(_ye.fmt_bound(v_data.get("vmax", v_data.get("max", ""))))
+            unit_v = QLineEdit(str(v_data.get("unit", v_data.get("units", "")) or ""))
+            unit_v.setPlaceholderText("V, Hz…")
             for w in (min_v, typ_v, max_v):
                 w.setFixedWidth(80)
+            unit_v.setFixedWidth(60)
             delv = self._del_button(
                 lambda _=False, t=t_idx, n=v_name: self._action_del_value(t, n)
             )
@@ -308,18 +311,20 @@ class DatasheetEditorTab(QWidget):
             grid.addWidget(min_v, row_i, 1)
             grid.addWidget(typ_v, row_i, 2)
             grid.addWidget(max_v, row_i, 3)
-            grid.addWidget(delv, row_i, 4)
+            grid.addWidget(unit_v, row_i, 4)
+            grid.addWidget(delv, row_i, 5)
             test_val_vars.append({
                 "name": _Var(name_v), "vmin": _Var(min_v),
                 "vmax": _Var(max_v), "vtyp": _Var(typ_v),
+                "unit": _Var(unit_v),
                 "orig_name": str(v_name),
             })
             row_i += 1
         if row_i == 1:
             none_lbl = QLabel("No measurements yet")
             none_lbl.setObjectName("Muted")
-            grid.addWidget(none_lbl, 1, 0, 1, 4)
-        grid.setColumnStretch(5, 1)
+            grid.addWidget(none_lbl, 1, 0, 1, 5)
+        grid.setColumnStretch(6, 1)
         v.addLayout(grid)
 
         add_v = QPushButton("+ Add Measurement")

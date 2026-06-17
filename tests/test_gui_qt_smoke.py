@@ -23,10 +23,11 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 # ── Fakes ─────────────────────────────────────────────────────────────────────
 
 class _FakeVal:
-    def __init__(self, name, vmin=None, vmax=None):
+    def __init__(self, name, vmin=None, vmax=None, unit=None):
         self.name = name
         self.vmin = vmin
         self.vmax = vmax
+        self.unit = unit
 
 
 class _FakeTest:
@@ -36,7 +37,7 @@ class _FakeTest:
 
 class _FakeStim:
     def __init__(self):
-        self.tests = [_FakeTest([_FakeVal("gain", 9.0, 11.0)])]
+        self.tests = [_FakeTest([_FakeVal("gain", 9.0, 11.0, unit="dB")])]
         self.params = {}
 
 
@@ -85,7 +86,8 @@ def test_show_results_populates_measurements(window):
     assert tree.topLevelItemCount() == 1
     item = tree.topLevelItem(0)
     assert item.text(0) == "gain"
-    assert item.text(8) == "FAIL"           # one failing run
+    assert item.text(1) == "dB"              # optional unit column
+    assert item.text(9) == "FAIL"           # one failing run
     assert "gain" in window.measurements_tab.fails_summary.text()
 
 
@@ -95,6 +97,7 @@ def test_measurement_rows_service():
     assert len(rows) == 1
     r = rows[0]
     assert r.name == "gain" and r.status == "FAIL" and r.fail_n == 1
+    assert r.unit == "dB"                    # carried through from the Value
     assert r.cpk_str not in ("-", "")        # finite spread → numeric Cpk
 
 
@@ -221,11 +224,13 @@ def test_datasheet_editor_loads_and_saves(qt_app, tmp_path, monkeypatch):
         assert any(v["key"].get() == "temp" for v in ed.param_vars)
         assert ed.test_vars and ed.test_vars[0]["tb_name"].get() == "tb_sf"
 
-        # Edit a measurement bound in the form and save.
+        # Edit a measurement bound and set an optional unit, then save.
         ed.test_vars[0]["values"][0]["vmax"]._w.setText("1.5")
+        ed.test_vars[0]["values"][0]["unit"]._w.setText("V")
         ed._save()
         reloaded = _yaml.safe_load(ds.read_text())
         assert reloaded["tests"]["tb_sf"]["gain"]["max"] == 1.5
+        assert reloaded["tests"]["tb_sf"]["gain"]["unit"] == "V"
     finally:
         win.close()
 
