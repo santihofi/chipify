@@ -16,6 +16,7 @@ from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -113,6 +114,7 @@ class PlotCell(QFrame):
         self.dist_combo = QComboBox(); self.dist_combo.addItems(_FIT_CURVES)
         self.compare_combo = QComboBox()
         self.bins_combo = QComboBox(); self.bins_combo.addItems(_BINS)
+        self.zoom_check = QCheckBox("Zoom"); self.zoom_check.setToolTip("Zoom to data")
         self.x_combo = QComboBox()
         self.y_combo = QComboBox()
         self.target_combo = QComboBox()
@@ -129,7 +131,7 @@ class PlotCell(QFrame):
             combo.setToolTip(tip)
         self._ctl_widgets = [
             self.param_combo, self.group_combo, self.dist_combo, self.compare_combo,
-            self.bins_combo, self.x_combo, self.y_combo, self.target_combo,
+            self.bins_combo, self.zoom_check, self.x_combo, self.y_combo, self.target_combo,
             self.tran_signal_combo, self.tran_mode_combo, self.tran_n_edit,
         ]
         for w in self._ctl_widgets:
@@ -147,6 +149,7 @@ class PlotCell(QFrame):
             if isinstance(w, QComboBox):
                 w.currentIndexChanged.connect(deferred(self._request_redraw))
         self.tran_n_edit.editingFinished.connect(self._request_redraw)
+        self.zoom_check.toggled.connect(self._request_redraw)
         self._apply_mode_visibility()
 
     def _apply_mode_visibility(self) -> None:
@@ -154,7 +157,7 @@ class PlotCell(QFrame):
         vis = {w: False for w in self._ctl_widgets}
         if mode == "Histogram":
             for w in (self.param_combo, self.group_combo, self.dist_combo,
-                      self.compare_combo, self.bins_combo):
+                      self.compare_combo, self.bins_combo, self.zoom_check):
                 vis[w] = True
         elif mode in ("Scatter Plot", "Corner Yield Matrix"):
             vis[self.x_combo] = vis[self.y_combo] = True
@@ -239,7 +242,7 @@ class PlotCell(QFrame):
                     PlotManager.draw_histogram(
                         fig, ax, canvas, valid_df, stim, param,
                         self.dist_combo.currentText(), self.group_combo.currentText(),
-                        self.bins_combo.currentText(), False,
+                        self.bins_combo.currentText(), self.zoom_check.isChecked(),
                         self.compare_combo.currentText(), theme=theme,
                     )
                 else:
@@ -320,6 +323,7 @@ class PlotCell(QFrame):
             "param": self.param_combo.currentText(),
             "dist": self.dist_combo.currentText(),
             "bins": self.bins_combo.currentText(),
+            "zoom": self.zoom_check.isChecked(),
             "group": self.group_combo.currentText(),
             "compare": self.compare_combo.currentText(),
             "x_col": self.x_combo.currentText(),
@@ -334,6 +338,7 @@ class PlotCell(QFrame):
         self.mode_combo.setCurrentText(cfg.get("mode", "Histogram"))
         self.dist_combo.setCurrentText(cfg.get("dist", "Gauss (Normal)"))
         self.bins_combo.setCurrentText(cfg.get("bins", "Auto"))
+        self.zoom_check.setChecked(bool(cfg.get("zoom", False)))
         self.tran_mode_combo.setCurrentText(cfg.get("tran_run_mode", "First N"))
         self.tran_n_edit.setText(str(cfg.get("tran_n", "10")))
         # Param/x/y/target selections are restored after options repopulate.

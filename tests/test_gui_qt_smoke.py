@@ -312,11 +312,16 @@ def test_dashboard_histogram_has_compare(qt_app, monkeypatch):
     try:
         cell.mode_combo.setCurrentText("Histogram")
         cell._apply_mode_visibility()
-        # group, fit (dist) and compare are all available for histogram cells.
+        # group, fit (dist), compare and zoom are all available for histogram cells.
         assert cell.compare_combo.isVisibleTo(cell)
         assert cell.group_combo.isVisibleTo(cell)
         assert cell.dist_combo.isVisibleTo(cell)
+        assert cell.zoom_check.isVisibleTo(cell)
         assert "compare" in cell.get_config()
+        assert "zoom" in cell.get_config()
+        # Zoom round-trips through config.
+        cell.apply_config({"mode": "Histogram", "zoom": True})
+        assert cell.zoom_check.isChecked()
     finally:
         cell.deleteLater()
 
