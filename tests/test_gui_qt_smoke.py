@@ -43,7 +43,7 @@ class _FakeStim:
 
 def _sample_df():
     return pd.DataFrame({
-        "gain": [10.0, 10.2, 9.8, 10.1],
+        "gain": [10.0, 10.2, 8.5, 10.1],          # one out-of-spec (< vmin 9.0)
         "gain_pass": [True, True, False, True],   # one failure
         "sim_error": ["None", "None", "None", "None"],
     })
@@ -88,7 +88,13 @@ def test_show_results_populates_measurements(window):
     assert item.text(0) == "gain"
     assert item.text(1) == "dB"              # optional unit column
     assert item.text(9) == "FAIL"           # one failing run
-    assert "gain" in window.measurements_tab.fails_summary.text()
+    assert "gain" in window.measurements_tab.status_label.text()
+
+    # The out-of-spec failing run shows up under Worst Cases.
+    worst = window.measurements_tab.worst_tree
+    assert worst.topLevelItemCount() == 1
+    assert worst.topLevelItem(0).text(0) == "gain"
+    assert worst.topLevelItem(0).text(2).startswith("<")   # violated lower bound
 
 
 def test_measurement_rows_service():
@@ -99,6 +105,21 @@ def test_measurement_rows_service():
     assert r.name == "gain" and r.status == "FAIL" and r.fail_n == 1
     assert r.unit == "dB"                    # carried through from the Value
     assert r.cpk_str not in ("-", "")        # finite spread → numeric Cpk
+
+
+def test_measurements_equation_results(window, monkeypatch):
+    from chipify import app_config
+    monkeypatch.setattr(
+        app_config, "load_config",
+        lambda: {"custom_equations": [{"name": "gain_x2", "expr": "gain * 2"}]},
+    )
+    window.show_results(_sample_df(), _FakeStim(), switch_tab=False)
+    et = window.measurements_tab.eq_tree
+    names = [et.topLevelItem(i).text(0) for i in range(et.topLevelItemCount())]
+    assert "gain_x2" in names
+    row = next(et.topLevelItem(i) for i in range(et.topLevelItemCount())
+               if et.topLevelItem(i).text(0) == "gain_x2")
+    assert row.text(1) == "gain * 2"         # expression column
 
 
 def test_histogram_latex_export(window, tmp_path, monkeypatch):
