@@ -3,7 +3,7 @@
 history_controller.py – Qt run-history dropdown + CSV loading.
 
 Delegates all data I/O to the shared, framework-agnostic
-``chipify.gui.services.data_loader`` (reused unchanged) and pushes loaded runs
+``chipify.data_loader`` (reused unchanged) and pushes loaded runs
 into the window via ``show_results``.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject
 
 from chipify import settings, util
-from chipify.gui.services import data_loader as _dl
+from chipify import data_loader as _dl
 
 if TYPE_CHECKING:
     from chipify.gui_qt.main_window import MainWindow

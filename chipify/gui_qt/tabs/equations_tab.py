@@ -4,7 +4,7 @@ equations_tab.py – Custom scalar / transient equation editor.
 
 Edits the ``custom_equations`` (scalar, per-run) and ``transient_equations``
 (waveform-level) lists in ``settings.json`` and applies them via the shared
-:mod:`chipify.gui.services.equation_service`. Scalar equations are re-applied
+:mod:`chipify.uikit.services.equation_service`. Scalar equations are re-applied
 to the loaded results through the window's ``reapply_equations`` callback so
 derived columns flow into every tab; transient equations are picked up by the
 Transient tab on its next redraw.

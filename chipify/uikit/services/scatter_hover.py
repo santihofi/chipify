@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 
-log = logging.getLogger("chipify.gui.scatter_hover")
+log = logging.getLogger("chipify.uikit.scatter_hover")
 
 _ACCENT = "#3484F0"
 _OFFSET = 14  # px gap between the hovered point and the bubble corner

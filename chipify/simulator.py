@@ -1378,7 +1378,7 @@ def _assemble_result_df(rows: list, analysis_dirs: dict) -> pd.DataFrame:
     is also set for backward compatibility with consumers that only know about
     transient.
     """
-    from chipify.gui.services import data_loader as _dl
+    from chipify import data_loader as _dl
 
     df = pd.DataFrame(rows)
     df = _dl.normalise_sim_error(df)

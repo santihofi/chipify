@@ -25,9 +25,9 @@ from typing import Any
 
 import pandas as pd
 
-from chipify.gui.services.equation_service import apply_transient_equations
+from chipify.uikit.services.equation_service import apply_transient_equations
 
-log = logging.getLogger("chipify.gui.services.transient")
+log = logging.getLogger("chipify.uikit.services.transient")
 
 
 # ── Generic helpers ──────────────────────────────────────────────────────────

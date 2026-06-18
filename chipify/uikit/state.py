@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-log = logging.getLogger("chipify.gui.state")
+log = logging.getLogger("chipify.uikit.state")
 
 
 # ── Signal ────────────────────────────────────────────────────────────────────

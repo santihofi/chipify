@@ -31,10 +31,10 @@ from PySide6.QtWidgets import (
 )
 
 from chipify import app_config, settings
-from chipify.gui.services import data_loader as _dl
-from chipify.gui.services import transient_loader as _tl
-from chipify.gui.services.scatter_hover import HoverState, ScatterHoverManager
-from chipify.gui.state import AppState
+from chipify import data_loader as _dl
+from chipify.uikit.services import transient_loader as _tl
+from chipify.uikit.services.scatter_hover import HoverState, ScatterHoverManager
+from chipify.uikit.state import AppState
 from chipify.gui_qt.services import canvas_menu
 from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas

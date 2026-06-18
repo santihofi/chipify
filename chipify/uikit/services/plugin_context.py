@@ -26,9 +26,9 @@ from typing import Any, Callable
 import pandas as pd
 
 from chipify import settings
-from chipify.gui.services import data_loader as _dl
-from chipify.gui.services import transient_loader as _tl
-from chipify.gui.state import AppState
+from chipify import data_loader as _dl
+from chipify.uikit.services import transient_loader as _tl
+from chipify.uikit.state import AppState
 
 log = logging.getLogger("chipify.plugins.context")
 
@@ -61,7 +61,7 @@ class PluginContext:
     Parameters
     ----------
     app_state:
-        The application's :class:`~chipify.gui.state.AppState`.
+        The application's :class:`~chipify.uikit.state.AppState`.
     get_yaml_path:
         Zero-arg callable returning the currently selected datasheet path
         (or None).
@@ -318,18 +318,22 @@ class PluginContext:
         ``card_bg``, ``card_border``, ``text_muted``, ``danger``.
         """
         try:
-            from chipify.gui import theme as _theme_mod
-            palette = dict(_theme_mod.plot_theme())
+            # Lazy import keeps uikit headless-importable; only a plugin that
+            # actually calls theme() pulls in the Qt theme module.
+            from chipify.gui_qt import theme as _theme_mod
+            mode = _theme_mod.load_theme_name()
+            p = _theme_mod.palette(mode)
+            palette = dict(_theme_mod.plot_theme(mode))
             palette.update({
-                "window_bg": _theme_mod.BACKGROUND_COLOR,
-                "panel": _theme_mod.PANEL_COLOR,
-                "card_bg": _theme_mod.CARD_BG,
-                "card_border": _theme_mod.CARD_BORDER,
-                "text_muted": _theme_mod.TEXT_MUTED,
+                "window_bg": p["bg"],
+                "panel": p["panel"],
+                "card_bg": p["card_bg"],
+                "card_border": p["card_border"],
+                "text_muted": p["text_muted"],
                 "danger": _theme_mod.DANGER,
             })
             return palette
-        except Exception:  # headless / customtkinter unavailable
+        except Exception:  # headless / Qt unavailable
             return {
                 "bg": "#1a1a1a", "fg": "white", "grid": "gray",
                 "spine": "white", "legend_bg": "#2b2b2b",

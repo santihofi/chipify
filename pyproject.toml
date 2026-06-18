@@ -21,7 +21,6 @@ exclude = ["tests/"]
 # Third-party packages without stubs
 [[tool.mypy.overrides]]
 module = [
-    "customtkinter.*",
     "tqdm.*",
     "jinja2.*",
     "matplotlib.*",
@@ -32,14 +31,13 @@ module = [
 ]
 ignore_missing_imports = true
 
-# Legacy Tk-heavy modules are whitelist-typed gradually
+# GUI and report modules are whitelist-typed gradually
 [[tool.mypy.overrides]]
 module = [
-    "chipify.gui.main_window",
-    "chipify.gui.widgets.settings_window",
     "chipify.gui_qt.*",
-    "chipify.gui_tk",
-    "chipify.multiplot_window",
+    # matplotlib-event-handler heavy; typed gradually (pre-existing debt).
+    "chipify.uikit.services.scatter_hover",
+    "chipify.uikit.services.netlist_export",
     "chipify.pdf_export",
     "chipify.md_export",
     "chipify.export_latex",

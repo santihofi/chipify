@@ -4,11 +4,11 @@ editor_tab.py – Datasheet (YAML) editor: form view + raw view.
 
 Qt port of the legacy CustomTkinter "Datasheet Editor" tab. The form↔dict
 translation, the new-file template, and value formatting are reused unchanged
-from the framework-agnostic :mod:`chipify.gui.services.yaml_editor_service`;
+from the framework-agnostic :mod:`chipify.uikit.services.yaml_editor_service`;
 the form's ``QLineEdit``\\ s are wrapped in a tiny ``.get()`` adapter so
 ``sync_form_to_yaml`` (written for Tk ``StringVar``\\ s) works as-is. The custom
 ``ChipifyDumper`` (inline lists, quoted strings) is reused from
-:mod:`chipify.gui.widgets.yaml_dumper`.
+:mod:`chipify.uikit.widgets.yaml_dumper`.
 
 Save preserves the file's comments/formatting when the form did not change the
 data (it re-saves the original text); otherwise it dumps the edited dict.
@@ -38,8 +38,8 @@ from PySide6.QtWidgets import (
 )
 
 from chipify import settings
-from chipify.gui.services import yaml_editor_service as _ye
-from chipify.gui.widgets.yaml_dumper import ChipifyDumper, QuotedString, register
+from chipify.uikit.services import yaml_editor_service as _ye
+from chipify.uikit.widgets.yaml_dumper import ChipifyDumper, QuotedString, register
 from chipify.gui_qt.widgets.helpers import autoclose_combo, deferred
 
 log = logging.getLogger("chipify.gui_qt.tabs.editor")

@@ -34,9 +34,9 @@ from PySide6.QtWidgets import (
 )
 
 from chipify import __version__, app_config, settings
-from chipify.gui.services import data_loader as _dl
-from chipify.gui.services import equation_service as _eq_svc
-from chipify.gui.state import AppState
+from chipify import data_loader as _dl
+from chipify.uikit.services import equation_service as _eq_svc
+from chipify.uikit.state import AppState
 from chipify.gui_qt import theme
 from chipify.gui_qt.controllers.history_controller import HistoryController
 from chipify.gui_qt.controllers.simulation_controller import SimulationController
@@ -288,7 +288,7 @@ class MainWindow(QMainWindow):
 
     def _setup_plugin_tabs(self) -> None:
         """Discover and host QtTabPlugins; warn about unsupported Tk ones."""
-        from chipify.gui.services.plugin_context import PluginContext
+        from chipify.uikit.services.plugin_context import PluginContext
         from chipify.gui_qt.services.main_thread import MainThreadInvoker
         from chipify.plugin_loader import (
             get_qt_tab_plugins,

@@ -62,18 +62,19 @@ Exporter plugin
 
 Tab plugin
 ^^^^^^^^^^
-    from chipify.plugin_loader import TabPlugin
+    from PySide6.QtWidgets import QLabel, QVBoxLayout
+    from chipify.plugin_loader import QtTabPlugin
 
-    class MyTab(TabPlugin):
+    class MyTab(QtTabPlugin):
         name = "My Tab"            # tab title in the main window
 
         def build(self, parent, context):
-            '''Build CTk/tk widgets into `parent`. `context` is the
+            '''Build Qt widgets into `parent` (a QWidget). `context` is the
             PluginContext facade (results, specs, netlists, run_async, …).'''
-            import customtkinter as ctk
-            ctk.CTkLabel(parent, text="Hello").pack()
+            QVBoxLayout(parent).addWidget(QLabel("Hello", parent))
 
-    See PLUGINS.md for the full TabPlugin / PluginContext reference.
+    See PLUGINS.md for the full QtTabPlugin / PluginContext reference. (The
+    legacy Tk ``TabPlugin`` base still exists but is skipped by the Qt GUI.)
 
 Discovery
 ---------
@@ -303,35 +304,14 @@ class ExporterPlugin:
 
 class TabPlugin:
     """
-    Base class for plugins that add a whole tab to the Chipify main window.
+    **Legacy** base class for tab plugins targeting the old CustomTkinter GUI.
 
-    The tab is created once at application startup. The plugin builds its own
-    widgets (customtkinter / tkinter) into the provided frame and interacts
-    with simulation data exclusively through the
-    :class:`chipify.gui.services.plugin_context.PluginContext` facade — never
-    through the main-window object directly. The context hands out defensive
-    copies, so a plugin cannot corrupt the application's state, and every
-    lifecycle call below is exception-guarded by the host: a raising plugin
-    is logged and disabled for that call, the app keeps running.
-
-    Example
-    -------
-    ::
-
-        import customtkinter as ctk
-        from chipify.plugin_loader import TabPlugin
-
-        class RunCounter(TabPlugin):
-            name = "Run Counter"
-
-            def build(self, parent, context):
-                self._lbl = ctk.CTkLabel(parent, text="no data")
-                self._lbl.pack(pady=20)
-
-            def on_data_changed(self, context):
-                df = context.results()
-                self._lbl.configure(
-                    text=f"{0 if df is None else len(df)} runs loaded")
+    Retained only so the current GUI can *detect* such plugins and skip them
+    with a clear warning (see :func:`warn_unsupported_tab_plugins`). The PySide6
+    (Qt) GUI loads :class:`QtTabPlugin` instead — port a legacy plugin by
+    changing its base class to ``QtTabPlugin`` and building Qt widgets in
+    ``build`` (the :class:`~chipify.uikit.services.plugin_context.PluginContext`
+    facade is identical for both). See PLUGINS.md.
     """
 
     #: Tab title shown in the main window. Must be unique and must not
@@ -368,7 +348,7 @@ class QtTabPlugin:
     Identical contract to :class:`TabPlugin`, except ``build`` receives a
     ``PySide6.QtWidgets.QWidget`` as *parent* instead of a Tk frame — the
     plugin lays its Qt widgets into it (e.g. with a ``QVBoxLayout``). The
-    :class:`~chipify.gui.services.plugin_context.PluginContext` facade is
+    :class:`~chipify.uikit.services.plugin_context.PluginContext` facade is
     unchanged, so data access, ``run_async`` and ``subscribe_data_changed``
     behave exactly as documented in PLUGINS.md.
 

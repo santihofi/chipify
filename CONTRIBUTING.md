@@ -24,8 +24,8 @@ not require them.
 - **Type-check the typed core:**
   ```bash
   python -m mypy chipify/expression.py chipify/schema.py chipify/util.py \
-      chipify/app_config.py chipify/settings.py chipify/gui/state.py \
-      chipify/gui/services/plugin_context.py
+      chipify/app_config.py chipify/settings.py chipify/data_loader.py \
+      chipify/uikit/state.py chipify/uikit/services/plugin_context.py
   ```
   CI runs both of these on every push and pull request.
 - Keep changes focused and describe *why* in the PR.
@@ -35,9 +35,10 @@ not require them.
 A few invariants keep the codebase testable and maintainable (see
 [context.md](context.md) for the full picture):
 
-1. **Services and model modules** (`gui/services/`, `gui/state.py`,
-   `expression.py`, `schema.py`) **must not import tkinter/customtkinter** — this
-   keeps them unit-testable without a display.
+1. **The core and the `uikit/` layer** (`uikit/services/`, `uikit/state.py`,
+   `data_loader.py`, `expression.py`, `schema.py`) **must not import a GUI
+   toolkit** (PySide6/tkinter) — this keeps them unit-testable without a display.
+   All Qt code lives under `gui_qt/`.
 2. **Tabs/UI never call `simulator.*` directly** — dispatch through a controller.
 3. **All expression evaluation goes through `SafeEvaluator`** (`expression.py`);
    never use raw `eval()`/`exec()` on user input.

@@ -98,7 +98,7 @@ def test_show_results_populates_measurements(window):
 
 
 def test_measurement_rows_service():
-    from chipify.gui.services import measurements as meas
+    from chipify.uikit.services import measurements as meas
     rows = meas.measurement_rows(_sample_df(), _FakeStim())
     assert len(rows) == 1
     r = rows[0]
@@ -332,7 +332,7 @@ def _night_theme():
 
 
 def AppState_for_cell():
-    from chipify.gui.state import AppState
+    from chipify.uikit.state import AppState
     return AppState()
 
 

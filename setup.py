@@ -30,7 +30,6 @@ setup(
         "tqdm",
         "jinja2",
         "pyyaml",
-        "customtkinter",
         # Qt GUI. >=6.7 has improved Wayland popup handling; the xcb platform
         # plugin additionally needs the libxcb-cursor0 *system* library (see
         # install.sh / README — system libs can't be declared here).
@@ -48,10 +47,9 @@ setup(
     entry_points={
         "console_scripts": [
             "chipify-cli=chipify.cli:main",
+            # `chipify` launches the PySide6 (Qt) desktop GUI. `chipify-qt` is a
+            # retained alias for the same app.
             "chipify=chipify.cli:run_gui",
-            # Temporary launcher for the PySide6 rebuild; runs side by side with
-            # the CustomTkinter GUI until the Qt rebuild reaches parity, at which
-            # point `chipify` is repointed here and this entry is removed.
             "chipify-qt=chipify.gui_qt.app:main",
         ]
     },

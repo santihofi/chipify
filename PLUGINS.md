@@ -288,8 +288,8 @@ After restarting Chipify both formats appear in the Export menu of every plot.
 
 `TabPlugin` adds a whole tab to the Chipify main window — the most powerful plugin type. The plugin builds its own UI (customtkinter / tkinter widgets) into a frame the host provides, and accesses simulation data exclusively through a [`PluginContext`](#plugincontext-reference) facade: results, datasheet specs, rendered SPICE netlists, history runs, waveforms, and a thread bridge for calling external APIs without freezing the GUI.
 
-> [!IMPORTANT]
-> **GUI toolkit:** the desktop GUI is migrating from CustomTkinter to **PySide6 (Qt)**. The Qt GUI loads **`QtTabPlugin`** (Qt widgets), not the CustomTkinter `TabPlugin` below — Tk tab plugins are detected and **skipped with a warning** in the Qt GUI. The data-facing contract is identical: same [`PluginContext`](#plugincontext-reference), same lifecycle methods. To port, change the base class to `QtTabPlugin` and build Qt widgets into `parent` (a `QWidget`). The other plugin types (`PlotPlugin`, `ReportPlugin`, `ExpressionPlugin`, `ExporterPlugin`) are pure-data and work unchanged under both GUIs. See [QtTabPlugin](#qttabplugin) below.
+> [!WARNING]
+> **`TabPlugin` is legacy.** The CustomTkinter GUI has been removed; the desktop GUI is now **PySide6 (Qt)** and loads **`QtTabPlugin`** (Qt widgets) only — CustomTkinter `TabPlugin`s are detected and **skipped with a warning**. The data-facing contract is identical: same [`PluginContext`](#plugincontext-reference), same lifecycle methods. To port, change the base class to `QtTabPlugin` and build Qt widgets into `parent` (a `QWidget`). The other plugin types (`PlotPlugin`, `ReportPlugin`, `ExpressionPlugin`, `ExporterPlugin`) are pure-data and work unchanged. This section is kept for reference and porting — see [QtTabPlugin](#qttabplugin).
 
 ### Class attributes
 
@@ -372,7 +372,7 @@ A complete, runnable example ships with the repository at `examples/plugins/run_
 
 ## QtTabPlugin
 
-`QtTabPlugin` is the PySide6 (Qt) equivalent of [`TabPlugin`](#tabplugin), loaded by the Qt GUI (`chipify-qt`, and `chipify` once the migration completes). The contract is identical except that `build(parent, context)` receives a **`QWidget`** instead of a Tk frame — lay your Qt widgets into it (e.g. with a `QVBoxLayout`).
+`QtTabPlugin` is the supported tab-plugin base, loaded by the Qt GUI (`chipify`, or its `chipify-qt` alias). The contract is identical to the legacy [`TabPlugin`](#tabplugin) except that `build(parent, context)` receives a **`QWidget`** instead of a Tk frame — lay your Qt widgets into it (e.g. with a `QVBoxLayout`).
 
 Everything else is the same as `TabPlugin`:
 

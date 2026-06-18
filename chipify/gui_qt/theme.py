@@ -8,15 +8,15 @@ The matplotlib palette is exposed via :func:`plot_theme` with the same stable
 keys that :mod:`chipify.plot_manager` and the plot plugins already consume, so
 the plotting layer stays shared and unchanged.
 
-Unlike the legacy :mod:`chipify.gui.theme`, this module imports no GUI toolkit
-at import time and has no global side effects — building the QSS is a pure
-function of the theme name.
+Unlike the legacy CustomTkinter theme, this module imports no GUI toolkit at
+import time and has no global side effects — building the QSS is a pure function
+of the theme name.
 """
 from __future__ import annotations
 
 # ── Palette definitions ─────────────────────────────────────────────────────
-# Hex values mirror chipify.gui.theme.THEMES so the Qt app matches the look of
-# the CustomTkinter GUI. ``text`` is added for Qt foreground; the matplotlib
+# Hex values mirror the original CustomTkinter palette so the Qt app matches the
+# look of the legacy GUI. ``text`` is added for Qt foreground; the matplotlib
 # keys (mpl_bg / mpl_fg) feed plot_theme().
 THEMES: dict[str, dict[str, str]] = {
     "night": {
@@ -39,7 +39,7 @@ THEMES: dict[str, dict[str, str]] = {
     },
 }
 
-#: Theme-independent semantic colours (match chipify.gui.theme).
+#: Theme-independent semantic colours (match the original CustomTkinter palette).
 ACCENT: str = "#3484F0"
 ACCENT_HOVER: str = "#2b6fd0"
 DANGER: str = "#e74c3c"
@@ -71,8 +71,8 @@ def load_theme_name() -> str:
 def plot_theme(mode: str) -> dict[str, str]:
     """Matplotlib palette for *mode* with the stable keys PlotManager expects.
 
-    Mirrors :func:`chipify.gui.theme.plot_theme` so figures look identical to
-    the CustomTkinter GUI.
+    Mirrors the original CustomTkinter plot palette so figures look identical to
+    the legacy GUI.
     """
     p = palette(mode)
     is_light = mode == "light"

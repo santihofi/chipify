@@ -13,7 +13,7 @@ from chipify.analyzer import print_summary
 
 def _json_summary(df, stim, yaml_name: str, duration_s: float) -> dict:
     """Return a machine-readable summary dict for the completed run."""
-    from chipify.gui.services import data_loader as _dl
+    from chipify import data_loader as _dl
     df = _dl.prepare_results(df)
     total = len(df)
     crashes = int((df['sim_error'] != 'None').sum())
@@ -90,7 +90,7 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
         ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         hist = os.path.join(history_dir, f"run_{ts}.csv")
         df.to_csv(hist, index=False)
-        from chipify.gui.services import data_loader as _dl
+        from chipify import data_loader as _dl
         df2 = _dl.prepare_results(df)
         total  = len(df2)
         valid  = int((df2['sim_error'] == 'None').sum())
@@ -271,8 +271,8 @@ def main():
 
 
 def run_gui():
-    """Starts the tkinter-based desktop GUI for chipify."""
-    from chipify.gui.main_window import main as _gui_main
+    """Starts the PySide6 (Qt) desktop GUI for chipify."""
+    from chipify.gui_qt.app import main as _gui_main
     print("[*] Starting Chipify Desktop GUI...")
     _gui_main()
 

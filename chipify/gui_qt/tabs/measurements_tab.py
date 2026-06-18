@@ -10,7 +10,7 @@ measurements_tab.py – Results overview in three stacked sections.
    it violated, and the sweep conditions that triggered it.
 
 All three are computed by the shared, framework-agnostic
-:mod:`chipify.gui.services.measurements` helpers. The tab subscribes to
+:mod:`chipify.uikit.services.measurements` helpers. The tab subscribes to
 ``AppState`` so it refreshes on completed loads (``data_changed``) and live
 chunks (``on_data_chunk_added``, coalesced via a Throttle).
 """
@@ -31,9 +31,9 @@ from PySide6.QtWidgets import (
 )
 
 from chipify import app_config
-from chipify.gui.services import data_loader as _dl
-from chipify.gui.services import measurements as _meas
-from chipify.gui.state import AppState
+from chipify import data_loader as _dl
+from chipify.uikit.services import measurements as _meas
+from chipify.uikit.state import AppState
 from chipify.gui_qt.services.throttle import Throttle
 
 log = logging.getLogger("chipify.gui_qt.tabs.measurements")

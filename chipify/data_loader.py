@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-log = logging.getLogger("chipify.gui.services.data_loader")
+log = logging.getLogger("chipify.data_loader")
 
 
 # ── PlotColumns ───────────────────────────────────────────────────────────────

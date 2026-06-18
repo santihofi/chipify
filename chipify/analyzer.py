@@ -15,7 +15,7 @@ def print_summary(df, stim):
     print("="*85)
 
     # Work on a prepared copy — never mutate the caller's DataFrame.
-    from chipify.gui.services import data_loader as _dl
+    from chipify import data_loader as _dl
     df = _dl.prepare_results(df)
 
     total = len(df)

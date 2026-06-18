@@ -14,7 +14,7 @@ import pandas as pd
 
 from chipify.expression import SafeEvaluator, ExpressionError
 
-log = logging.getLogger("chipify.gui.services.equations")
+log = logging.getLogger("chipify.uikit.services.equations")
 
 _evaluator = SafeEvaluator()
 

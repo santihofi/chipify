@@ -23,9 +23,9 @@ from PySide6.QtWidgets import (
 )
 
 from chipify import app_config, settings
-from chipify.gui.services import data_loader as _dl
-from chipify.gui.services import measurements as _meas
-from chipify.gui.state import AppState
+from chipify import data_loader as _dl
+from chipify.uikit.services import measurements as _meas
+from chipify.uikit.state import AppState
 from chipify.gui_qt.services.throttle import Throttle
 from chipify.gui_qt.widgets.helpers import compact_combo, deferred, elide_horizontally
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas

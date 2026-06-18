@@ -27,7 +27,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
 from chipify import run_meta, settings, simulator, util
-from chipify.gui.services import netlist_export
+from chipify.uikit.services import netlist_export
 
 log = logging.getLogger("chipify.gui_qt.sim_worker")
 

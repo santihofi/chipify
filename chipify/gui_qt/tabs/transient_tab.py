@@ -3,7 +3,7 @@
 transient_tab.py – Waveform overlays (Transient / DC sweep / Bode).
 
 Reuses the shared, framework-agnostic
-:mod:`chipify.gui.services.transient_loader` (directory resolution + signal
+:mod:`chipify.uikit.services.transient_loader` (directory resolution + signal
 discovery) and the ``PlotManager.draw_transient_plot`` / ``draw_dc_sweep`` /
 ``draw_bode_plot`` overlay plotters unchanged. This tab supplies the Qt
 controls: analysis kind, run-selection mode, and a multi-select signal list.
@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (
 )
 
 from chipify import app_config, settings
-from chipify.gui.services import transient_loader as _tl
-from chipify.gui.state import AppState
+from chipify.uikit.services import transient_loader as _tl
+from chipify.uikit.state import AppState
 from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas
 from chipify.plot_manager import PlotManager

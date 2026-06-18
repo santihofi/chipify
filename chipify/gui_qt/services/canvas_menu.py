@@ -3,7 +3,7 @@
 canvas_menu.py – Right-click "export netlist for this sample" menu (Qt).
 
 The Qt replacement for the CustomTkinter popup in
-``chipify.gui.services.netlist_export.show_export_menu``. The netlist rendering
+``chipify.uikit.services.netlist_export.show_export_menu``. The netlist rendering
 itself is reused unchanged from that module's pure functions
 (:func:`render_netlist_for_row`); only the menu UI is rebuilt as a ``QMenu``.
 """
@@ -16,7 +16,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QFileDialog, QMenu, QMessageBox, QWidget
 
 from chipify import app_config
-from chipify.gui.services import netlist_export
+from chipify.uikit.services import netlist_export
 
 log = logging.getLogger("chipify.gui_qt.canvas_menu")
 

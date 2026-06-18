@@ -24,7 +24,7 @@ Institute for Integrated Circuits and Quantum Computing, Johannes Kepler Univers
 Monte-Carlo and corner sweeps, run them in parallel, and turn the raw results
 into plots, yield matrices, and reports.
 
-It ships with both a **CustomTkinter desktop GUI** and a **headless CLI**, plus
+It ships with both a **PySide6 (Qt) desktop GUI** and a **headless CLI**, plus
 a plugin system for custom plots, reports, and expressions.
 
 <!-- Add a GUI screenshot here, e.g.:  ![Chipify GUI](docs/screenshot.png) -->
@@ -149,15 +149,17 @@ A source follower example is included. to run the example, navigate to ``/chipif
 ## Project layout
 
 ```
-chipify/            # engine (no GUI deps) + gui/ package
+chipify/            # engine (no GUI-toolkit deps)
   cli.py            # CLI entry point + GUI launcher
   simulator.py      # multiprocessing simulation engine
   schema.py         # datasheet validation + range DSL
   expression.py     # sandboxed expression evaluation
   settings.py       # project folder paths (configurable via settings.json)
   app_config.py     # persistent preferences + logging
-  gui/              # CustomTkinter desktop GUI (controllers / services / widgets)
-tests/              # pytest suite for the core engine
+  data_loader.py    # results loading / pass-fail / history (shared, headless)
+  uikit/            # toolkit-agnostic GUI-support layer (state, services, plugin facade)
+  gui_qt/           # PySide6 (Qt) desktop GUI (tabs / controllers / workers / widgets)
+tests/              # pytest suite for the core engine + GUI smoke tests
 ```
 
 See [context.md](context.md) for the full architecture overview and

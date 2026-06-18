@@ -4,7 +4,7 @@ analytics_tab.py – Advanced analytics (scatter, corner yield, heatmap,
 tornado, fail pie, and plot plugins).
 
 Reuses :func:`chipify.plot_manager.PlotManager.draw_adv_plot` and the shared
-:class:`chipify.gui.services.scatter_hover.ScatterHoverManager` unchanged. The
+:class:`chipify.uikit.services.scatter_hover.ScatterHoverManager` unchanged. The
 scatter-point context menu is the Qt
 :func:`chipify.gui_qt.services.canvas_menu.show_netlist_export_menu`.
 """
@@ -23,9 +23,9 @@ from PySide6.QtWidgets import (
 )
 
 from chipify import app_config
-from chipify.gui.services import data_loader as _dl
-from chipify.gui.services.scatter_hover import HoverState, ScatterHoverManager
-from chipify.gui.state import AppState
+from chipify import data_loader as _dl
+from chipify.uikit.services.scatter_hover import HoverState, ScatterHoverManager
+from chipify.uikit.state import AppState
 from chipify.gui_qt.services import canvas_menu
 from chipify.gui_qt.services.throttle import Throttle
 from chipify.gui_qt.widgets.helpers import compact_combo, deferred
