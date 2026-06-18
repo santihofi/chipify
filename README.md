@@ -24,7 +24,7 @@ Institute for Integrated Circuits and Quantum Computing, Johannes Kepler Univers
 Monte-Carlo and corner sweeps, run them in parallel, and turn the raw results
 into plots, yield matrices, and reports.
 
-It ships with both a **CustomTkinter desktop GUI** and a **headless CLI**, plus
+It ships with both a **PySide6 (Qt) desktop GUI** and a **headless CLI**, plus
 a plugin system for custom plots, reports, and expressions.
 
 <!-- Add a GUI screenshot here, e.g.:  ![Chipify GUI](docs/screenshot.png) -->
@@ -51,6 +51,19 @@ available on your `PATH`:
 - **[Ngspice](https://ngspice.sourceforge.io/)** — the SPICE simulator
 - **[Xschem](https://xschem.sourceforge.io/)** — schematic capture / netlist generation
 - *(optional)* **[VACASK](https://vacask.fke.uni-lj.si/)** + PyOPUS — alternative simulation backend
+- *(Linux)* **PySide6 system libraries** — Qt needs a few shared libraries that
+  pip can't install:
+  - **`libegl1` / `libgl1`** (`libEGL.so.1` / `libGL.so.1`) are dlopened when Qt
+    is imported — required even for the headless test suite. Without them you get
+    `ImportError: libEGL.so.1: cannot open shared object file`.
+  - **`libxcb-cursor0`** (Qt ≥ 6.5) is needed by the `xcb`/XWayland platform for
+    the on-screen GUI; without it a Wayland session falls back to native Wayland,
+    where dropdown menus don't close on selection.
+
+  `install.sh` installs all of these automatically on Debian/Ubuntu; elsewhere
+  install them with your package manager (e.g. `apt install libegl1 libgl1
+  libxcb-cursor0`). System libraries can't be declared in
+  `setup.py`/`pyproject.toml`, so they're handled by `install.sh`.
 
 It is highly recommended to install and run Chipify inside the [IIC-OSIC-TOOLS](https://github.com/iic-jku/iic-osic-tools) docker container. This way, all the required tools plus a bunch of open source PDKs are already installed.
 
@@ -144,15 +157,17 @@ A source follower example is included. to run the example, navigate to ``/chipif
 ## Project layout
 
 ```
-chipify/            # engine (no GUI deps) + gui/ package
+chipify/            # engine (no GUI-toolkit deps)
   cli.py            # CLI entry point + GUI launcher
   simulator.py      # multiprocessing simulation engine
   schema.py         # datasheet validation + range DSL
   expression.py     # sandboxed expression evaluation
   settings.py       # project folder paths (configurable via settings.json)
   app_config.py     # persistent preferences + logging
-  gui/              # CustomTkinter desktop GUI (controllers / services / widgets)
-tests/              # pytest suite for the core engine
+  data_loader.py    # results loading / pass-fail / history (shared, headless)
+  uikit/            # toolkit-agnostic GUI-support layer (state, services, plugin facade)
+  gui_qt/           # PySide6 (Qt) desktop GUI (tabs / controllers / workers / widgets)
+tests/              # pytest suite for the core engine + GUI smoke tests
 ```
 
 See [context.md](context.md) for the full architecture overview and

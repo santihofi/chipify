@@ -2,7 +2,7 @@
 """
 tests/test_equation_service.py
 
-Unit tests for chipify.gui.services.equation_service.
+Unit tests for chipify.uikit.services.equation_service.
 
 Covers:
 - apply_scalar_equations: valid equations, bad expressions, name validation
@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from chipify.gui.services.equation_service import (
+from chipify.uikit.services.equation_service import (
     apply_scalar_equations,
     apply_transient_equations,
 )

@@ -69,7 +69,7 @@ def _fmt(v):
 
 def _build_global_pass(df: pd.DataFrame) -> pd.DataFrame:
     # Single source of truth for sim_error normalisation + global_pass.
-    from chipify.gui.services import data_loader as _dl
+    from chipify import data_loader as _dl
     return _dl.prepare_results(df)
 
 

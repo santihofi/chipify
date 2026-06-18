@@ -1,9 +1,9 @@
 # Project Briefing: Chipify
 
 ## 1. Project Overview
-*   **Project Name:** `Chipify` (Core CLI/Engine & CustomTkinter Desktop GUI).
+*   **Project Name:** `Chipify` (Core CLI/Engine & PySide6 (Qt) Desktop GUI).
 *   **Purpose:** A high-performance EDA (Electronic Design Automation) tool for mismatch simulations, parameter sweeping, and yield analysis wrapping around Xschem and Ngspice.
-*   **Core Tech Stack:** Python 3.11+, `customtkinter` (GUI), `pandas` (Data Crunching), `matplotlib` & `scipy` (Visualization & Stats), `multiprocessing` (Parallel execution), `jinja2` (Netlist templating), `asteval` (sandboxed expression evaluation).
+*   **Core Tech Stack:** Python 3.11+, `PySide6` (Qt GUI), `pandas` (Data Crunching), `matplotlib` & `scipy` (Visualization & Stats), `multiprocessing` (Parallel execution), `jinja2` (Netlist templating), `asteval` (sandboxed expression evaluation).
 
 ---
 
@@ -20,32 +20,41 @@
 | `app_config.py` | Persistent user preferences (`settings.json`), application-wide logging setup. |
 | `simulator.py` | Multiprocessing simulation engine (`NgspiceSimulator`, `VacaskSimulator`). File-based abort via `/tmp/sim_work/abort.flag`. |
 | `plot_manager.py` | All Matplotlib logic. Avoids GUI bloat. |
-| `cli.py` | Entry point for headless execution or launching the GUI. |
+| `data_loader.py` | Results loading / pass-fail / plot-column classification / history — shared by the engine, exporters, and GUI; headless, no GUI deps. |
+| `cli.py` | Entry point for headless execution or launching the GUI (`run_gui()` → Qt app). |
 
-### GUI Package (`chipify/gui/`)
+### Toolkit-agnostic GUI-support layer (`chipify/uikit/`)
 
 ```
-gui/
-├── __init__.py
-├── theme.py                – CTk appearance mode + BACKGROUND_COLOR / PANEL_COLOR constants
+uikit/                      – NO GUI-toolkit imports; unit-testable headlessly
 ├── state.py                – AppState (single source of truth) + Signal pub/sub
-├── main_window.py          – SimifyGUI shell + main() entry point
-├── controllers/
-│   ├── simulation_controller.py  – start/stop simulation, progress callbacks, abort flag
-│   └── history_controller.py     – refresh_history, auto_load_latest_run, on_history_select
-├── services/               – pure logic; NO tkinter imports
-│   ├── data_loader.py      – load_csv, list_history_runs, compute_plot_cols, valid_rows
+├── services/
 │   ├── equation_service.py – apply_scalar_equations, apply_transient_equations (via SafeEvaluator)
-│   ├── yaml_editor_service.py – get_params_dict, get_tests_dict, gui_repr_param, sync_form_to_yaml
+│   ├── measurements.py     – measurement_rows / equation_rows / worst_cases (stats for the table)
 │   ├── transient_loader.py – resolve_analysis_dir, list_analysis_signals, load_analysis_df
-│   └── plugin_context.py   – PluginContext facade handed to TabPlugins (see PLUGINS.md)
+│   ├── scatter_hover.py    – matplotlib scatter hover/click manager
+│   ├── netlist_export.py   – per-sample SPICE netlist rendering (pure)
+│   ├── yaml_editor_service.py – get_params_dict, get_tests_dict, gui_repr_param, sync_form_to_yaml
+│   └── plugin_context.py   – PluginContext facade handed to tab plugins (see PLUGINS.md)
 └── widgets/
-    ├── settings_window.py  – Modal settings dialog (CTkToplevel)
-    ├── treeview_styling.py – apply_dark_style(tree) for ttk.Treeview
     └── yaml_dumper.py      – QuotedString + inline-list YAML representers
 ```
 
-**`gui_tk.py`** — backward-compatibility shim (`from chipify.gui.main_window import main, SimifyGUI`).
+### Qt GUI Package (`chipify/gui_qt/`)
+
+```
+gui_qt/
+├── app.py                  – QApplication bootstrap + main() (the `chipify` GUI entry point)
+├── main_window.py          – QMainWindow shell: left control panel + QTabWidget + status bar
+├── theme.py                – night/dark/light palettes → QSS + QPalette; plot_theme()
+├── controllers/            – simulation_controller, history_controller (Qt signals, no after())
+├── workers/sim_worker.py   – QThread worker emitting queued progress/chunk/finished signals
+├── services/               – throttle, canvas_menu (QMenu), figure_export, latex_export
+├── tabs/                   – editor / measurements / histogram / analytics / transient / equations
+└── widgets/                – settings_dialog, run_annotation_dialog, mpl_canvas, helpers
+```
+
+Plugins: the Qt GUI loads `QtTabPlugin`s; legacy Tk `TabPlugin`s are detected and skipped with a warning (`plugin_loader.warn_unsupported_tab_plugins()`).
 
 ### Tests (`tests/`)
 
@@ -55,6 +64,10 @@ gui/
 | `test_util_range_dsl.py` | `_parse_range_dsl` whitelist, `validate_parameters` |
 | `test_equation_service.py` | apply_scalar/transient equations, NaN propagation |
 | `test_yaml_editor_service.py` | get_params_dict, get_tests_dict, gui_repr_param |
+| `test_data_loader_history.py` | `data_loader.list_history_runs` |
+| `test_netlist_export.py` | per-sample netlist rendering (pure logic) |
+| `test_plugin_context.py` | `PluginContext` facade, JSON-serialization |
+| `test_gui_qt_smoke.py` | Qt GUI smoke tests (offscreen): window, tabs, themes, worker, plugins |
 
 ---
 
@@ -88,9 +101,9 @@ gui/
 
 ## 4. Architecture Rules (Phase 1 invariants)
 
-1. **Services and model modules** (`services/`, `state.py`, `expression.py`, `schema.py`) **never import `tkinter` / `customtkinter`**. This keeps them unit-testable without a display.
+1. **The core and the `uikit/` layer** (`uikit/services/`, `uikit/state.py`, `data_loader.py`, `expression.py`, `schema.py`) **never import a GUI toolkit**. This keeps them unit-testable without a display; all Qt code lives under `gui_qt/`.
 2. **Tabs never call `simulator.*` directly.** They dispatch through a controller (`SimulationController`).
-3. **State is mutated only through `AppState`.** Subscribers receive notifications via `Signal.emit()`.
+3. **State is mutated only through `AppState`.** Subscribers receive notifications via `Signal.emit()`; the `QThread` sim worker delivers cross-thread updates as queued Qt signals.
 
 ---
 
@@ -107,10 +120,10 @@ pip install -e ".[fast]"
 pytest
 
 # mypy strict check on typed modules
-python -m mypy chipify/expression.py chipify/schema.py chipify/gui/state.py \
-    chipify/gui/services/ chipify/gui/widgets/ \
+python -m mypy chipify/expression.py chipify/schema.py chipify/uikit/state.py \
+    chipify/uikit/services/ chipify/uikit/widgets/ chipify/data_loader.py \
     chipify/util.py chipify/app_config.py --strict
 
-# Launch GUI
-chipify gui
+# Launch GUI (PySide6/Qt)
+chipify
 ```

@@ -2,7 +2,7 @@
 """
 tests/test_yaml_editor_service.py
 
-Unit tests for chipify.gui.services.yaml_editor_service.
+Unit tests for chipify.uikit.services.yaml_editor_service.
 
 Covers:
 - get_params_dict: recognised key variants, falls back to ('params', {})
@@ -13,7 +13,7 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from chipify.gui.services.yaml_editor_service import (
+from chipify.uikit.services.yaml_editor_service import (
     get_params_dict,
     get_tests_dict,
     gui_repr_param,
@@ -286,7 +286,7 @@ def test_sync_without_vtyp_field_is_backcompat() -> None:
 
 def test_template_is_a_valid_datasheet() -> None:
     import yaml
-    from chipify.gui.services.yaml_editor_service import new_datasheet_template
+    from chipify.uikit.services.yaml_editor_service import new_datasheet_template
     from chipify.schema import validate_datasheet
     data = yaml.safe_load(new_datasheet_template())
     stim = validate_datasheet(data)
@@ -295,7 +295,7 @@ def test_template_is_a_valid_datasheet() -> None:
 
 
 def test_create_datasheet_writes_template(tmp_path) -> None:
-    from chipify.gui.services.yaml_editor_service import create_datasheet
+    from chipify.uikit.services.yaml_editor_service import create_datasheet
     path = create_datasheet(str(tmp_path), "my_design")
     assert path.endswith("my_design.yaml")
     text = open(path, encoding="utf-8").read()
@@ -303,7 +303,7 @@ def test_create_datasheet_writes_template(tmp_path) -> None:
 
 
 def test_create_datasheet_sanitises_name(tmp_path) -> None:
-    from chipify.gui.services.yaml_editor_service import create_datasheet
+    from chipify.uikit.services.yaml_editor_service import create_datasheet
     path = create_datasheet(str(tmp_path), "  ../weird:name?  ")
     import os
     assert os.path.dirname(path) == str(tmp_path)       # no path escape
@@ -311,13 +311,13 @@ def test_create_datasheet_sanitises_name(tmp_path) -> None:
 
 
 def test_create_datasheet_refuses_overwrite(tmp_path) -> None:
-    from chipify.gui.services.yaml_editor_service import create_datasheet
+    from chipify.uikit.services.yaml_editor_service import create_datasheet
     create_datasheet(str(tmp_path), "a")
     with pytest.raises(FileExistsError):
         create_datasheet(str(tmp_path), "a")
 
 
 def test_create_datasheet_rejects_empty_name(tmp_path) -> None:
-    from chipify.gui.services.yaml_editor_service import create_datasheet
+    from chipify.uikit.services.yaml_editor_service import create_datasheet
     with pytest.raises(ValueError):
         create_datasheet(str(tmp_path), "   ")

@@ -30,7 +30,10 @@ setup(
         "tqdm",
         "jinja2",
         "pyyaml",
-        "customtkinter",
+        # Qt GUI. >=6.7 has improved Wayland popup handling; the xcb platform
+        # plugin additionally needs the libxcb-cursor0 *system* library (see
+        # install.sh / README — system libs can't be declared here).
+        "PySide6>=6.7",
         "matplotlib",
         "scipy",
         "asteval",
@@ -44,7 +47,10 @@ setup(
     entry_points={
         "console_scripts": [
             "chipify-cli=chipify.cli:main",
+            # `chipify` launches the PySide6 (Qt) desktop GUI. `chipify-qt` is a
+            # retained alias for the same app.
             "chipify=chipify.cli:run_gui",
+            "chipify-qt=chipify.gui_qt.app:main",
         ]
     },
     classifiers=[

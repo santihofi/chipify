@@ -1,55 +1,62 @@
-"""Run Info — a complete, dependency-free TabPlugin example.
+"""Run Info — a complete, dependency-free QtTabPlugin example.
 
 Copy this file into your plugin directory (``~/.chipify/plugins/`` or
 ``$CHIPIFY_PLUGINS``) and restart Chipify; a "Run Info" tab appears in the
-main window. It demonstrates the full TabPlugin surface:
+main window. It demonstrates the full QtTabPlugin surface:
 
-- ``build``            – constructing themed widgets into the provided frame
+- ``build``            – constructing Qt widgets into the provided QWidget
 - ``on_data_changed``  – refreshing when results / datasheet change
 - ``on_show``          – reacting when the tab becomes visible
 - ``context`` access   – summary, specs, history runs, netlists
 - ``run_async``        – off-thread work with results delivered back to the UI
 
-See PLUGINS.md → TabPlugin / PluginContext reference for the contract.
+See PLUGINS.md → QtTabPlugin / PluginContext reference for the contract.
 """
 import json
 
-import customtkinter as ctk
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
+)
 
-from chipify.plugin_loader import TabPlugin
+from chipify.plugin_loader import QtTabPlugin
 
 
-class RunInfoTab(TabPlugin):
+class RunInfoTab(QtTabPlugin):
     name = "Run Info"
 
     # ── build ─────────────────────────────────────────────────────────────────
 
     def build(self, parent, context):
-        theme = context.theme()
+        layout = QVBoxLayout(parent)
 
-        bar = ctk.CTkFrame(parent, fg_color="transparent")
-        bar.pack(fill="x", padx=10, pady=(10, 6))
-        self._headline = ctk.CTkLabel(
-            bar, text="No data loaded yet.",
-            font=ctk.CTkFont(size=14, weight="bold"))
-        self._headline.pack(side="left")
-        ctk.CTkButton(
-            bar, text="↺  Refresh", width=100,
-            command=lambda: self.on_data_changed(context),
-            fg_color="transparent", border_width=1,
-            text_color=("gray10", "#DCE4EE"),
-        ).pack(side="right")
-        ctk.CTkButton(
-            bar, text="Count netlist lines (async)", width=190,
-            command=lambda: self._count_async(context),
-            fg_color="transparent", border_width=1,
-            text_color=("gray10", "#DCE4EE"),
-        ).pack(side="right", padx=(0, 8))
+        bar = QHBoxLayout()
+        self._headline = QLabel("No data loaded yet.")
+        font = self._headline.font()
+        font.setBold(True)
+        font.setPointSize(font.pointSize() + 1)
+        self._headline.setFont(font)
+        bar.addWidget(self._headline)
+        bar.addStretch(1)
 
-        self._text = ctk.CTkTextbox(
-            parent, wrap="none", font=ctk.CTkFont(family="Courier", size=12),
-            text_color=theme["fg"])
-        self._text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        btn_count = QPushButton("Count netlist lines (async)")
+        btn_count.clicked.connect(lambda: self._count_async(context))
+        bar.addWidget(btn_count)
+        btn_refresh = QPushButton("↺ Refresh")
+        btn_refresh.clicked.connect(lambda: self.on_data_changed(context))
+        bar.addWidget(btn_refresh)
+        layout.addLayout(bar)
+
+        self._text = QPlainTextEdit()
+        self._text.setReadOnly(True)
+        mono = QFont("monospace")
+        mono.setStyleHint(QFont.Monospace)
+        self._text.setFont(mono)
+        layout.addWidget(self._text, stretch=1)
 
         self.on_data_changed(context)
 
@@ -58,14 +65,13 @@ class RunInfoTab(TabPlugin):
     def on_data_changed(self, context):
         s = context.summary()
         if s["total"] == 0:
-            self._headline.configure(text="No data loaded yet.")
-            self._set_text("Run a simulation or load a history run.")
+            self._headline.setText("No data loaded yet.")
+            self._text.setPlainText("Run a simulation or load a history run.")
             return
 
-        self._headline.configure(
-            text=f"{s['total']} runs  ·  {s['passed']} passing"
-                 f"  ·  yield {s['yield_pct']}%")
-
+        self._headline.setText(
+            f"{s['total']} runs  ·  {s['passed']} passing  ·  yield {s['yield_pct']}%"
+        )
         lines = [
             f"chipify {context.chipify_version}  ·  plugin API {context.api_version}",
             f"datasheet: {context.datasheet_path or '—'}",
@@ -75,7 +81,7 @@ class RunInfoTab(TabPlugin):
             "── specs() ──────────────────────────────────────────",
             json.dumps(context.specs(), indent=2, default=str),
         ]
-        self._set_text("\n".join(lines))
+        self._text.setPlainText("\n".join(lines))
 
     def on_show(self, context):
         # Cheap example of a lazy refresh when the tab becomes visible.
@@ -94,12 +100,6 @@ class RunInfoTab(TabPlugin):
             msg = ("No netlists rendered yet — run a simulation first."
                    if not result else
                    "\n".join(f"{tb}: {n} lines" for tb, n in result.items()))
-            self._set_text(msg)
+            self._text.setPlainText(msg)
 
         context.run_async(work, on_done=done)
-
-    # ── helpers ───────────────────────────────────────────────────────────────
-
-    def _set_text(self, text: str):
-        self._text.delete("1.0", "end")
-        self._text.insert("end", text)

@@ -85,11 +85,15 @@ class Value:
         vmin: float | None,
         vmax: float | None,
         vtyp: float | None,
+        unit: str | None = None,
     ) -> None:
         self.name = name
         self.vmin = vmin
         self.vmax = vmax
         self.vtyp = vtyp
+        # Optional engineering unit (e.g. "V", "mV", "Hz", "dB"). Display-only:
+        # surfaced in the Measurements table; never used in pass/fail math.
+        self.unit = unit
 
     def isPass(self, val: float) -> bool:
         import math

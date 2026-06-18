@@ -1,5 +1,16 @@
 # Chipify uses setup.py for packaging metadata and dependencies.
 # This file only carries developer-tooling configuration (mypy + pytest).
+#
+# System dependencies (cannot be declared here — pip only installs Python wheels).
+# PySide6 needs two kinds of system libraries:
+#   * Base Qt runtime: libegl1 / libgl1 (libEGL.so.1 / libGL.so.1). dlopened when
+#     QtWidgets is imported — required even for the headless offscreen test suite,
+#     so without them `pytest` fails to import PySide6 (ImportError: libEGL.so.1).
+#   * On-screen GUI: libxcb-cursor0 (Qt >= 6.5) for the xcb/XWayland platform;
+#     without it a Wayland session falls back to native Wayland where dropdown
+#     popups don't close.
+# `./install.sh` installs all of these on Debian/Ubuntu; elsewhere use your
+# package manager (e.g. apt: libegl1 libgl1 libxcb-cursor0).
 
 # ── mypy strict config ────────────────────────────────────────────────────────
 [tool.mypy]
@@ -15,7 +26,6 @@ exclude = ["tests/"]
 # Third-party packages without stubs
 [[tool.mypy.overrides]]
 module = [
-    "customtkinter.*",
     "tqdm.*",
     "jinja2.*",
     "matplotlib.*",
@@ -26,13 +36,13 @@ module = [
 ]
 ignore_missing_imports = true
 
-# Legacy Tk-heavy modules are whitelist-typed gradually
+# GUI and report modules are whitelist-typed gradually
 [[tool.mypy.overrides]]
 module = [
-    "chipify.gui.main_window",
-    "chipify.gui.widgets.settings_window",
-    "chipify.gui_tk",
-    "chipify.multiplot_window",
+    "chipify.gui_qt.*",
+    # matplotlib-event-handler heavy; typed gradually (pre-existing debt).
+    "chipify.uikit.services.scatter_hover",
+    "chipify.uikit.services.netlist_export",
     "chipify.pdf_export",
     "chipify.md_export",
     "chipify.export_latex",

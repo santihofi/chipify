@@ -2,7 +2,7 @@
 """
 tests/test_netlist_export.py
 
-Unit tests for chipify.gui.services.netlist_export (pure rendering logic —
+Unit tests for chipify.uikit.services.netlist_export (pure rendering logic —
 the menu/dialog functions need a Tk display and are not covered here).
 
 Covers:
@@ -17,7 +17,7 @@ import os
 import pytest
 
 from chipify import settings
-from chipify.gui.services import netlist_export
+from chipify.uikit.services import netlist_export
 
 
 class _FakeAnalysis:

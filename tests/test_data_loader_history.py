@@ -2,7 +2,7 @@
 """
 tests/test_data_loader_history.py
 
-Unit tests for chipify.gui.services.data_loader.list_history_runs.
+Unit tests for chipify.data_loader.list_history_runs.
 
 Covers:
 - unfiltered listing (latest entry + newest-first history)
@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 
-from chipify.gui.services.data_loader import list_history_runs
+from chipify.data_loader import list_history_runs
 
 
 def _make_run(history_dir: str, name: str, yaml_name: str | None) -> None:

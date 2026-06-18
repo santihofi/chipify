@@ -153,3 +153,18 @@ def test_validate_datasheet_allows_missing_bounds() -> None:
     stim = validate_datasheet(data)
     val = stim.tests[0].value_lst[0]
     assert val.vmin == 40.0 and val.vmax is None
+
+
+def test_validate_datasheet_parses_optional_unit() -> None:
+    from chipify.schema import validate_datasheet
+    data = {
+        "parameters": {"temp": [27]},
+        "tests": {"tb_x": {
+            "gain": {"min": 40, "unit": "dB"},
+            "offset": {"max": 5},          # no unit → None
+        }},
+    }
+    stim = validate_datasheet(data)
+    gain, offset = stim.tests[0].value_lst
+    assert gain.unit == "dB"
+    assert offset.unit is None

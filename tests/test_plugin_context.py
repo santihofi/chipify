@@ -15,8 +15,8 @@ import pandas as pd
 import pytest
 
 from chipify import settings
-from chipify.gui.services.plugin_context import PluginContext, _jsonable
-from chipify.gui.state import AppState
+from chipify.uikit.services.plugin_context import PluginContext, _jsonable
+from chipify.uikit.state import AppState
 from chipify.schema import validate_datasheet
 
 

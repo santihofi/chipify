@@ -12,13 +12,14 @@ Chipify supports user plugins that extend the GUI and report output without modi
 4. [ExpressionPlugin](#expressionplugin)
 5. [ExporterPlugin](#exporterplugin)
 6. [TabPlugin](#tabplugin)
-7. [PluginContext reference](#plugincontext-reference)
-8. [Example: AI review tab (Claude API)](#example-ai-review-tab-claude-api)
-9. [Data reference](#data-reference)
-10. [API versioning](#api-versioning)
-11. [Error behaviour](#error-behaviour)
-12. [Diagnostics](#diagnostics)
-13. [Security note](#security-note)
+7. [QtTabPlugin](#qttabplugin)
+8. [PluginContext reference](#plugincontext-reference)
+9. [Example: AI review tab (Claude API)](#example-ai-review-tab-claude-api)
+10. [Data reference](#data-reference)
+11. [API versioning](#api-versioning)
+12. [Error behaviour](#error-behaviour)
+13. [Diagnostics](#diagnostics)
+14. [Security note](#security-note)
 
 ---
 
@@ -287,6 +288,9 @@ After restarting Chipify both formats appear in the Export menu of every plot.
 
 `TabPlugin` adds a whole tab to the Chipify main window — the most powerful plugin type. The plugin builds its own UI (customtkinter / tkinter widgets) into a frame the host provides, and accesses simulation data exclusively through a [`PluginContext`](#plugincontext-reference) facade: results, datasheet specs, rendered SPICE netlists, history runs, waveforms, and a thread bridge for calling external APIs without freezing the GUI.
 
+> [!WARNING]
+> **`TabPlugin` is legacy.** The CustomTkinter GUI has been removed; the desktop GUI is now **PySide6 (Qt)** and loads **`QtTabPlugin`** (Qt widgets) only — CustomTkinter `TabPlugin`s are detected and **skipped with a warning**. The data-facing contract is identical: same [`PluginContext`](#plugincontext-reference), same lifecycle methods. To port, change the base class to `QtTabPlugin` and build Qt widgets into `parent` (a `QWidget`). The other plugin types (`PlotPlugin`, `ReportPlugin`, `ExpressionPlugin`, `ExporterPlugin`) are pure-data and work unchanged. This section is kept for reference and porting — see [QtTabPlugin](#qttabplugin).
+
 ### Class attributes
 
 | Attribute | Type | Required | Description |
@@ -363,6 +367,45 @@ class RunCounter(TabPlugin):
 ```
 
 A complete, runnable example ships with the repository at `examples/plugins/run_info_tab.py` — copy it into your plugin directory as a starting point.
+
+---
+
+## QtTabPlugin
+
+`QtTabPlugin` is the supported tab-plugin base, loaded by the Qt GUI (`chipify`, or its `chipify-qt` alias). The contract is identical to the legacy [`TabPlugin`](#tabplugin) except that `build(parent, context)` receives a **`QWidget`** instead of a Tk frame — lay your Qt widgets into it (e.g. with a `QVBoxLayout`).
+
+Everything else is the same as `TabPlugin`:
+
+- **Class attributes:** `name` (required, unique) and optional `api_version`.
+- **Methods:** `build(parent, context)` (required), and optional `on_data_changed(context)`, `on_show(context)`, `on_close()`.
+- **`context`** is the very same [`PluginContext`](#plugincontext-reference) — `results()`, `specs()`, `netlists()`, `history_runs()`, `waveforms()`, `subscribe_data_changed()`, and `run_async()` all behave exactly as documented. `run_async`'s completion callbacks are marshalled onto the Qt GUI thread, so it remains safe to update widgets from `on_done`.
+- **Lifecycle & error handling** match `TabPlugin`: built once at startup, all calls on the GUI thread and exception-guarded (a raising `build()` shows an error panel; other tabs are unaffected).
+
+> [!NOTE]
+> Do **not** block the GUI thread. Anything slower than ~50 ms (HTTP/LLM calls, large file reads) belongs in `context.run_async(...)`.
+
+### Minimal example
+
+```python
+# ~/.chipify/plugins/run_counter_qt.py
+from PySide6.QtWidgets import QLabel, QVBoxLayout
+from chipify.plugin_loader import QtTabPlugin
+
+class RunCounter(QtTabPlugin):
+    name = "Run Counter"
+
+    def build(self, parent, context):
+        self._lbl = QLabel("No data loaded yet.", parent)
+        QVBoxLayout(parent).addWidget(self._lbl)
+        self.on_data_changed(context)
+
+    def on_data_changed(self, context):
+        s = context.summary()
+        self._lbl.setText(
+            f"{s['total']} runs — {s['passed']} passing ({s['yield_pct']}%)")
+```
+
+Porting an existing `TabPlugin`: change the base class to `QtTabPlugin`, swap CustomTkinter widget construction for Qt (`ctk.CTkLabel(parent, ...)` → `QLabel(..., parent)` added to a layout), and leave all `context.*` calls untouched.
 
 ---
 
