@@ -14,7 +14,12 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("PySide6")
+# Importing QtWidgets dlopens Qt's runtime libraries (libEGL.so.1, libGL.so.1,
+# …) even under the offscreen platform. When those *system* libs are absent
+# (minimal CI images), import raises ImportError; importorskip turns that into a
+# clean skip of the whole module rather than a collection error. See install.sh
+# for the apt packages that provide them.
+pytest.importorskip("PySide6.QtWidgets")
 
 from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402

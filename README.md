@@ -51,11 +51,19 @@ available on your `PATH`:
 - **[Ngspice](https://ngspice.sourceforge.io/)** — the SPICE simulator
 - **[Xschem](https://xschem.sourceforge.io/)** — schematic capture / netlist generation
 - *(optional)* **[VACASK](https://vacask.fke.uni-lj.si/)** + PyOPUS — alternative simulation backend
-- *(Linux GUI)* **`libxcb-cursor0`** — system library required by Qt's `xcb`
-  platform plugin (Qt ≥ 6.5). `install.sh` installs it automatically on
-  Debian/Ubuntu; without it the GUI falls back to native Wayland, where
-  dropdown menus don't close on selection. (System libraries can't be declared
-  in `setup.py`/`pyproject.toml`, so they're handled by `install.sh`.)
+- *(Linux)* **PySide6 system libraries** — Qt needs a few shared libraries that
+  pip can't install:
+  - **`libegl1` / `libgl1`** (`libEGL.so.1` / `libGL.so.1`) are dlopened when Qt
+    is imported — required even for the headless test suite. Without them you get
+    `ImportError: libEGL.so.1: cannot open shared object file`.
+  - **`libxcb-cursor0`** (Qt ≥ 6.5) is needed by the `xcb`/XWayland platform for
+    the on-screen GUI; without it a Wayland session falls back to native Wayland,
+    where dropdown menus don't close on selection.
+
+  `install.sh` installs all of these automatically on Debian/Ubuntu; elsewhere
+  install them with your package manager (e.g. `apt install libegl1 libgl1
+  libxcb-cursor0`). System libraries can't be declared in
+  `setup.py`/`pyproject.toml`, so they're handled by `install.sh`.
 
 It is highly recommended to install and run Chipify inside the [IIC-OSIC-TOOLS](https://github.com/iic-jku/iic-osic-tools) docker container. This way, all the required tools plus a bunch of open source PDKs are already installed.
 
