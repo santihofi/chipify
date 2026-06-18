@@ -31,6 +31,16 @@ def _safe_tb(tb_path: str) -> str:
     return tb_path.replace("/", "__").replace("\\", "__")
 
 
+def engine_extension(test) -> str:
+    """Netlist file extension for *test*'s engine (``.sim`` for vacask, else
+    ``.spice``). Uses the testbench's own ``engine`` when set, otherwise the
+    global ``simulator_engine`` default.
+    """
+    name = getattr(test, "engine", None) or app_config.load_config().get(
+        "simulator_engine", "ngspice")
+    return ".sim" if str(name).strip().lower() == "vacask" else ".spice"
+
+
 def persist_templates(stim, dest_dir: str) -> str:
     """Write every test's in-memory Jinja2 template into *dest_dir*.
 
@@ -40,15 +50,13 @@ def persist_templates(stim, dest_dir: str) -> str:
 
     Returns *dest_dir* if at least one template was written, else "".
     """
-    engine = app_config.load_config().get("simulator_engine", "ngspice")
-    ext = ".sim" if engine == "vacask" else ".spice"
     wrote_any = False
     for test in getattr(stim, "tests", []) or []:
         text = getattr(test, "template_str", "") or ""
         if not text:
             continue
         os.makedirs(dest_dir, exist_ok=True)
-        fp = os.path.join(dest_dir, _safe_tb(test.tb_path) + ext)
+        fp = os.path.join(dest_dir, _safe_tb(test.tb_path) + engine_extension(test))
         with open(fp, "w", encoding="utf-8") as fh:
             fh.write(text)
         wrote_any = True

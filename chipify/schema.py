@@ -28,6 +28,12 @@ class SchemaError(ValueError):
     """Raised when a datasheet.yaml violates the expected schema."""
 
 
+# Valid per-testbench ``engine:`` values. Kept in sync with
+# ``simulator.SUPPORTED_ENGINES`` (hardcoded here to keep datasheet validation
+# free of the heavy simulator import).
+_SUPPORTED_ENGINES = ("ngspice", "vacask")
+
+
 # ── Allowed range DSL functions ───────────────────────────────────────────────
 
 _ALLOWED_CALLS: dict[str, Any] = {
@@ -227,6 +233,7 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
 
         analyses: list[Analysis] = []
         measure: dict[str, str] = {}
+        engine: str | None = None
         value_lst: list[Value] = []
 
         for val_name, bounds in measurements.items():
@@ -239,6 +246,17 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
             if val_name == "measure":
                 if isinstance(bounds, dict):
                     measure = {k: str(v) for k, v in bounds.items()}
+                continue
+
+            if val_name == "engine":
+                if bounds is not None:
+                    eng = str(bounds).strip().lower()
+                    if eng and eng not in _SUPPORTED_ENGINES:
+                        raise SchemaError(
+                            f"tests.{tb_path}.engine: unknown engine {eng!r}; "
+                            f"use one of {sorted(_SUPPORTED_ENGINES)}"
+                        )
+                    engine = eng or None
                 continue
 
             # Measurement boundary spec
@@ -261,6 +279,7 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
         t = Test(tb_path, value_lst)
         t.analyses = analyses
         t.measure = measure
+        t.engine = engine
         stim.addTest(t)
 
     return stim

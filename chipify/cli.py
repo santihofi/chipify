@@ -162,7 +162,11 @@ def main():
         "--simulator",
         choices=["ngspice", "vacask"],
         default=None,
-        help="Override the simulator_engine setting for this run (ngspice|vacask).",
+        help=(
+            "Default engine for this run, overriding the simulator_engine setting\n"
+            "(ngspice|vacask). Per-testbench 'engine:' keys in the datasheet still\n"
+            "take precedence."
+        ),
     )
 
     parser.add_argument(

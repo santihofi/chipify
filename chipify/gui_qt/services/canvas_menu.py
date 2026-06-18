@@ -15,7 +15,6 @@ import os
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QFileDialog, QMenu, QMessageBox, QWidget
 
-from chipify import app_config
 from chipify.uikit.services import netlist_export
 
 log = logging.getLogger("chipify.gui_qt.canvas_menu")
@@ -57,8 +56,7 @@ def _export(parent: QWidget, test, row, run_id: str, templates_dir: str) -> None
         QMessageBox.critical(parent, "Netlist Export", str(exc))
         return
 
-    engine = app_config.load_config().get("simulator_engine", "ngspice")
-    ext = ".sim" if engine == "vacask" else ".spice"
+    ext = netlist_export.engine_extension(test)
     stem = os.path.splitext(os.path.basename(test.tb_path))[0]
     path, _ = QFileDialog.getSaveFileName(
         parent,

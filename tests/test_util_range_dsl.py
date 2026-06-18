@@ -168,3 +168,28 @@ def test_validate_datasheet_parses_optional_unit() -> None:
     gain, offset = stim.tests[0].value_lst
     assert gain.unit == "dB"
     assert offset.unit is None
+
+
+def test_validate_datasheet_parses_per_testbench_engine() -> None:
+    from chipify.schema import validate_datasheet
+    data = {
+        "parameters": {"temp": [27]},
+        "tests": {
+            "tb_v": {"gain": {"min": 1}, "engine": "VACASK"},   # normalised
+            "tb_n": {"ve": {"max": 1}},                          # default → None
+        },
+    }
+    stim = validate_datasheet(data)
+    by = {t.tb_path: t.engine for t in stim.tests}
+    assert by["tb_v"] == "vacask"
+    assert by["tb_n"] is None
+
+
+def test_validate_datasheet_rejects_unknown_engine() -> None:
+    from chipify.schema import validate_datasheet
+    data = {
+        "parameters": {"temp": [27]},
+        "tests": {"tb_x": {"engine": "hspice", "gain": {"min": 1}}},
+    }
+    with pytest.raises(SchemaError, match="engine"):
+        validate_datasheet(data)

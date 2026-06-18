@@ -40,6 +40,10 @@ tests:
       unit: V
 
   tb_ota_gain:
+    # Optional: run this testbench on a specific simulator engine
+    # (ngspice | vacask). Omit to use the global default from Settings. This lets
+    # one datasheet mix engines — e.g. an AC/Bode bench on vacask, others on ngspice.
+    engine: vacask
     # Optional: signals to capture for plotting (transient_signals / dc_signals /
     # ac_signals correspond to the available analysis types).
     ac_signals: [out, outn]

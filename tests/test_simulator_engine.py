@@ -98,6 +98,98 @@ def test_exact_my_data_count_is_clean() -> None:
     assert sample["tb_x_overall_pass"] is True
 
 
+# ── Per-testbench engine selection ────────────────────────────────────────────
+
+def test_resolve_engine_name_precedence() -> None:
+    t = _make_test("tb", ["x"])
+    cfg_ng = {"simulator_engine": "ngspice"}
+    # 1) per-testbench engine wins over everything
+    t.engine = "vacask"
+    assert simulator.resolve_engine_name(t, override="ngspice", cfg=cfg_ng) == "vacask"
+    # 2) else the CLI override
+    t.engine = None
+    assert simulator.resolve_engine_name(t, override="vacask", cfg=cfg_ng) == "vacask"
+    # 3) else the global setting
+    assert simulator.resolve_engine_name(t, override=None, cfg={"simulator_engine": "vacask"}) == "vacask"
+    # 4) else ngspice
+    assert simulator.resolve_engine_name(t, override=None, cfg={}) == "ngspice"
+
+
+def test_mixed_engines_select_per_testbench() -> None:
+    ta = _make_test("tb_a", ["a"]); ta.engine = "ngspice"
+    tb = _make_test("tb_b", ["b"]); tb.engine = "vacask"
+    engines = {"ngspice": _FakeEngine("MY_DATA: 1"),
+               "vacask": _FakeEngine("MY_DATA: 2")}
+    used: dict[str, str] = {}
+
+    def engine_for(test):
+        used[test.tb_path] = test.engine
+        return engines[test.engine]
+
+    sample = simulator._simulate_single_case({}, [ta, tb], engine_for)
+    assert used == {"tb_a": "ngspice", "tb_b": "vacask"}
+    assert sample["a"] == pytest.approx(1.0)
+    assert sample["b"] == pytest.approx(2.0)
+    assert sample["sim_error"] == "None"
+
+
+def test_unavailable_engine_fails_only_that_testbench() -> None:
+    ok = _make_test("tb_ok", ["g"]); ok.engine = "ngspice"
+    bad = _make_test("tb_bad", ["h"]); bad.engine = "vacask"
+
+    def engine_for(test):
+        if test.engine == "vacask":
+            raise RuntimeError("PyOPUS not installed")
+        return _FakeEngine("MY_DATA: 5")
+
+    sample = simulator._simulate_single_case({}, [ok, bad], engine_for)
+    assert sample["g"] == pytest.approx(5.0)
+    assert sample["tb_ok_overall_pass"] is True
+    assert math.isnan(sample["h"])
+    assert sample["tb_bad_overall_pass"] is False
+    assert "engine unavailable" in sample["sim_error"]
+
+
+def test_template_error_fails_only_that_testbench() -> None:
+    ok = _make_test("tb_ok", ["g"])
+    bad = _make_test("tb_bad", ["h"])
+    bad.template_error = "tb_bad: [vacask] netlist generation failed: boom"
+
+    sample = simulator._simulate_single_case(
+        {}, [ok, bad], lambda _t: _FakeEngine("MY_DATA: 7"),
+    )
+    assert sample["g"] == pytest.approx(7.0)
+    assert math.isnan(sample["h"])
+    assert "netlist generation failed" in sample["sim_error"]
+
+
+def test_generate_templates_uses_per_test_extension(tmp_path) -> None:
+    from chipify.util import Stimuli
+    ng = _make_test("tb_ng", ["a"]); ng.engine = "ngspice"
+    vc = _make_test("tb_vc", ["b"]); vc.engine = "vacask"
+    stim = Stimuli()
+    stim.tests = [ng, vc]
+    # Pre-rendered templates: ngspice reads .spice, vacask reads .sim.
+    (tmp_path / "tb_ng.spice").write_text("NG", encoding="utf-8")
+    (tmp_path / "tb_vc.sim").write_text("VC", encoding="utf-8")
+    simulator.generate_templates(stim, templates_dir=str(tmp_path))
+    assert ng.template_str == "NG" and ng.template_error is None
+    assert vc.template_str == "VC" and vc.template_error is None
+
+
+def test_generate_templates_missing_file_isolates_failure(tmp_path) -> None:
+    from chipify.util import Stimuli
+    ok = _make_test("tb_ok", ["a"]); ok.engine = "ngspice"
+    miss = _make_test("tb_miss", ["b"]); miss.engine = "ngspice"
+    (tmp_path / "tb_ok.spice").write_text("OK", encoding="utf-8")
+    stim = Stimuli()
+    stim.tests = [ok, miss]
+    simulator.generate_templates(stim, templates_dir=str(tmp_path))
+    assert ok.template_str == "OK" and ok.template_error is None
+    assert miss.template_str == ""
+    assert "netlist generation failed" in (miss.template_error or "")
+
+
 # ── ASCII .raw parsing ────────────────────────────────────────────────────────
 
 def _write_ascii_raw(path, *, flags: str, varlines: list[str], values: str,

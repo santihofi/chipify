@@ -44,7 +44,8 @@ from chipify.gui_qt.widgets.helpers import autoclose_combo, deferred
 
 log = logging.getLogger("chipify.gui_qt.tabs.editor")
 
-_SKIP_KEYS = ("values", "measure", "transient_signals", "dc_signals", "ac_signals")
+_SKIP_KEYS = ("values", "measure", "engine",
+              "transient_signals", "dc_signals", "ac_signals")
 _ANALYSIS_ROWS = (
     ("transient_signals", "Transient", "e.g.  v(out), v(in), i(vdd)"),
     ("dc_signals", "DC Sweep", "e.g.  i(vdd), v(out)"),
@@ -63,6 +64,18 @@ class _Var:
 
     def get(self) -> str:
         return self._w.text()
+
+
+class _ComboVar:
+    """``.get()`` adapter for a QComboBox; the default item maps to ``""``."""
+
+    def __init__(self, widget: QComboBox, default_label: str = "(default)") -> None:
+        self._w = widget
+        self._default = default_label
+
+    def get(self) -> str:
+        txt = self._w.currentText()
+        return "" if txt == self._default else txt
 
 
 def _clear_layout(layout) -> None:
@@ -278,6 +291,21 @@ class DatasheetEditorTab(QWidget):
         name_e = QLineEdit(str(tb_name))
         name_e.setPlaceholderText("testbench name (tb/*.sch)")
         hdr.addWidget(name_e, stretch=1)
+        eng_lbl = QLabel("Engine")
+        eng_lbl.setObjectName("Muted")
+        hdr.addWidget(eng_lbl)
+        engine_combo = QComboBox()
+        engine_combo.addItems(["(default)", "ngspice", "vacask"])
+        engine_combo.setToolTip(
+            "Simulator engine for this testbench. '(default)' uses the global "
+            "default from Settings."
+        )
+        cur_engine = str(tb_data.get("engine", "") or "").strip().lower()
+        engine_combo.setCurrentText(
+            cur_engine if cur_engine in ("ngspice", "vacask") else "(default)"
+        )
+        autoclose_combo(engine_combo)
+        hdr.addWidget(engine_combo)
         del_t = QPushButton("✕ Delete")
         del_t.clicked.connect(lambda _=False, i=t_idx: self._action_del_test(i))
         hdr.addWidget(del_t)
@@ -351,6 +379,7 @@ class DatasheetEditorTab(QWidget):
 
         self.test_vars.append({
             "tb_name": _Var(name_e),
+            "engine": _ComboVar(engine_combo),
             "values": test_val_vars,
             "tran_signals": analysis_vars["transient_signals"],
             "analysis_signals": analysis_vars,

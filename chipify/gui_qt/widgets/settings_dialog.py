@@ -89,8 +89,13 @@ class SettingsDialog(QDialog):
         self.engine_combo = QComboBox()
         self.engine_combo.addItems(["ngspice", "vacask"])
         self.engine_combo.setCurrentText(self._cfg.get("simulator_engine", "ngspice"))
-        form.addRow("Simulator engine", self.engine_combo)
+        self.engine_combo.setToolTip(
+            "Default engine for testbenches that don't set their own 'engine:' "
+            "in the datasheet (each testbench can override it in the editor)."
+        )
+        form.addRow("Default simulator engine", self.engine_combo)
 
+        # VACASK-specific options below apply whenever a testbench runs on VACASK.
         self.vacask_binary = QLineEdit(self._cfg.get("vacask_binary", "vacask"))
         form.addRow("VACASK binary", self.vacask_binary)
         self.vacask_src = QComboBox()

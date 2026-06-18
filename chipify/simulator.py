@@ -79,16 +79,17 @@ def _staged_copy_is_stale(src: str, dest: str) -> bool:
     return s.st_size != d.st_size or s.st_mtime > d.st_mtime + 1.0
 
 
-def stage_files_to_ram(engine=None) -> None:
+def stage_files_to_ram(engines=None) -> None:
     """Stage library/model files into FAST_TMP.
 
     Always copies the project's *.lib/*.mod/*.inc from WORK_DIR. Files are
     re-copied whenever the source changed — FAST_TMP isn't cleaned between
     runs, so a skip-if-exists policy would let a stale cached copy mask
-    edits to model files. If `engine` is provided and exposes
-    ``stage_extra_files()``, that hook runs too — used by VacaskSimulator to
-    mirror OSDI compact-model objects so that the netlist's
-    ``load "*.osdi"`` directives resolve relative to FAST_TMP.
+    edits to model files. *engines* may be a single engine, an iterable of
+    engines, or None; every engine exposing ``stage_extra_files()`` gets that
+    hook run — used by VacaskSimulator to mirror OSDI compact-model objects so
+    the netlist's ``load "*.osdi"`` directives resolve relative to FAST_TMP. A
+    mixed-engine sweep therefore stages the extras for every engine it uses.
     """
     log.info("Staging library files to RAM disk: %s", settings.FAST_TMP)
     for pattern in ("*.lib", "*.mod", "*.inc"):
@@ -117,8 +118,19 @@ def stage_files_to_ram(engine=None) -> None:
     else:
         log.debug("No tb/xschemrc to stage (looked at %s)", xschemrc_src)
 
-    if engine is not None and hasattr(engine, "stage_extra_files"):
-        engine.stage_extra_files()
+    if engines is None:
+        staged: list = []
+    elif isinstance(engines, BaseSimulator):
+        staged = [engines]
+    else:
+        staged = list(engines)
+    seen: set = set()
+    for eng in staged:
+        if eng is None or type(eng).__name__ in seen:
+            continue
+        seen.add(type(eng).__name__)
+        if hasattr(eng, "stage_extra_files"):
+            eng.stage_extra_files()
 
 
 XSCHEM_DEFAULT_TIMEOUT_SEC = 60
@@ -468,10 +480,29 @@ class NgspiceSimulator(BaseSimulator):
                 process.kill()
 
 
+#: Engine names selectable per-testbench (datasheet ``engine:``) or globally
+#: (``simulator_engine`` setting). Kept in sync with schema._SUPPORTED_ENGINES.
+SUPPORTED_ENGINES = ("ngspice", "vacask")
+
+
 def get_simulator_engine(simulator_name: str) -> BaseSimulator:
     key = (simulator_name or "ngspice").strip().lower()
+    # Built here (not at module level) because VacaskSimulator is defined below.
     engines = {"ngspice": NgspiceSimulator, "vacask": VacaskSimulator}
     return engines.get(key, NgspiceSimulator)()
+
+
+def resolve_engine_name(test, override: str | None = None,
+                        cfg: dict | None = None) -> str:
+    """Resolve the concrete engine name for *test* — most specific wins.
+
+    Precedence: the testbench's own ``engine`` → the run *override* (CLI
+    ``--simulator``) → the ``simulator_engine`` setting → ``ngspice``.
+    """
+    cfg = cfg if cfg is not None else {}
+    name = (getattr(test, "engine", None) or override
+            or cfg.get("simulator_engine") or "ngspice")
+    return str(name).strip().lower()
 
 
 def _read_run_log_tail(n: int = 25) -> str:
@@ -1216,15 +1247,42 @@ def _eval_scalar_measures(test, sample: dict, params: dict) -> None:
             sample[f"{test.tb_path}__measure_error"] = " ".join(str(note).split())[:200]
 
 
-def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
-                                      run_id: str = "",
-                                      analysis_dirs: dict | None = None):
+def _fail_test(sample: dict, test, message: str) -> None:
+    """Mark every measurement of *test* failed with *message* in *sample*."""
+    sample['sim_error'] = message
+    sample[f"{test.tb_path}_overall_pass"] = False
+    for val_obj in test.value_lst:
+        sample[val_obj.name] = float('nan')
+        sample[f"{val_obj.name}_pass"] = False
+
+
+def _simulate_single_case(params, tests, engine_for,
+                          run_id: str = "",
+                          analysis_dirs: dict | None = None):
+    """Simulate one parameter case across *tests*.
+
+    *engine_for* is a ``test -> BaseSimulator`` selector, so each testbench can
+    run on its own engine within the same case.
+    """
     analysis_dirs = analysis_dirs or {}
     sample = params.copy()
     sample['sim_error'] = "None"
     sample['run_id'] = run_id
 
     for test in tests:
+        # A testbench whose netlist couldn't be generated (e.g. its engine is
+        # unavailable) fails only its own measurements; the rest of the case
+        # still runs on their own engines.
+        tmpl_err = getattr(test, "template_error", None)
+        if tmpl_err or not getattr(test, "template_str", ""):
+            _fail_test(sample, test, tmpl_err or f"{test.tb_path}: no netlist template")
+            continue
+        try:
+            engine = engine_for(test)
+        except Exception as exc:  # noqa: BLE001
+            _fail_test(sample, test, f"{test.tb_path}: engine unavailable: {exc}")
+            continue
+
         analyses = getattr(test, "analyses", []) or []
         pid = os.getpid()
         tb_safe = test.tb_path.replace("/", "__").replace("\\", "__")
@@ -1313,14 +1371,33 @@ def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
     return sample
 
 
+def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
+                                      run_id: str = "",
+                                      analysis_dirs: dict | None = None):
+    """Back-compat shim: run all *tests* with one explicit *engine*."""
+    return _simulate_single_case(
+        params, tests, lambda _t: engine, run_id, analysis_dirs,
+    )
+
+
 def simulate_case_batch(batch_args):
-    """Worker helper: process a batch of cases to reduce IPC overhead."""
-    param_id_batch, tests, simulator_name, analysis_dirs = batch_args
-    engine = get_simulator_engine(simulator_name)
+    """Worker helper: process a batch of cases to reduce IPC overhead.
+
+    Each ``Test`` carries its resolved ``engine`` name (set by run_sim); engines
+    are instantiated once per worker and reused across the batch, so a datasheet
+    can mix engines across testbenches.
+    """
+    param_id_batch, tests, analysis_dirs = batch_args
+    engine_cache: dict[str, BaseSimulator] = {}
+
+    def _engine_for(test) -> BaseSimulator:
+        name = (getattr(test, "engine", None) or "ngspice").strip().lower()
+        if name not in engine_cache:
+            engine_cache[name] = get_simulator_engine(name)
+        return engine_cache[name]
+
     return [
-        _simulate_single_case_with_engine(
-            params, tests, engine, run_id, analysis_dirs,
-        )
+        _simulate_single_case(params, tests, _engine_for, run_id, analysis_dirs)
         for params, run_id in param_id_batch
     ]
 
@@ -1342,26 +1419,51 @@ def _resolve_chunk_size(cfg, total_tasks, num_cores):
         return max(1, min(16, total_tasks // (num_cores * 8) if num_cores > 0 else 1))
 
 
-def generate_templates(stim, engine: BaseSimulator,
-                       templates_dir: str = "") -> None:
+def generate_templates(stim, templates_dir: str = "") -> None:
     """Populate ``test.template_str`` for every test in *stim*.
+
+    Each testbench is rendered with **its own** engine (``test.engine``, resolved
+    by run_sim), so a datasheet can mix engines. If a testbench's netlist can't
+    be produced (e.g. its engine is unavailable), the failure is recorded on
+    ``test.template_error`` and that testbench's runs fail individually — the rest
+    of the sweep continues.
 
     If *templates_dir* is set, read pre-rendered xschem outputs from
     ``<templates_dir>/<safe_tb_path>.spice`` (``.sim`` for vacask) instead of
     invoking xschem locally — useful for re-running a sweep against netlists
     that were already generated.
     """
-    ext = ".sim" if engine.name == "vacask" else ".spice"
+    engine_cache: dict[str, BaseSimulator] = {}
+
+    def _engine_for(test) -> BaseSimulator:
+        name = (getattr(test, "engine", None) or "ngspice").strip().lower()
+        if name not in engine_cache:
+            engine_cache[name] = get_simulator_engine(name)
+        return engine_cache[name]
+
     for test in stim.tests:
         if _is_aborted():
             raise InterruptedError("Aborted before netlist generation.")
-        if templates_dir:
-            safe = test.tb_path.replace("/", "__").replace("\\", "__")
-            fp = os.path.join(templates_dir, safe + ext)
-            with open(fp, "r", encoding="utf-8") as fh:
-                test.template_str = fh.read()
-        else:
-            test.template_str = engine.generate_test_template(test)
+        test.template_error = None
+        engine = _engine_for(test)
+        ext = ".sim" if engine.name == "vacask" else ".spice"
+        try:
+            if templates_dir:
+                safe = test.tb_path.replace("/", "__").replace("\\", "__")
+                fp = os.path.join(templates_dir, safe + ext)
+                with open(fp, "r", encoding="utf-8") as fh:
+                    test.template_str = fh.read()
+            else:
+                test.template_str = engine.generate_test_template(test)
+        except InterruptedError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            test.template_str = ""
+            test.template_error = (
+                f"{test.tb_path}: [{engine.name}] netlist generation failed: {exc}"
+            )
+            log.warning("Template generation failed for %s [%s]: %s",
+                        test.tb_path, engine.name, exc)
 
 
 def generate_cases(stim) -> list:
@@ -1443,20 +1545,25 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
         param_sets = generate_cases(stim)
         log.info("Total cases: %d", len(param_sets))
         cfg = app_config.load_config()
-        # CLI --simulator flag (simulator arg) takes precedence over settings.json
-        simulator_name = (simulator or cfg.get("simulator_engine") or "ngspice").strip().lower()
-        engine = get_simulator_engine(simulator_name)
-        log.info("Selected simulator engine: %s", engine.name)
+        # Resolve each testbench's engine: its own ``engine:`` wins, else the CLI
+        # --simulator override, else the simulator_engine setting, else ngspice.
+        # Write the concrete name back onto the (picklable) Test so workers and
+        # template generation pick the right engine per testbench.
+        for test in stim.tests:
+            test.engine = resolve_engine_name(test, simulator, cfg)
+        engines_in_use = sorted({t.engine for t in stim.tests})
+        engine_instances = [get_simulator_engine(n) for n in engines_in_use]
+        log.info("Simulator engine(s) in use: %s", ", ".join(engines_in_use))
 
         if _is_aborted():
             raise InterruptedError("Aborted before template generation.")
         log.info("Phase 2/3: generating Xschem templates...")
-        generate_templates(stim, engine, templates_dir=templates_dir)
+        generate_templates(stim, templates_dir=templates_dir)
 
         if _is_aborted():
             raise InterruptedError("Aborted before RAM staging.")
         log.info("Phase 3/3: staging files to RAM disk...")
-        stage_files_to_ram(engine)
+        stage_files_to_ram(engine_instances)
 
         if _is_aborted():
             raise InterruptedError("Aborted before pool start.")
@@ -1510,7 +1617,7 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
         pending = [
             pool.apply_async(
                 simulate_case_batch,
-                ((batch, stim.tests, engine.name, analysis_dirs),),
+                ((batch, stim.tests, analysis_dirs),),
             )
             for batch in param_id_batches
         ]

@@ -277,13 +277,16 @@ def test_datasheet_editor_loads_and_saves(qt_app, tmp_path, monkeypatch):
         assert any(v["key"].get() == "temp" for v in ed.param_vars)
         assert ed.test_vars and ed.test_vars[0]["tb_name"].get() == "tb_sf"
 
-        # Edit a measurement bound and set an optional unit, then save.
+        # Edit a measurement bound, set an optional unit, and pick a per-testbench
+        # engine, then save.
         ed.test_vars[0]["values"][0]["vmax"]._w.setText("1.5")
         ed.test_vars[0]["values"][0]["unit"]._w.setText("V")
+        ed.test_vars[0]["engine"]._w.setCurrentText("vacask")
         ed._save()
         reloaded = _yaml.safe_load(ds.read_text())
         assert reloaded["tests"]["tb_sf"]["gain"]["max"] == 1.5
         assert reloaded["tests"]["tb_sf"]["gain"]["unit"] == "V"
+        assert reloaded["tests"]["tb_sf"]["engine"] == "vacask"
     finally:
         win.close()
 

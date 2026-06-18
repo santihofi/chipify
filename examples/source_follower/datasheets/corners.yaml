@@ -21,3 +21,4 @@ tests:
     gain: {}
     bandwidth:
       unit: 'Hz'
+    engine: ngspice

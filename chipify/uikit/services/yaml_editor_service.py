@@ -281,6 +281,16 @@ def sync_form_to_yaml(
                 else:
                     tb_content.pop("transient_signals", None)
 
+        # Per-testbench simulator engine. An empty value means "use the global
+        # default" — remove the key so the datasheet stays clean.
+        engine_var = t_dict.get("engine")
+        if engine_var is not None:
+            engine = engine_var.get().strip().lower()
+            if engine:
+                tb_content["engine"] = engine
+            else:
+                tb_content.pop("engine", None)
+
         for v_dict in t_dict["values"]:
             name = v_dict["name"].get().strip()
             orig_name = str(v_dict.get("orig_name", "") or "")

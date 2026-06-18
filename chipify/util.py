@@ -68,6 +68,15 @@ class Test:
         from chipify.analyses import Analysis  # local import: avoid cycle
         self.analyses: list[Analysis] = []
         self.measure: dict[str, str] = {}
+        # Per-testbench simulator engine ("ngspice"/"vacask"). None means
+        # "inherit the run default"; schema.validate_datasheet() sets it from the
+        # optional ``engine:`` key, and simulator.run_sim() resolves None to a
+        # concrete name before dispatch.
+        self.engine: str | None = None
+        # Set by simulator.generate_templates() if this testbench's netlist could
+        # not be produced (e.g. its engine is unavailable). The worker then fails
+        # only this testbench's runs with this message, leaving others to run.
+        self.template_error: str | None = None
 
     @property
     def transient_signals(self) -> list[str]:
