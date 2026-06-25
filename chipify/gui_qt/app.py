@@ -12,12 +12,48 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 
 
 def _select_mpl_backend() -> None:
     """Force matplotlib onto the Qt backend before any pyplot import."""
     import matplotlib
     matplotlib.use("QtAgg")
+
+
+def _set_windows_app_id() -> None:
+    """Give the process an explicit AppUserModelID on Windows.
+
+    Without this, Windows groups the app under—and shows the taskbar icon
+    of—the host ``python.exe`` launcher rather than our own window icon.
+    Must run before any window is created. No-op (and never fatal) elsewhere.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
+            "Chipify.EDA.Dashboard")
+    except Exception:  # pragma: no cover - best-effort cosmetic tweak
+        pass
+
+
+def _app_icon():
+    """Build the application/window QIcon from the bundled package resources.
+
+    The ``.ico`` carries 16–256 px renditions (crisp title-bar/taskbar sizes);
+    the 256 px PNG is added as a high-res fallback for platforms that ignore
+    ``.ico``. Returns an empty QIcon if the assets are missing.
+    """
+    from PySide6.QtGui import QIcon
+
+    res = Path(__file__).resolve().parent / "resources"
+    icon = QIcon()
+    for name in ("chipify.ico", "chipify.png"):
+        path = res / name
+        if path.exists():
+            icon.addFile(str(path))
+    return icon
 
 
 def _prefer_xwayland() -> bool:
@@ -51,6 +87,7 @@ def main() -> int:
 
     app_config.setup_logging()
     log = logging.getLogger("chipify.gui_qt")
+    _set_windows_app_id()
     if _prefer_xwayland():
         log.info("Wayland session detected; preferring XWayland (xcb) with a "
                  "native-Wayland fallback. If dropdowns still misbehave, install "
@@ -66,6 +103,9 @@ def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Chipify")
     app.setApplicationDisplayName("Chipify EDA Dashboard")
+    # App-wide default icon — inherited by the main window and every dialog /
+    # secondary window (settings, multi-plot dashboard, …).
+    app.setWindowIcon(_app_icon())
 
     # Use Qt's Fusion style rather than the platform/native style. Fusion draws
     # and manages combo-box popups itself instead of handing them to the

@@ -22,8 +22,12 @@ setup(
     license="Apache-2.0",
     python_requires=">=3.11",
     packages=find_packages(exclude=["tests", "tests.*"]),
-    # Ship the PEP 561 marker so installed copies expose their type hints.
-    package_data={"chipify": ["py.typed"]},
+    # Ship the PEP 561 marker so installed copies expose their type hints,
+    # plus the GUI application/window icon assets.
+    package_data={
+        "chipify": ["py.typed"],
+        "chipify.gui_qt": ["resources/*.ico", "resources/*.png"],
+    },
     install_requires=[
         "pandas",
         "numpy",

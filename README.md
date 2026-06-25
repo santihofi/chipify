@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./doc/images/logo.png" alt="Chipify" width="440">
+</p>
+
 # Chipify
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
