@@ -2,9 +2,11 @@
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 
-(c) 2026 Santiago Hofwimmer
+(c) 2026 Santiago Hofwimmer BSc
 
 Institute for Integrated Circuits and Quantum Computing, Johannes Kepler University (JKU), Linz, Austria
+
+![Link to repository](https://github.com/santihofi/chipify)
 
 > [!WARNING]
 > This repository is a Work in Progress.
