@@ -27,7 +27,8 @@ into plots, yield matrices, and reports.
 It ships with both a **PySide6 (Qt) desktop GUI** and a **headless CLI**, plus
 a plugin system for custom plots, reports, and expressions.
 
-<!-- Add a GUI screenshot here, e.g.:  ![Chipify GUI](docs/screenshot.png) -->
+![Histogram View](./doc/images/chipify_hist.png)
+![Scatter Plot](./doc/images/chipify_scatter.png)
 
 ## Features
 

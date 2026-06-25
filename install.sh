@@ -38,3 +38,27 @@ fi
 
 # ── Python package in a virtual environment ────────────────────────────────────
 python -m venv venv && source ./venv/bin/activate && pip install .
+
+# ── Expose the commands on PATH without activating the venv ────────────────────
+# The console scripts in venv/bin carry an absolute shebang (the venv's own
+# python), so symlinks to them work from any directory and any shell — no
+# activation needed. `chipify` is mapped to chipify-qt so the Qt GUI is the
+# default entry point.
+VENV_BIN="$(cd venv/bin && pwd)"
+USER_BIN="${HOME}/.local/bin"
+mkdir -p "${USER_BIN}"
+ln -sf "${VENV_BIN}/chipify-qt"  "${USER_BIN}/chipify"      # Qt GUI = default
+ln -sf "${VENV_BIN}/chipify-qt"  "${USER_BIN}/chipify-qt"
+ln -sf "${VENV_BIN}/chipify-cli" "${USER_BIN}/chipify-cli"
+
+# Make sure ~/.local/bin is on PATH for future shells (bash and zsh).
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+touch "${HOME}/.bashrc"
+for RC in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+    [ -e "${RC}" ] || continue
+    grep -qsF '.local/bin' "${RC}" || printf '%s\n' "${PATH_LINE}" >> "${RC}"
+done
+
+echo "[*] Linked chipify, chipify-qt, chipify-cli into ${USER_BIN} (chipify -> Qt GUI)."
+echo "    Run 'chipify' in a new shell, or load it now with:"
+echo "        export PATH=\"\$HOME/.local/bin:\$PATH\""
