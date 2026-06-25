@@ -54,6 +54,12 @@ class SimulationController(QObject):
         yaml_path = os.path.join(settings.IN_DIR, selected)
         log.info("SimulationController.start: %s", selected)
 
+        # Persist any unsaved editor edits so the sweep runs against what the
+        # user currently sees. Cancel the run if those edits aren't valid YAML.
+        editor = getattr(self.window, "editor_tab", None)
+        if editor is not None and not editor.autosave_for_run(yaml_path):
+            return
+
         self.app_state.clear_partial()
         self.app_state.simulation_active = True
         try:

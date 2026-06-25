@@ -492,19 +492,30 @@ class DatasheetEditorTab(QWidget):
         self._window.set_active_datasheet(os.path.basename(path))
         self._window.set_status(f"Created {os.path.basename(path)}", "#2ecc71")
 
+    def _compute_save_text(self) -> str:
+        """Return the YAML text to persist for the current editor state.
+
+        Form view dumps the synced dict (preserving the original raw text when
+        the form didn't change the data, so comments survive); raw view returns
+        the editor text after validating it parses. Raises on malformed raw YAML.
+        """
+        if self.mode_combo.currentText() == "Form View":
+            self._sync_to_state()
+            if self._raw_matches_state():
+                return self.raw_editor.toPlainText()
+            text = self._dump()
+            self.raw_editor.setPlainText(text)  # keep the raw view in sync
+            return text
+        text = self.raw_editor.toPlainText()
+        yaml.safe_load(text)  # validate — raises on malformed YAML
+        return text
+
     def _save(self) -> None:
         if not self.current_yaml_path:
             QMessageBox.warning(self, "Save", "No datasheet selected.")
             return
         try:
-            if self.mode_combo.currentText() == "Form View":
-                self._sync_to_state()
-                text = self.raw_editor.toPlainText() if self._raw_matches_state() else self._dump()
-                if not self._raw_matches_state():
-                    self.raw_editor.setPlainText(text)
-            else:
-                text = self.raw_editor.toPlainText()
-                yaml.safe_load(text)  # validate
+            text = self._compute_save_text()
             with open(self.current_yaml_path, "w", encoding="utf-8") as fh:
                 fh.write(text)
         except Exception as exc:  # noqa: BLE001
@@ -512,3 +523,35 @@ class DatasheetEditorTab(QWidget):
             return
         self.raw_text = text
         self._window.set_status("Datasheet saved.", "#2ecc71")
+
+    def autosave_for_run(self, yaml_path: str) -> bool:
+        """Persist unsaved edits for the datasheet about to be simulated.
+
+        Called by the simulation controller before a run so the sweep uses what
+        the user currently sees in the editor. Returns True when it's safe to
+        proceed — saved, unchanged, or the editor isn't showing *yaml_path*.
+        Returns False only when the current content is invalid (e.g. malformed
+        raw YAML), so the caller can cancel rather than silently run stale data.
+        """
+        if not self.current_yaml_path or self.current_yaml_path != yaml_path:
+            return True  # editor isn't showing the datasheet being run
+        try:
+            text = self._compute_save_text()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Auto-save",
+                "The datasheet has unsaved changes that aren't valid YAML, so "
+                f"the run was canceled:\n{exc}",
+            )
+            return False
+        if text == self.raw_text:
+            return True  # nothing changed — don't rewrite the file
+        try:
+            with open(self.current_yaml_path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError as exc:
+            QMessageBox.critical(self, "Auto-save", f"Could not save datasheet:\n{exc}")
+            return False
+        self.raw_text = text
+        self._window.set_status("Datasheet auto-saved before run.", "#2ecc71")
+        return True

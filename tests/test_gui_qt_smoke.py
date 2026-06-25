@@ -291,6 +291,60 @@ def test_datasheet_editor_loads_and_saves(qt_app, tmp_path, monkeypatch):
         win.close()
 
 
+def test_autosave_for_run_persists_unsaved_edits(qt_app, tmp_path, monkeypatch):
+    import yaml as _yaml
+
+    from chipify import settings
+    monkeypatch.setattr(settings, "IN_DIR", str(tmp_path))
+    ds = tmp_path / "demo.yaml"
+    ds.write_text(
+        "parameters:\n  temp: [27]\n"
+        "tests:\n  tb_sf:\n    gain:\n      min: 0.8\n      max: 1.0\n",
+        encoding="utf-8",
+    )
+
+    from chipify.gui_qt.main_window import MainWindow
+    win = MainWindow()
+    try:
+        win.set_active_datasheet("demo.yaml")
+        ed = win.editor_tab
+        # Edit a bound in the form but do NOT click Save.
+        ed.test_vars[0]["values"][0]["vmax"]._w.setText("2.5")
+        # Starting a run autosaves the editor's current state.
+        assert ed.autosave_for_run(ed.current_yaml_path) is True
+        reloaded = _yaml.safe_load(ds.read_text())
+        assert reloaded["tests"]["tb_sf"]["gain"]["max"] == 2.5
+    finally:
+        win.close()
+
+
+def test_autosave_for_run_cancels_on_invalid_yaml(qt_app, tmp_path, monkeypatch):
+    from chipify import settings
+    from chipify.gui_qt.tabs import editor_tab as _et
+    monkeypatch.setattr(settings, "IN_DIR", str(tmp_path))
+    monkeypatch.setattr(_et.QMessageBox, "critical", lambda *a, **k: None)
+    ds = tmp_path / "demo.yaml"
+    original = "parameters:\n  temp: [27]\ntests:\n  tb_sf:\n    gain:\n      min: 0.8\n"
+    ds.write_text(original, encoding="utf-8")
+
+    from chipify.gui_qt.main_window import MainWindow
+    win = MainWindow()
+    try:
+        win.set_active_datasheet("demo.yaml")
+        ed = win.editor_tab
+        # Type invalid YAML in raw mode (block the mode-change signal so the
+        # raw editor isn't repopulated from state).
+        ed.mode_combo.blockSignals(True)
+        ed.mode_combo.setCurrentText("Raw YAML")
+        ed.mode_combo.blockSignals(False)
+        ed.raw_editor.setPlainText("parameters: [unbalanced")
+        # Run must be canceled and the file left untouched.
+        assert ed.autosave_for_run(ed.current_yaml_path) is False
+        assert ds.read_text() == original
+    finally:
+        win.close()
+
+
 def test_run_summary_updates(window):
     window.show_results(_sample_df(), _FakeStim(), switch_tab=False)
     assert window.sum_samples.text() == "4"
