@@ -29,9 +29,13 @@ import math
 
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
 
 from chipify.plugin_loader import PlotPlugin
+
+# ``scipy.stats`` is imported lazily inside ``QQPlot.draw`` (its only user). This
+# module is imported eagerly at startup to register the built-in plot modes, so a
+# top-level scipy import would add ~0.8s to every launch — even for users who
+# never open a QQ plot. See plot_manager.py and app._start_import_warmup.
 
 log = logging.getLogger("chipify.plugins.distribution_plots")
 
@@ -134,6 +138,7 @@ class QQPlot(PlotPlugin):
     name = "QQ Plot (Normality)"
 
     def draw(self, fig, ax, valid_df, stim, *, theme=None):
+        import scipy.stats as stats  # lazy: keeps scipy off the GUI launch path
         th = _theme(theme)
         metrics = _metric_data(valid_df, stim)
         if not metrics:

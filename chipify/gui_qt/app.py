@@ -81,6 +81,29 @@ def _prefer_xwayland() -> bool:
     return False
 
 
+def _start_import_warmup(log: logging.Logger) -> None:
+    """Pre-import heavy, lazily-loaded libraries on a background thread.
+
+    ``scipy.stats`` (~0.8s, and it pulls in ``scipy.spatial``) is only needed the
+    first time a distribution fit / QQ-plot is drawn, so it is imported lazily
+    (see ``plot_manager`` / ``distribution_plots``) to keep launch fast. Warming
+    it here — *after* the window is already on screen — means that first plot
+    isn't laggy either. These are pure compute imports with no Qt interaction, so
+    a plain daemon thread is safe; a concurrent lazy import on the main thread is
+    serialised by the import system.
+    """
+    import threading
+
+    def _warm() -> None:
+        try:
+            import scipy.stats  # noqa: F401
+        except Exception:  # pragma: no cover - best-effort, never fatal
+            log.debug("import warm-up skipped", exc_info=True)
+
+    threading.Thread(target=_warm, name="chipify-import-warmup",
+                     daemon=True).start()
+
+
 def main() -> int:
     """Launch the Chipify Qt desktop GUI. Returns the Qt exit code."""
     from chipify import app_config
@@ -129,6 +152,9 @@ def main() -> int:
     # resolution; the title bar and window controls stay available, and the
     # user can un-maximize to the clamped restored size set in MainWindow.
     window.showMaximized()
+    # Window is up — warm the lazily-imported heavy libs in the background so the
+    # first distribution plot doesn't pay the deferred import cost interactively.
+    _start_import_warmup(log)
     return app.exec()
 
 

@@ -5,8 +5,12 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-import scipy.stats as stats
 from chipify import settings
+
+# NOTE: ``scipy.stats`` (~0.8s to import, and it drags in ``scipy.spatial``) is
+# imported lazily inside ``draw_histogram`` — the only consumer — so it stays off
+# the GUI launch path. ``app._start_import_warmup`` pre-imports it on a background
+# thread after the window is shown, so the first histogram fit isn't laggy either.
 
 
 # Default palette used when no theme dict is supplied (preserves the
@@ -39,6 +43,7 @@ def _resolve_theme(theme: dict | None, bg_color: str | None = None) -> dict:
 class PlotManager:
     @staticmethod
     def draw_histogram(fig, ax, canvas, valid_df, current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run, theme=None):
+        import scipy.stats as stats  # lazy: keeps scipy off the GUI launch path
         th = _resolve_theme(theme)
         ax.clear()
         ax.set_facecolor(th["bg"])
