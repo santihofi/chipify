@@ -8,7 +8,6 @@ to DataFrames and returns diagnostic log lines.  Backed by SafeEvaluator.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import pandas as pd
 

@@ -1,5 +1,4 @@
 ﻿# Copyright (c) 2026 Santiago Hofwimmer
-# chipify.py
 import argparse
 import os
 import sys
@@ -11,7 +10,7 @@ from chipify import simulator
 from chipify.analyzer import print_summary
 
 
-def _json_summary(df, stim, yaml_name: str, duration_s: float) -> dict:
+def _json_summary(df, yaml_name: str, duration_s: float) -> dict:
     """Return a machine-readable summary dict for the completed run."""
     from chipify import data_loader as _dl
     df = _dl.prepare_results(df)
@@ -105,7 +104,7 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
 
     print_summary(df, stim)
 
-    summary = _json_summary(df, stim, os.path.basename(yaml_path), duration_s)
+    summary = _json_summary(df, os.path.basename(yaml_path), duration_s)
     if json_out:
         print(json.dumps(summary))
     return summary
@@ -113,7 +112,7 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Chipify: High-Performance Mismatch Simulation Wrapper for Xschem und Ngspice.",
+        description="Chipify: High-Performance Mismatch Simulation Wrapper for Xschem and Ngspice.",
         formatter_class=argparse.RawTextHelpFormatter
     )
 
@@ -253,7 +252,7 @@ def main():
         print(f"[-] Fatal Error: configuration file '{yaml_path}' not found!")
         sys.exit(1)
 
-    print(f"[*] Initialising Chipify...")
+    print("[*] Initialising Chipify...")
     summary = _run_single(yaml_path, json_out=args.json,
                           simulator_override=args.simulator,
                           templates_dir=args.templates_dir,

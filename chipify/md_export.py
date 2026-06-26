@@ -20,7 +20,6 @@ import datetime
 import math
 import os
 
-import numpy as np
 import pandas as pd
 
 
@@ -130,10 +129,6 @@ def generate_md_report(
 
     yield_badge = "PASS" if yield_ == 100.0 else ("WARN" if yield_ > 0 else "FAIL")
 
-    dur_line = ""
-    if sim_duration_sec is not None:
-        dur_line = f"- **Simulation Duration:** {sim_duration_sec:.1f} s\n"
-
     swept = []
     for name, vals in stim.params.items():
         try:
@@ -141,13 +136,12 @@ def generate_md_report(
                 swept.append(f"`{name}` ({len(vals)} values)")
         except Exception:
             pass
-    swept_line = ("- **Swept Parameters:** " + ", ".join(swept) + "\n") if swept else ""
 
     lines = [
-        f"# Chipify Simulation Report",
-        f"",
-        f"| | |",
-        f"|---|---|",
+        "# Chipify Simulation Report",
+        "",
+        "| | |",
+        "|---|---|",
         f"| **Datasheet** | `{yaml_name}` |",
         f"| **Date** | {now} |",
         f"| **Total Runs** | {total} |",
@@ -161,11 +155,11 @@ def generate_md_report(
     if swept:
         lines.append(f"| **Swept** | {', '.join(swept)} |")
     lines += [
-        f"",
-        f"## Measurement Results",
-        f"",
+        "",
+        "## Measurement Results",
+        "",
         _md_table(rows, valid),
-        f"",
+        "",
     ]
 
     # Per-param fail details

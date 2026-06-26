@@ -2,8 +2,8 @@
 """
 app.py – QApplication bootstrap for the chipify Qt GUI.
 
-``main()`` is the target of the temporary ``chipify-qt`` console script (and,
-once the rebuild is complete, of the ``chipify`` entry point). It selects the
+``main()`` is the target of the ``chipify-qt`` console script (and, via
+``chipify.cli.run_gui``, of the default ``chipify`` entry point). It selects the
 matplotlib Qt backend, installs the active theme's style sheet, and shows the
 main window.
 """

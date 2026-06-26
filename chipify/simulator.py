@@ -208,7 +208,6 @@ def run_xschem(
     # never returns. -x suppresses the X server attach.
     cmd += ['-q', '-x', '-o', settings.FAST_TMP, xschem_file]
 
-    before = _snapshot_dir(settings.FAST_TMP)
     start_ts = time.time()
 
     process = None

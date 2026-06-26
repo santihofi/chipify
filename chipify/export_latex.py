@@ -553,15 +553,15 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
     if len(data) == 0:
         return
 
-    # 1. Histogramm berechnen
-    # Für 'ybar interval' in PGFPlots brauchen wir die X-Edges, nicht die Center!
+    # 1. Compute the histogram.
+    # 'ybar interval' in PGFPlots needs the bin edges, not the centers!
     counts, edges = np.histogram(data, bins=bins, density=True)
-    
-    # X und Y müssen bei 'ybar interval' gleich lang sein. Das letzte Y wird ignoriert.
+
+    # For 'ybar interval', X and Y must be the same length; the last Y is ignored.
     x_hist = edges
     y_hist = np.append(counts, counts[-1] if len(counts)>0 else 0)
 
-    # 2. Fit-Kurve und Parameter berechnen
+    # 2. Compute the fit curve and its parameters.
     fit_x = None
     fit_y = None
     fit_params = {}
@@ -613,7 +613,7 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
             fit_x, fit_y = None, None
             fit_legend_latex = ""
 
-    # 3. CSV mit NaN padding generieren, damit alle Spalten gleich lang sind
+    # 3. Generate the CSV with NaN padding so all columns are the same length.
     max_len = max(len(x_hist), len(fit_x) if fit_x is not None else 0)
     
     csv_dict = {
@@ -630,7 +630,7 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
         
     for key, val in fit_params.items():
         arr = np.full(max_len, np.nan)
-        arr[0] = val  # Wir schreiben den Wert exakt in Zeile 0!
+        arr[0] = val  # Write the value into row 0 exactly.
         csv_dict[key] = arr
 
     df = pd.DataFrame(csv_dict)
@@ -638,21 +638,21 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
     csv_filename = f"{param_name}_plot.csv"
     df.to_csv(os.path.join(output_dir, csv_filename), index=False)
 
-    # 4. LaTeX Code generieren
+    # 4. Generate the LaTeX code.
     tex_filename = f"{param_name}_plot.tex"
     
     read_macros = ""
     for key in fit_params.keys():
         read_macros += f"\\pgfplotstablegetelem{{0}}{{{key}}}\\of\\datatable \\let\\{key}Val\\pgfplotsretval\n"
 
-    # TeX String aufbauen
+    # Build the TeX string.
     safe_param_name = param_name.replace('_', r'\_')
-    tex_content = f"""% Plot für {param_name}
+    tex_content = f"""% Plot for {param_name}
 \\pgfplotstableread[col sep=comma]{{{csv_filename}}}\\datatable
 
-% Parameter aus Zeile 0 auslesen
+% Read parameters from row 0
 {read_macros}
-% Hilfsmakro definieren (falls nicht global vorhanden)
+% Define helper macro (if not already defined globally)
 \\providecommand{{\\formatnum}}[2]{{\\pgfmathprintnumber[fixed, precision=#1, zerofill]{{#2}}}}
 
 \\begin{{center}}
@@ -671,7 +671,7 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
     width=10cm, height=8cm,
     axis line style={{thick}}, tick style={{thick, black}}
 ]
-    % --- 1. Histogramm ---
+    % --- 1. Histogram ---
     \\addplot [ybar interval, fill=blue!30, draw=blue!70] 
         table [x=x_hist, y=y_hist] {{\\datatable}};
     \\addlegendentry{{Histogram}}
@@ -679,7 +679,7 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
 
     if fit_x is not None:
         tex_content += f"""
-    % --- 2. Fit Kurve ---
+    % --- 2. Fit curve ---
     \\addplot [color=red, very thick, no marks] 
         table [x=x_curve, y=y_curve] {{\\datatable}};
     \\addlegendentry{{{fit_legend_latex}}}

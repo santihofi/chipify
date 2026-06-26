@@ -16,7 +16,6 @@ from schema.py to avoid circular imports.
 from __future__ import annotations
 
 import ast
-import math
 from typing import Any
 
 import numpy as np

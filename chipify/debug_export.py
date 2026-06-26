@@ -5,7 +5,6 @@ Writes the failed runs of a results DataFrame to a CSV and generates a ready-to-
 SPICE deck for the worst-case failure, so it can be re-simulated in isolation.
 """
 import os
-import pandas as pd
 
 
 def export_fails(df, stim, out_dir):

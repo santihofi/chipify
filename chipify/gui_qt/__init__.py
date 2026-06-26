@@ -2,7 +2,7 @@
 """
 chipify.gui_qt – PySide6 (Qt) desktop GUI.
 
-This package is the Qt rebuild of the CustomTkinter GUI in ``chipify.gui``.
+This package is the Qt rebuild of chipify's former CustomTkinter GUI.
 It reuses the framework-agnostic core unchanged (simulator, schema, analyses,
 plot_manager, exporters, reports, config) and the shared state/services layer
 (``chipify.uikit.state`` and the agnostic ``chipify.uikit.services`` modules).

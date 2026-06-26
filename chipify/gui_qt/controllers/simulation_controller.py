@@ -4,10 +4,9 @@ simulation_controller.py – Qt simulation lifecycle (start / progress / stop).
 
 Owns the :class:`QThread` + :class:`SimWorker`, translates the worker's Qt
 signals into ``AppState`` mutations and status-bar updates, and enforces the
-abort-flag contract on Stop. Same responsibilities as the legacy
-``chipify.gui.controllers.simulation_controller``; the queue/``after()``
-plumbing is gone because cross-thread Qt signals marshal to the GUI thread on
-their own.
+abort-flag contract on Stop. Same responsibilities as the former CustomTkinter
+simulation controller; the queue/``after()`` plumbing is gone because
+cross-thread Qt signals marshal to the GUI thread on their own.
 """
 from __future__ import annotations
 
