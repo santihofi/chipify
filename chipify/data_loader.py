@@ -88,6 +88,33 @@ def prepare_results(df: pd.DataFrame) -> pd.DataFrame:
     return compute_global_pass(normalise_sim_error(df))
 
 
+@dataclass(frozen=True)
+class ResultSummary:
+    """Run-count + global-yield statistics for a results DataFrame."""
+    total: int      #: number of simulation rows
+    crashes: int    #: rows whose ``sim_error`` is not ``"None"``
+    valid: int      #: ``total - crashes``
+    passed: int     #: rows where ``global_pass`` is true
+    yield_pct: float  #: ``passed / total * 100`` (``0.0`` for an empty frame)
+
+
+def result_summary(df: pd.DataFrame) -> ResultSummary:
+    """Compute the standard run summary (total / crashes / valid / yield).
+
+    The single authoritative replacement for the count-and-divide block that
+    the CLI, analyzer, report exporters, and plugin API each used to inline.
+    Reads ``sim_error`` / ``global_pass`` directly with presence guards (a
+    missing column contributes no crashes / no passes), so it is safe on both
+    raw and :func:`prepare_results`-prepared frames without mutating them.
+    """
+    total = len(df)
+    crashes = int((df["sim_error"] != "None").sum()) if "sim_error" in df.columns else 0
+    passed = int(df["global_pass"].sum()) if "global_pass" in df.columns else 0
+    yield_pct = passed / total * 100.0 if total else 0.0
+    return ResultSummary(total=total, crashes=crashes, valid=total - crashes,
+                         passed=passed, yield_pct=yield_pct)
+
+
 def compute_plot_cols(df: pd.DataFrame, stim: Any) -> PlotColumns:
     """
     Derive the two column lists needed by the GUI dropdowns.

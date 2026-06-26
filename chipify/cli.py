@@ -13,20 +13,14 @@ from chipify.analyzer import print_summary
 def _json_summary(df, yaml_name: str, duration_s: float) -> dict:
     """Return a machine-readable summary dict for the completed run."""
     from chipify import data_loader as _dl
-    df = _dl.prepare_results(df)
-    total = len(df)
-    crashes = int((df['sim_error'] != 'None').sum())
-    valid = total - crashes
-    global_passed = int(df['global_pass'].sum())
-    global_yield  = (global_passed / total * 100) if total > 0 else 0.0
-
+    s = _dl.result_summary(_dl.prepare_results(df))
     return {
         "yaml":       yaml_name,
-        "total":      total,
-        "crashes":    crashes,
-        "valid":      valid,
-        "passed":     global_passed,
-        "yield":      round(global_yield, 2),
+        "total":      s.total,
+        "crashes":    s.crashes,
+        "valid":      s.valid,
+        "passed":     s.passed,
+        "yield":      round(s.yield_pct, 2),
         "duration_s": round(duration_s, 2),
     }
 
@@ -90,13 +84,10 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
         hist = os.path.join(history_dir, f"run_{ts}.csv")
         df.to_csv(hist, index=False)
         from chipify import data_loader as _dl
-        df2 = _dl.prepare_results(df)
-        total  = len(df2)
-        valid  = int((df2['sim_error'] == 'None').sum())
-        gyield = float(df2['global_pass'].sum()) / total * 100 if total else 0
+        s = _dl.result_summary(_dl.prepare_results(df))
         run_meta.write_meta(hist, yaml_name=os.path.basename(yaml_path),
-                            duration_s=duration_s, total_runs=total,
-                            valid_runs=valid, global_yield=round(gyield, 2),
+                            duration_s=duration_s, total_runs=s.total,
+                            valid_runs=s.valid, global_yield=round(s.yield_pct, 2),
                             tran_dir=analysis_dirs.get("transient", ""),
                             analysis_dirs=analysis_dirs)
     except Exception as exc:

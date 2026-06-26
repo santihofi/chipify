@@ -118,11 +118,10 @@ def generate_md_report(
     valid_df  = prepared[prepared["sim_error"] == "None"]
     rows      = _measurement_rows(valid_df, stim)
 
-    total   = len(prepared)
-    crashes = int((prepared["sim_error"] != "None").sum())
-    valid   = total - crashes
-    passed  = int(prepared["global_pass"].sum())
-    yield_  = passed / total * 100 if total else 0.0
+    from chipify import data_loader as _dl
+    s = _dl.result_summary(prepared)
+    total, crashes, valid, passed, yield_ = (
+        s.total, s.crashes, s.valid, s.passed, s.yield_pct)
 
     yaml_name = os.path.basename(yaml_path)
     now       = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

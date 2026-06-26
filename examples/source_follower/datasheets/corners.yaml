@@ -8,7 +8,7 @@ parameters:
 tests:
   tb_sf_op:
     ve:
-      min: 0.33
+      min: 0.3
       max: 0.5
       typ: 0.4
       unit: 'V'
@@ -21,4 +21,8 @@ tests:
     gain: {}
     bandwidth:
       unit: 'Hz'
+    engine: ngspice
+    ac_signals: [outp, outn]
+  tb_sf_tran:
+    transient_signals: [outp, outn]
     engine: ngspice

@@ -123,16 +123,13 @@ class PluginContext:
         if df is None or len(df) == 0:
             return {"total": 0, "crashes": 0, "valid": 0,
                     "passed": 0, "yield_pct": 0.0}
-        prepared = _dl.prepare_results(df)
-        total = len(prepared)
-        crashes = int((prepared["sim_error"] != "None").sum())
-        passed = int(prepared["global_pass"].sum())
+        s = _dl.result_summary(_dl.prepare_results(df))
         return {
-            "total": total,
-            "crashes": crashes,
-            "valid": total - crashes,
-            "passed": passed,
-            "yield_pct": round(passed / total * 100, 2),
+            "total": s.total,
+            "crashes": s.crashes,
+            "valid": s.valid,
+            "passed": s.passed,
+            "yield_pct": round(s.yield_pct, 2),
         }
 
     # ── Datasheet / specs ─────────────────────────────────────────────────────

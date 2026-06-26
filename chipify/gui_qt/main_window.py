@@ -269,14 +269,13 @@ class MainWindow(QMainWindow):
                 lbl.setText("—")
             self.sum_yield.setStyleSheet("")
             return
-        total = len(df)
-        valid = len(_dl.valid_rows(df))
+        s = _dl.result_summary(df)
         dur = self.app_state.last_sim_duration_sec
         self.sum_duration.setText(f"{dur:.1f} s" if dur else "—")
-        self.sum_samples.setText(str(total))
-        self.sum_valid.setText(str(valid))
-        if "global_pass" in df.columns and total:
-            yld = float(df["global_pass"].sum()) / total * 100.0
+        self.sum_samples.setText(str(s.total))
+        self.sum_valid.setText(str(s.valid))
+        if "global_pass" in df.columns and s.total:
+            yld = s.yield_pct
             self.sum_yield.setText(f"{yld:.1f} %")
             color = "#2ecc71" if yld >= 99.0 else ("#f1c40f" if yld >= 90.0 else "#e74c3c")
             self.sum_yield.setStyleSheet(f"color: {color};")

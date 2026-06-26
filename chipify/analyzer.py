@@ -17,15 +17,16 @@ def print_summary(df, stim):
     # Work on a prepared copy — never mutate the caller's DataFrame.
     from chipify import data_loader as _dl
     df = _dl.prepare_results(df)
+    summary = _dl.result_summary(df)
 
-    total = len(df)
+    total = summary.total
     print(f"Total iterations:  {total}")
     if total == 0:
         print("No simulation results to analyse.")
         print("="*85 + "\n")
         return
 
-    crashes = len(df[df['sim_error'] != 'None'])
+    crashes = summary.crashes
     if crashes > 0:
         print(f"Failed runs:       {crashes} (crashes / timeouts / parse errors)")
     else:
@@ -40,8 +41,8 @@ def print_summary(df, stim):
         yield_pct = (passed / total) * 100
         print(f" {tb_name:<25}: {passed}/{total} passed ({yield_pct:.1f}%)")
 
-    global_passed = int(df['global_pass'].sum())
-    global_yield = (global_passed / total) * 100
+    global_passed = summary.passed
+    global_yield = summary.yield_pct
 
     print("\n--- Global yield ---")
     status_tag = "[PASS]" if global_yield == 100.0 else "[WARN]" if global_yield > 0 else "[FAIL]"

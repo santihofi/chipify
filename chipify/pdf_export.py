@@ -233,11 +233,10 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim, sim_durat
     ax.axhline(0.772, xmin=0.0, xmax=1.0, color=MGRAY, linewidth=0.7)
 
     # ── Statistics ───────────────────────────────────────────────────────────
-    total  = len(df)
-    bad    = int((df["sim_error"] != "None").sum())
-    valid  = total - bad
-    passed = int(df["global_pass"].sum()) if total else 0
-    yld    = passed / total * 100 if total else 0.0
+    from chipify import data_loader as _dl
+    s = _dl.result_summary(df)
+    total, bad, valid, passed = s.total, s.crashes, s.valid, s.passed
+    yld    = s.yield_pct
     yld_color = GREEN if yld >= 99 else AMBER if yld >= 80 else RED
 
     # Yield badge (left side)
