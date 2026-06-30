@@ -77,6 +77,11 @@ Plugins: the Qt GUI loads `QtTabPlugin`s; legacy Tk `TabPlugin`s are detected an
 *   Do **NOT** use `ProcessPoolExecutor`, `Manager().Event()`, or signals to stop simulations. They fail to kill underlying Ngspice C-processes and cause RAM leaks.
 *   **The Fix:** File-based abort flag at `FAST_TMP/abort.flag` (`/tmp/sim_work/abort.flag`). The worker loop polls `os.path.exists(flag)` every 0.1 s; if found, it executes a hard `process.kill()`. GUI stop button → `simulation_controller.stop_simulation()` → `simulator.abort_simulation()`.
 
+### Scalar capture: chipify owns the `MY_DATA:` line (`simulator.py`)
+*   ngspice scalar measurements come back on a single `MY_DATA:` **stdout** line. **Do not hand-write `echo MY_DATA:` in a testbench** — `NgspiceSimulator.generate_test_template` auto-injects it from the datasheet's `value_lst` (`echo MY_DATA:$&<key0> $&<key1> …`, in order) via `_inject_capture`, and strips any stale hand-written one so only chipify's survives.
+*   **The contract:** each scalar key under `tests.<tb>` must name an ngspice vector the testbench defines with `let`/`meas` — `$&<key>` has to resolve. The run side parses the same line positionally back into `value_lst`, so chipify controls both ends and the order can't drift. Waveforms work the same way: declare `transient/dc/ac_signals` and chipify injects the `wrdata`/`setplot` capture (`analyses.py`).
+*   Vacask is unaffected — it extracts scalars from the `.raw` file (named `meas` results / `measure:` exprs) or its own `printf "MY_DATA: …"`.
+
 ### Safe Expression Evaluation (`expression.py`)
 *   **Never** call Python `eval()`, `exec()`, or `df.eval(engine='python')` directly in user-facing code.
 *   **The Fix:** Route all expression evaluation through `SafeEvaluator` (module-level singleton: `from chipify.expression import default_evaluator`). It blocks `__import__`, `open`, `exec`, and dunder attribute access via `asteval`.

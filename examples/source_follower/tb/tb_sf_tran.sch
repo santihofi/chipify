@@ -40,7 +40,6 @@ value="
 save v(outp)
 save v(outn)
 tran 1u 1m
-echo MY_DATA:
 
 quit
 .endc

@@ -23,6 +23,11 @@ parameters:
   seed:       range(30)               # 30 Monte-Carlo mismatch seeds
 
 # Each key under `tests` is the path/name of an Xschem testbench schematic.
+#
+# Scalar measurements (ve, vd, gain, …): each name must match an ngspice vector
+# your testbench defines with `let`/`meas` (e.g. `let ve = (v(outp)+v(outn))/2`,
+# `meas ac gain max gainmag`). Chipify auto-emits the `echo MY_DATA:` line that
+# returns these to the engine — do NOT write that echo yourself in the testbench.
 tests:
   tb_ota_op:
     # Measurement boundary specs: min/max define pass/fail, typ is the target.

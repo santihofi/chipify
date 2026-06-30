@@ -21,6 +21,12 @@ need:
    use. These are design-specific and are **not** included in this repo; replace
    the `tb_*` names with your own testbenches.
 
+   In each testbench's `.control` block, define your scalar measurements as
+   ngspice vectors (`let`/`meas`) named exactly as the datasheet keys — e.g.
+   `let ve = (v(outp)+v(outn))/2` for a `ve` spec. You do **not** write an
+   `echo MY_DATA:` line; Chipify injects it automatically from the datasheet.
+   (See the worked `tb_sf_*` benches under `source_follower/tb/`.)
+
 Then place the datasheet in your input folder (default `datasheets/`) and run:
 
 ```bash

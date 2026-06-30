@@ -29,7 +29,7 @@ C {lab_pin.sym} 40 -100 1 0 {name=p5 sig_type=std_logic lab=vdin}
 C {vsource.sym} 100 30 0 0 {name=V1 value=\{\{vincm\}\} savecurrent=true}
 C {gnd.sym} 100 60 0 0 {name=l19 lab=GND}
 C {gnd.sym} 40 -20 0 0 {name=l2 lab=GND}
-C {devices/code_shown.sym} 710 -120 0 0 {name=NGSPICE only_toplevel=true 
+C {devices/code_shown.sym} 700 -180 0 0 {name=NGSPICE only_toplevel=true 
 value="
 .temp \{\{ temp \}\}
 .param mc_ok = \{\{ sigma \}\}
@@ -42,7 +42,6 @@ save v(outn)
 op  
 let vd = v(outp)-v(outn)
 let ve = (v(outp)+v(outn))/2
-echo MY_DATA:$&ve $&vd
 
 quit
 .endc

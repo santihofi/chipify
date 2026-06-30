@@ -148,3 +148,79 @@ def test_log_capture_failures_dedupes(caplog) -> None:
     hits = [r for r in caplog.records if "capture failed" in r.getMessage()]
     assert len(hits) == 1
     assert "tb_x__ac" in hits[0].getMessage()
+
+
+# ── MY_DATA echo auto-injection (generate_test_template) ──────────────────────
+
+class _StubValue:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _StubAnalysis:
+    """Analysis stub whose ngspice_inject is a recognisable marker."""
+    kind = "transient"
+
+    def ngspice_inject(self) -> str:
+        return "WRDATA_MARK"
+
+
+class _StubTest:
+    def __init__(self, value_names, analyses=()) -> None:
+        self.tb_path = "tb_op"
+        self.value_lst = [_StubValue(n) for n in value_names]
+        self.analyses = list(analyses)
+
+
+def _gen_template(monkeypatch, tmp_path, spice: str, test) -> str:
+    """Drive NgspiceSimulator.generate_test_template against an on-disk netlist,
+    stubbing out the xschem subprocess."""
+    from chipify import settings
+
+    monkeypatch.setattr(settings, "FAST_TMP", str(tmp_path))
+    monkeypatch.setattr(settings, "TB_DIR", str(tmp_path))
+    monkeypatch.setattr(simulator, "run_xschem", lambda *a, **k: None)
+    (tmp_path / "tb_op.spice").write_text(spice, encoding="utf-8")
+    return simulator.NgspiceSimulator().generate_test_template(test)
+
+
+def test_generate_template_injects_my_data_echo(tmp_path, monkeypatch) -> None:
+    """Chipify emits `echo MY_DATA:$&<name>` in value_lst order, before quit, and
+    strips any stale hand-written echo so only one MY_DATA line survives."""
+    spice = (
+        ".control\n"
+        "op\n"
+        "let ve = (v(outp)+v(outn))/2\n"
+        "let vd = v(outp)-v(outn)\n"
+        "echo MY_DATA:$&vd $&ve\n"      # stale, wrong order — must be dropped
+        "quit\n"
+        ".endc\n"
+    )
+    out = _gen_template(monkeypatch, tmp_path, spice, _StubTest(["ve", "vd"]))
+
+    assert out.count("MY_DATA:") == 1
+    assert "echo MY_DATA:$&ve $&vd" in out
+    assert out.index("MY_DATA:") < out.index("quit")
+    assert "$&vd $&ve" not in out          # the stale echo is gone
+
+
+def test_generate_template_echo_precedes_wrdata(tmp_path, monkeypatch) -> None:
+    """When both scalars and a waveform analysis are present, the scalar echo is
+    spliced before the wrdata/setplot capture (so $&<name> resolves in the plot
+    the testbench's own meas left current, before setplot switches it)."""
+    spice = ".control\nac dec 10 1 1e9\nquit\n.endc\n"
+    test = _StubTest(["gain"], analyses=[_StubAnalysis()])
+    out = _gen_template(monkeypatch, tmp_path, spice, test)
+
+    assert out.index("MY_DATA:") < out.index("WRDATA_MARK") < out.index("quit")
+
+
+def test_generate_template_no_echo_without_scalars(tmp_path, monkeypatch) -> None:
+    """A transient-only testbench (no value_lst) gets the waveform capture but no
+    MY_DATA echo."""
+    spice = ".control\ntran 1u 1m\nquit\n.endc\n"
+    test = _StubTest([], analyses=[_StubAnalysis()])
+    out = _gen_template(monkeypatch, tmp_path, spice, test)
+
+    assert "MY_DATA:" not in out
+    assert "WRDATA_MARK" in out

@@ -411,14 +411,37 @@ class NgspiceSimulator(BaseSimulator):
             else:
                 netlist += "\n.control\nset num_threads=1\n.endc\n"
 
-            # Inject wrdata / setplot commands for each declared analysis.
-            # The Jinja2 placeholders (tran_out_path / dc_out_path / ac_out_path)
-            # are filled per worker call. setplot ensures wrdata pulls from the
-            # right vector store when multiple analyses run in the same .control.
+            # Chipify owns the MY_DATA: line now — strip any the testbench still
+            # carries so we never emit two (the parser takes the first match,
+            # which would silently win over ours). The testbench supplies the
+            # let/meas vectors; chipify emits the echo from the datasheet.
+            netlist = re.sub(r"(?im)^.*\bMY_DATA\b.*$\n?", "", netlist)
+
+            # Build the .control injection: the scalar MY_DATA echo first (so
+            # $&<name> resolves in the plot the testbench's own meas left
+            # current), then the per-analysis wrdata/setplot capture (which
+            # switches plots). _inject_capture splices this before the first
+            # quit/exit (or .endc). The Jinja2 placeholders (tran_out_path /
+            # dc_out_path / ac_out_path) are filled per worker call.
+            inject_parts: list[str] = []
+
+            # Scalar capture: echo MY_DATA:$&<name0> $&<name1> ... in value_lst
+            # order. Each datasheet scalar key must name a vector the testbench
+            # defines (via let/meas); the run() side parses these positionally,
+            # so chipify now controls both ends and the order can't drift.
+            value_lst = getattr(test, "value_lst", []) or []
+            if value_lst:
+                echoed = " ".join(f"$&{v.name}" for v in value_lst)
+                inject_parts.append(f"echo MY_DATA:{echoed}")
+
+            # setplot ensures wrdata pulls from the right vector store when
+            # multiple analyses run in the same .control.
             analyses = getattr(test, "analyses", []) or []
             if analyses:
-                injection = "\n".join(a.ngspice_inject() for a in analyses)
-                netlist = _inject_capture(netlist, injection)
+                inject_parts.append("\n".join(a.ngspice_inject() for a in analyses))
+
+            if inject_parts:
+                netlist = _inject_capture(netlist, "\n".join(inject_parts))
 
             return netlist
 

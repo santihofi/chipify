@@ -41,12 +41,11 @@ save v(outn)
 ac dec 10 1 10000000k
 
 let vdiff = (v(outp) - v(outn))
-let gain = mag(vdiff)
+let gainmag = mag(vdiff)
 
-meas ac max_gain max gain
-meas ac bandwidth when gain=0.707*max_gain fall=1
+meas ac gain max gainmag
+meas ac bandwidth when gainmag=0.707*gain fall=1
 
-echo MY_DATA:$&max_gain $&bandwidth
 quit
 .endc
 "}
