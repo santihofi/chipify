@@ -76,6 +76,22 @@ Tab plugin
     See PLUGINS.md for the full QtTabPlugin / PluginContext reference. (The
     legacy Tk ``TabPlugin`` base still exists but is skipped by the Qt GUI.)
 
+Simulator engine plugin
+^^^^^^^^^^^^^^^^^^^^^^^
+    from chipify.engines import BaseSimulator
+
+    class MySim(BaseSimulator):
+        name = "mysim"             # datasheet `engine:` / settings value
+        netlist_ext = ".cir"
+
+        def generate_test_template(self, test) -> str: ...
+        def run(self, netlist, timeout_sec=10, test=None,
+                analysis_tab_paths=None): ...
+
+    Discovered by the engine registry (chipify.engines), not by this module's
+    getters — but from the same plugin directory and with the same file
+    format. See PLUGINS.md, section "Simulator engine plugin".
+
 Discovery
 ---------
 Plugins are loaded lazily on first call to ``get_plot_plugins()`` /
@@ -464,6 +480,17 @@ def _discover(base_class: type) -> list[type]:
             except Exception:
                 pass
     return found
+
+
+def discover_plugin_classes(base_class: type) -> list[type]:
+    """Public discovery hook: scan the plugin directory for subclasses of
+    *base_class*.
+
+    Used by :mod:`chipify.engines` to find drop-in simulator engines
+    (``BaseSimulator`` subclasses) with the same file-based mechanism as the
+    GUI plugin types above. Not cached — callers cache their own results.
+    """
+    return _discover(base_class)
 
 
 def get_plot_plugins() -> list[Type[PlotPlugin]]:

@@ -55,6 +55,9 @@ module = [
     "chipify.plot_manager",
     "chipify.plot_plugins.*",
     "chipify.simulator",
+    # Engine implementations moved out of chipify.simulator (same gradually-
+    # typed code, same debt status).
+    "chipify.engines.*",
     "chipify.cli",
 ]
 ignore_errors = true

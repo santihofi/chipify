@@ -253,8 +253,12 @@ class ACAnalysis(Analysis):
 
     def write_tab_from_raw(self, bucket: dict, out_path: str) -> None:
         x_vec = bucket.get("__x__")
+        # No `or`-chaining here: the values are numpy arrays, whose truth
+        # value is ambiguous (raises ValueError for length > 1).
         if x_vec is None:
-            x_vec = bucket.get("frequency") or bucket.get("freq")
+            x_vec = bucket.get("frequency")
+        if x_vec is None:
+            x_vec = bucket.get("freq")
         if x_vec is None:
             return
         x_arr = np.asarray(x_vec, dtype=float).real

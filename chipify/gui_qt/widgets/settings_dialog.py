@@ -86,14 +86,29 @@ class SettingsDialog(QDialog):
         form.addRow("CPU cores", self.cores_auto)
         form.addRow("", self.cores_spin)
 
+        from chipify.engines import engine_names
         self.engine_combo = QComboBox()
-        self.engine_combo.addItems(["ngspice", "vacask"])
+        self.engine_combo.addItems(list(engine_names()))
         self.engine_combo.setCurrentText(self._cfg.get("simulator_engine", "ngspice"))
         self.engine_combo.setToolTip(
             "Default engine for testbenches that don't set their own 'engine:' "
-            "in the datasheet (each testbench can override it in the editor)."
+            "in the datasheet (each testbench can override it in the editor). "
+            "The list includes drop-in engine plugins (see PLUGINS.md)."
         )
         form.addRow("Default simulator engine", self.engine_combo)
+
+        self.timeout_spin = QSpinBox()
+        self.timeout_spin.setRange(1, 86400)
+        self.timeout_spin.setSuffix(" s")
+        try:
+            self.timeout_spin.setValue(int(self._cfg.get("sim_timeout_sec", 10)))
+        except (TypeError, ValueError):
+            self.timeout_spin.setValue(10)
+        self.timeout_spin.setToolTip(
+            "Wall-clock limit for one simulator run; a run exceeding it is "
+            "killed and its row marked TIMEOUT."
+        )
+        form.addRow("Per-run timeout", self.timeout_spin)
 
         # VACASK-specific options below apply whenever a testbench runs on VACASK.
         self.vacask_binary = QLineEdit(self._cfg.get("vacask_binary", "vacask"))
@@ -181,6 +196,7 @@ class SettingsDialog(QDialog):
         cfg = app_config.load_config()
         cfg["num_cores"] = None if self.cores_auto.isChecked() else self.cores_spin.value()
         cfg["simulator_engine"] = self.engine_combo.currentText()
+        cfg["sim_timeout_sec"] = self.timeout_spin.value()
         cfg["vacask_binary"] = self.vacask_binary.text().strip() or "vacask"
         cfg["vacask_netlist_source"] = self.vacask_src.currentText()
         cfg["ng2vc_binary"] = self.ng2vc_binary.text().strip()

@@ -148,14 +148,16 @@ def main():
         ),
     )
 
+    from chipify.engines import engine_names
+    engines = list(engine_names())
     parser.add_argument(
         "--simulator",
-        choices=["ngspice", "vacask"],
+        choices=engines,
         default=None,
         help=(
             "Default engine for this run, overriding the simulator_engine setting\n"
-            "(ngspice|vacask). Per-testbench 'engine:' keys in the datasheet still\n"
-            "take precedence."
+            f"({'|'.join(engines)}). Per-testbench 'engine:' keys in the datasheet\n"
+            "still take precedence."
         ),
     )
 

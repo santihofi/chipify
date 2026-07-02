@@ -13,13 +13,14 @@ Chipify supports user plugins that extend the GUI and report output without modi
 5. [ExporterPlugin](#exporterplugin)
 6. [TabPlugin](#tabplugin)
 7. [QtTabPlugin](#qttabplugin)
-8. [PluginContext reference](#plugincontext-reference)
-9. [Example: AI review tab (Claude API)](#example-ai-review-tab-claude-api)
-10. [Data reference](#data-reference)
-11. [API versioning](#api-versioning)
-12. [Error behaviour](#error-behaviour)
-13. [Diagnostics](#diagnostics)
-14. [Security note](#security-note)
+8. [Simulator engine plugin](#simulator-engine-plugin)
+9. [PluginContext reference](#plugincontext-reference)
+10. [Example: AI review tab (Claude API)](#example-ai-review-tab-claude-api)
+11. [Data reference](#data-reference)
+12. [API versioning](#api-versioning)
+13. [Error behaviour](#error-behaviour)
+14. [Diagnostics](#diagnostics)
+15. [Security note](#security-note)
 
 ---
 
@@ -406,6 +407,76 @@ class RunCounter(QtTabPlugin):
 ```
 
 Porting an existing `TabPlugin`: change the base class to `QtTabPlugin`, swap CustomTkinter widget construction for Qt (`ctk.CTkLabel(parent, ...)` → `QLabel(..., parent)` added to a layout), and leave all `context.*` calls untouched.
+
+---
+
+## Simulator engine plugin
+
+A simulator engine adds support for another circuit simulator: it appears in the Settings engine dropdown, in the per-testbench engine selector of the datasheet editor, as a `--simulator` choice on the CLI, and as a valid `engine:` value in `datasheet.yaml`. Built-in engines (`ngspice`, `vacask`) use the exact same interface — see `chipify/engines/ngspice.py` for a complete reference implementation.
+
+Unlike the GUI plugin types above, engines are discovered by the **engine registry** (`chipify.engines`), but from the same plugin directory and with the same drop-in file format.
+
+### Class attributes
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | `str` | yes | Registry key: the `engine:` value in datasheets and the `simulator_engine` setting. Unique, lowercase. Plugin files cannot shadow a built-in name. |
+| `netlist_ext` | `str` | no | Extension of the netlist templates the engine produces/consumes (default `".spice"`). Drives template persistence and `--templates-dir` re-run naming. |
+| `api_version` | `str` | no | Plugin API version, `"1"` by default. |
+
+### Methods
+
+| Method | Required | Description |
+|--------|----------|-------------|
+| `generate_test_template(test) -> str` | yes | Produce the Jinja2-ready netlist template for one testbench. Runs once per testbench in the main process, before the sweep. Xschem-based engines can call `chipify.engines.xschem.run_xschem(...)`. |
+| `run(netlist, timeout_sec=10, test=None, analysis_tab_paths=None) -> (output, error)` | yes | Execute one rendered netlist. Runs **inside a worker process**: no GUI access, no shared state. Return `("MY_DATA: <v0> <v1> …", None)` on success (values in `test.value_lst` order) or `(None, "<error>")` on failure. Respect `timeout_sec` and poll `chipify.engines.abort.is_aborted()` while the simulator runs. |
+| `stage_extra_files()` | no | Hook to mirror engine-specific support files (compact models, …) into the scratch dir before the sweep. |
+| `run_log_tail(n_lines=25) -> str` | no | Tail of the last run's simulator log, attached to analysis-capture failure notes. |
+
+Engines whose simulator writes SPICE-format `.raw` files can reuse `chipify.engines.rawfile.read_raw_file()` for waveform/scalar extraction (this is what the VACASK engine does).
+
+### Example
+
+```python
+# ~/.chipify/plugins/my_engine.py
+import os, subprocess
+from chipify.engines import BaseSimulator
+from chipify.engines.xschem import run_xschem, safe_tb_path
+from chipify import settings
+
+class MySpiceEngine(BaseSimulator):
+    name = "myspice"
+    netlist_ext = ".spice"
+
+    def generate_test_template(self, test) -> str:
+        tb = safe_tb_path(test.tb_path)
+        run_xschem(tb)  # writes FAST_TMP/<stem>.spice
+        stem = os.path.splitext(os.path.basename(tb))[0]
+        with open(os.path.join(settings.FAST_TMP, stem + ".spice")) as fh:
+            return fh.read()
+
+    def run(self, netlist, timeout_sec=10, test=None, analysis_tab_paths=None):
+        path = os.path.join(settings.FAST_TMP, f"sim_{os.getpid()}.spice")
+        with open(path, "w") as fh:
+            fh.write(netlist)
+        try:
+            out = subprocess.run(["myspice", "-b", path], capture_output=True,
+                                 text=True, timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            return None, "TIMEOUT"
+        if out.returncode != 0:
+            return None, f"CRASH: {out.stderr[-200:]}"
+        line = next((l for l in out.stdout.splitlines()
+                     if l.startswith("MY_DATA:")), "")
+        return line, None
+```
+
+### Lifecycle & registration
+
+- Discovery is **lazy**: the registry scans the plugin directory the first time a non-built-in engine name is looked up (or when engine lists are shown in the GUI/CLI). Keep engine plugin files import-light — worker processes import them whenever a datasheet selects the engine.
+- Engine *names* travel to worker processes; classes are re-resolved inside each worker, so plugin engines work with the multiprocessing pool.
+- Engines can also be registered programmatically with `chipify.engines.register_engine(MyEngine)` (usable as a decorator) — useful for tests or embedding applications.
+- A plugin whose `name` collides with a built-in or an already-loaded engine is skipped with a warning.
 
 ---
 

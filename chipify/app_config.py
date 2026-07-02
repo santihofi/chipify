@@ -19,7 +19,8 @@ LOG_PATH    = os.path.join(settings.OUT_DIR, "chipify.log")
 
 DEFAULTS: dict[str, Any] = {
     "num_cores": None,                # None → auto-detect via util.get_num_cores()
-    "simulator_engine": "ngspice",    # ngspice|vacask
+    "simulator_engine": "ngspice",    # any registered engine (see chipify.engines)
+    "sim_timeout_sec": 10,            # per-simulation wall-clock limit in seconds
     "vacask_binary": "vacask",        # path or PATH-resolvable name
     "vacask_netlist_source": "xschem",# xschem|ng2vc
     "ng2vc_binary": "",               # path to ng2vc(.py); blank → auto-discover (PATH / beside vacask)

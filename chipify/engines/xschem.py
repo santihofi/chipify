@@ -1,0 +1,244 @@
+# Copyright (c) 2026 Santiago Hofwimmer
+"""
+xschem.py – Schematic → netlist generation via Xschem in batch mode.
+
+Shared by every engine whose netlists come from xschem schematics
+(:class:`~chipify.engines.ngspice.NgspiceSimulator` uses ``spice`` mode,
+:class:`~chipify.engines.vacask.VacaskSimulator` uses ``spectre`` mode or the
+ng2vc conversion path). A new engine whose simulator reads one of these two
+syntaxes can call :func:`run_xschem` directly from its
+``generate_test_template``.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import re
+import shutil
+import subprocess
+import time
+
+from chipify import settings
+from chipify.engines.abort import is_aborted
+
+log = logging.getLogger("chipify.engines.xschem")
+
+XSCHEM_DEFAULT_TIMEOUT_SEC = 60
+
+_XSCHEM_NETLIST_EXTS = (".spice", ".sim", ".spectre", ".scs", ".spc", ".sp", ".cdl", ".cir")
+
+
+def safe_tb_path(tb_name: str) -> str:
+    """Return the absolute testbench .sch path, raising ValueError on traversal attempts."""
+    base = os.path.normpath(settings.TB_DIR)
+    full = os.path.normpath(os.path.join(settings.TB_DIR, tb_name + ".sch"))
+    if not full.startswith(base + os.sep) and full != base:
+        raise ValueError(
+            f"Testbench path {tb_name!r} escapes TB_DIR ({settings.TB_DIR!r})."
+        )
+    return full
+
+
+def _read_log_tail(log_path: str, n_lines: int = 60) -> str:
+    try:
+        with open(log_path, "r") as lf:
+            return "".join(lf.readlines()[-n_lines:]).strip()
+    except OSError:
+        return "<log unavailable>"
+
+
+def _snapshot_dir(path: str) -> set:
+    try:
+        return set(os.listdir(path))
+    except OSError:
+        return set()
+
+
+def _safe_rel(path: str) -> str:
+    """``os.path.relpath`` that never raises.
+
+    On Windows, relpath raises ValueError when *path* and the cwd are on
+    different drives (e.g. temp on C:, project on D:); fall back to the
+    absolute path rather than turning a log statement into a failure.
+    """
+    try:
+        return os.path.relpath(path)
+    except ValueError:
+        return path
+
+
+def run_xschem(
+    xschem_file: str,
+    netlist_mode: str = "spice",
+    timeout_sec: int = XSCHEM_DEFAULT_TIMEOUT_SEC,
+) -> None:
+    """Generate a netlist from a schematic via Xschem in batch mode.
+
+    netlist_mode:
+      - "spice"   : ngspice-compatible netlist (final file: <stem>.spice)
+      - "spectre" : Spectre-syntax netlist for VACASK (final file: <stem>.sim)
+
+    Xschem's output extension depends on the build (often <stem>.spice
+    regardless of netlist_type, sometimes .spectre or .scs). We snapshot the
+    output dir before/after, take whatever new netlist xschem wrote, and
+    rename it to the caller's expected name.
+    """
+    mode = (netlist_mode or "spice").strip().lower()
+    if mode not in ("spice", "spectre"):
+        raise ValueError(f"Unknown netlist_mode: {netlist_mode!r}")
+    log.info("run_xschem: %s (mode=%s)", xschem_file, mode)
+
+    stem = os.path.splitext(os.path.basename(xschem_file))[0]
+    expected_ext = ".sim" if mode == "spectre" else ".spice"
+    out_file = os.path.join(settings.FAST_TMP, stem + expected_ext)
+    log_path = os.path.join(settings.FAST_TMP, stem + ".xschem.log")
+
+    # `-n` alone doesn't always trigger the netlist write on every xschem
+    # build (observed on 3.4.8RC: schematic loads, "Netlist mode: <default>"
+    # is printed, then xschem exits rc=0 with no file). The explicit
+    # `--spice` / `--spectre` format flag is what reliably both sets
+    # netlist_type and triggers the action.
+    # `-s` (simulate) is omitted: chipify runs the simulator itself.
+    cmd = ['xschem', '-n']
+    if mode == "spectre":
+        cmd.append('--spectre')
+    else:
+        cmd.append('--spice')
+    # -q (quit after batch) is mandatory — without it xschem stays open and
+    # never returns. -x suppresses the X server attach.
+    cmd += ['-q', '-x', '-o', settings.FAST_TMP, xschem_file]
+
+    start_ts = time.time()
+
+    process = None
+    log.info("Xschem env: HOME=%s XSCHEM_SHAREDIR=%s PATH=%s cwd=%s",
+             os.environ.get("HOME"), os.environ.get("XSCHEM_SHAREDIR"),
+             os.environ.get("PATH", "")[:200], settings.PROJECT_ROOT)
+    try:
+        with open(log_path, "w") as log_fh:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=settings.PROJECT_ROOT,
+            )
+            # Send EOF immediately so xschem doesn't block on / get confused by
+            # an inherited stdin handle (Qt GUI parents often hand the child a
+            # closed or non-readable stdin). This is the portable replacement
+            # for stdin=DEVNULL, which fails in containers without /dev/null.
+            try:
+                process.stdin.close()
+            except Exception:
+                pass
+            log.info("Xschem PID=%d cmd=%s", process.pid, ' '.join(cmd))
+            start = time.monotonic()
+            timed_out = False
+            while process.poll() is None:
+                if is_aborted():
+                    process.kill()
+                    raise InterruptedError("Aborted during Xschem netlist generation.")
+                if time.monotonic() - start > timeout_sec:
+                    process.kill()
+                    try:
+                        process.wait(timeout=5)
+                    except Exception:
+                        pass
+                    timed_out = True
+                    break
+                time.sleep(0.2)
+
+        if timed_out:
+            tail = _read_log_tail(log_path)
+            log.error(
+                "Xschem timed out after %ds. cmd=%s\n--- xschem log tail (%s) ---\n%s\n--- end log tail ---",
+                timeout_sec, ' '.join(cmd), log_path, tail,
+            )
+            raise RuntimeError(
+                f"Xschem netlist generation timed out ({mode}, {timeout_sec}s). "
+                f"See {log_path}. log_tail={tail}"
+            )
+
+        # Find anything xschem wrote: any netlist-extension file in FAST_TMP
+        # or PROJECT_ROOT whose mtime is at/after start_ts. mtime-based
+        # detection is more reliable than name-diff (catches overwrites of
+        # files that already existed in the before-snapshot).
+        def _modified_since(path: str, since: float) -> list:
+            out = []
+            try:
+                entries = os.scandir(path)
+            except OSError:
+                return out
+            with entries:
+                for e in entries:
+                    try:
+                        if not e.is_file(follow_symlinks=False):
+                            continue
+                        if e.stat(follow_symlinks=False).st_mtime >= since - 1.0:
+                            out.append(e.path)
+                    except OSError:
+                        continue
+            return out
+
+        # Scan both FAST_TMP (where -o points) and PROJECT_ROOT (cwd) just in
+        # case xschem wrote relative to cwd despite the -o flag.
+        scan_dirs = [settings.FAST_TMP, settings.PROJECT_ROOT]
+        recent_files = []
+        for d in scan_dirs:
+            recent_files += _modified_since(d, start_ts)
+
+        netlist_files = [p for p in recent_files
+                         if any(p.lower().endswith(e) for e in _XSCHEM_NETLIST_EXTS)]
+        preferred = [p for p in netlist_files
+                     if os.path.splitext(os.path.basename(p))[0] == stem]
+        chosen_path = (preferred[0] if preferred
+                       else (netlist_files[0] if netlist_files else ""))
+
+        log.info("xschem post-run scan: recent_files=%s netlist_files=%s chosen=%s",
+                 [_safe_rel(p) for p in recent_files],
+                 [_safe_rel(p) for p in netlist_files],
+                 _safe_rel(chosen_path) if chosen_path else "<none>")
+
+        if not chosen_path:
+            tail = _read_log_tail(log_path)
+            after = _snapshot_dir(settings.FAST_TMP)
+            raise RuntimeError(
+                f"Xschem ran (rc={process.returncode}) but wrote no netlist file. "
+                f"recent_files={recent_files}. "
+                f"FAST_TMP contents: {sorted(after)}. "
+                f"See {log_path}. log_tail={tail}"
+            )
+
+        produced = chosen_path
+        # Normalize whatever xschem wrote to the caller's expected filename.
+        if produced != out_file:
+            shutil.move(produced, out_file)
+            log.info("Moved xschem output %s -> %s",
+                     _safe_rel(produced), out_file)
+
+        if process.returncode != 0:
+            log.warning(
+                "Xschem returned rc=%d but produced %s. Continuing.",
+                process.returncode, out_file,
+            )
+        log.info("Xschem netlist generated OK (%s).", mode)
+        try:
+            os.remove(log_path)
+        except OSError:
+            pass
+        return
+
+    except InterruptedError:
+        raise
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Xschem netlist generation failed ({mode}): {exc}") from exc
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                pass

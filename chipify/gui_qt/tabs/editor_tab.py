@@ -294,15 +294,17 @@ class DatasheetEditorTab(QWidget):
         eng_lbl = QLabel("Engine")
         eng_lbl.setObjectName("Muted")
         hdr.addWidget(eng_lbl)
+        from chipify.engines import engine_names
+        engines = list(engine_names())
         engine_combo = QComboBox()
-        engine_combo.addItems(["(default)", "ngspice", "vacask"])
+        engine_combo.addItems(["(default)"] + engines)
         engine_combo.setToolTip(
             "Simulator engine for this testbench. '(default)' uses the global "
             "default from Settings."
         )
         cur_engine = str(tb_data.get("engine", "") or "").strip().lower()
         engine_combo.setCurrentText(
-            cur_engine if cur_engine in ("ngspice", "vacask") else "(default)"
+            cur_engine if cur_engine in engines else "(default)"
         )
         autoclose_combo(engine_combo)
         hdr.addWidget(engine_combo)

@@ -32,13 +32,25 @@ def _safe_tb(tb_path: str) -> str:
 
 
 def engine_extension(test) -> str:
-    """Netlist file extension for *test*'s engine (``.sim`` for vacask, else
-    ``.spice``). Uses the testbench's own ``engine`` when set, otherwise the
-    global ``simulator_engine`` default.
+    """Netlist file extension for *test*'s engine, from the engine registry
+    (``.spice`` for ngspice, ``.sim`` for vacask, whatever a plugin engine
+    declares via ``netlist_ext``). Uses the testbench's own ``engine`` when
+    set, otherwise the global ``simulator_engine`` default.
     """
+    from chipify.engines import netlist_extension
     name = getattr(test, "engine", None) or app_config.load_config().get(
         "simulator_engine", "ngspice")
-    return ".sim" if str(name).strip().lower() == "vacask" else ".spice"
+    return netlist_extension(str(name))
+
+
+def _candidate_extensions(test) -> tuple[str, ...]:
+    """Extensions to try when locating an existing template file for *test*:
+    the engine's own first, then the built-in ones as fallback."""
+    exts = [engine_extension(test)]
+    for e in (".spice", ".sim"):
+        if e not in exts:
+            exts.append(e)
+    return tuple(exts)
 
 
 def persist_templates(stim, dest_dir: str) -> str:
@@ -76,7 +88,7 @@ def resolve_template_text(test, templates_dir: str = "") -> str:
     """
     if templates_dir:
         safe = _safe_tb(test.tb_path)
-        for ext in (".spice", ".sim"):
+        for ext in _candidate_extensions(test):
             fp = os.path.join(templates_dir, safe + ext)
             if os.path.isfile(fp):
                 try:
@@ -88,7 +100,7 @@ def resolve_template_text(test, templates_dir: str = "") -> str:
     text = getattr(test, "template_str", "") or ""
     if not text:
         stem = os.path.splitext(os.path.basename(test.tb_path))[0]
-        for ext in (".spice", ".sim"):
+        for ext in _candidate_extensions(test):
             fp = os.path.join(settings.FAST_TMP, stem + ext)
             if os.path.isfile(fp):
                 try:

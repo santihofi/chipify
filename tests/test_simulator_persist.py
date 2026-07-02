@@ -176,10 +176,11 @@ def _gen_template(monkeypatch, tmp_path, spice: str, test) -> str:
     """Drive NgspiceSimulator.generate_test_template against an on-disk netlist,
     stubbing out the xschem subprocess."""
     from chipify import settings
+    from chipify.engines import ngspice as ngspice_mod
 
     monkeypatch.setattr(settings, "FAST_TMP", str(tmp_path))
     monkeypatch.setattr(settings, "TB_DIR", str(tmp_path))
-    monkeypatch.setattr(simulator, "run_xschem", lambda *a, **k: None)
+    monkeypatch.setattr(ngspice_mod, "run_xschem", lambda *a, **k: None)
     (tmp_path / "tb_op.spice").write_text(spice, encoding="utf-8")
     return simulator.NgspiceSimulator().generate_test_template(test)
 
@@ -237,8 +238,9 @@ def _vacask_test(value_names, measure=None):
 
 
 def _patch_raw(monkeypatch, bucket) -> None:
-    monkeypatch.setattr(simulator.os.path, "exists", lambda _p: True)
-    monkeypatch.setattr(simulator, "_read_raw_file", lambda _f: {"dc": bucket})
+    from chipify.engines import vacask as vacask_mod
+    monkeypatch.setattr(vacask_mod.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(vacask_mod, "_read_raw_file", lambda _f: {"dc": bucket})
 
 
 def test_vacask_extract_finds_node_voltages(monkeypatch) -> None:

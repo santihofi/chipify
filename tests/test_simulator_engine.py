@@ -190,6 +190,67 @@ def test_generate_templates_missing_file_isolates_failure(tmp_path) -> None:
     assert "netlist generation failed" in (miss.template_error or "")
 
 
+def test_template_render_error_fails_only_that_testbench() -> None:
+    """A StrictUndefined render error (e.g. param-name typo in the testbench)
+    must fail that testbench's row — not blow up the whole worker batch."""
+    ok = _make_test("tb_ok", ["g"])
+    bad = _make_test("tb_bad", ["h"])
+    bad.template_str = "{{ undefined_variable }}"
+
+    sample = simulator._simulate_single_case(
+        {}, [ok, bad], lambda _t: _FakeEngine("MY_DATA: 7"),
+    )
+    assert sample["g"] == pytest.approx(7.0)
+    assert math.isnan(sample["h"])
+    assert "TEMPLATE_RENDER_ERROR" in sample["sim_error"]
+
+
+def test_engine_exception_fails_only_that_testbench() -> None:
+    """A plugin engine that raises from run() is contained per-testbench."""
+
+    class _Boom(simulator.BaseSimulator):
+        name = "boom"
+
+        def generate_test_template(self, test) -> str:
+            return ""
+
+        def run(self, netlist, timeout_sec=10, test=None, analysis_tab_paths=None):
+            raise RuntimeError("kaput")
+
+    ok = _make_test("tb_ok", ["g"])
+    bad = _make_test("tb_bad", ["h"])
+    by_tb = {"tb_ok": _FakeEngine("MY_DATA: 7"), "tb_bad": _Boom()}
+
+    sample = simulator._simulate_single_case(
+        {}, [ok, bad], lambda t: by_tb[t.tb_path],
+    )
+    assert sample["g"] == pytest.approx(7.0)
+    assert math.isnan(sample["h"])
+    assert "ENGINE_ERROR" in sample["sim_error"]
+    assert "kaput" in sample["sim_error"]
+
+
+def test_unparsable_my_data_token_records_nan() -> None:
+    """A non-numeric MY_DATA token is failed data, not a silently absent column."""
+    test = _make_test("tb_x", ["gain", "bw"])
+    engine = _FakeEngine("MY_DATA: abc 2.0")
+    sample = simulator._simulate_single_case_with_engine({}, [test], engine)
+    assert math.isnan(sample["gain"])
+    assert sample["gain_pass"] is False
+    assert sample["bw"] == pytest.approx(2.0)
+    assert "INVALID_OUTPUT" in sample["sim_error"]
+    assert sample["tb_x_overall_pass"] is False
+
+
+# ── sim_timeout_sec resolution ────────────────────────────────────────────────
+
+def test_resolve_sim_timeout() -> None:
+    assert simulator._resolve_sim_timeout({}) == 10.0
+    assert simulator._resolve_sim_timeout({"sim_timeout_sec": 120}) == 120.0
+    assert simulator._resolve_sim_timeout({"sim_timeout_sec": "abc"}) == 10.0
+    assert simulator._resolve_sim_timeout({"sim_timeout_sec": -5}) == 10.0
+
+
 # ── ASCII .raw parsing ────────────────────────────────────────────────────────
 
 def _write_ascii_raw(path, *, flags: str, varlines: list[str], values: str,

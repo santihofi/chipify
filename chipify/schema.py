@@ -27,10 +27,19 @@ class SchemaError(ValueError):
     """Raised when a datasheet.yaml violates the expected schema."""
 
 
-# Valid per-testbench ``engine:`` values. Kept in sync with
-# ``simulator.SUPPORTED_ENGINES`` (hardcoded here to keep datasheet validation
-# free of the heavy simulator import).
-_SUPPORTED_ENGINES = ("ngspice", "vacask")
+def _supported_engines() -> tuple[str, ...]:
+    """Valid per-testbench ``engine:`` values, from the engine registry.
+
+    ``chipify.engines`` is import-light (no simulator modules are loaded just
+    to list names), so datasheet validation stays cheap while still accepting
+    drop-in engine plugins. Falls back to the built-in pair if the registry
+    can't load for any reason.
+    """
+    try:
+        from chipify.engines import engine_names
+        return engine_names()
+    except Exception:
+        return ("ngspice", "vacask")
 
 
 # ── Allowed range DSL functions ───────────────────────────────────────────────
@@ -250,10 +259,11 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
             if val_name == "engine":
                 if bounds is not None:
                     eng = str(bounds).strip().lower()
-                    if eng and eng not in _SUPPORTED_ENGINES:
+                    supported = _supported_engines()
+                    if eng and eng not in supported:
                         raise SchemaError(
                             f"tests.{tb_path}.engine: unknown engine {eng!r}; "
-                            f"use one of {sorted(_SUPPORTED_ENGINES)}"
+                            f"use one of {sorted(supported)}"
                         )
                     engine = eng or None
                 continue
