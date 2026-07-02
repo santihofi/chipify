@@ -8,6 +8,7 @@ to DataFrames and returns diagnostic log lines.  Backed by SafeEvaluator.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import pandas as pd
 
@@ -16,6 +17,31 @@ from chipify.expression import SafeEvaluator, ExpressionError
 log = logging.getLogger("chipify.uikit.services.equations")
 
 _evaluator = SafeEvaluator()
+
+
+# ── Equation sources ──────────────────────────────────────────────────────────
+# Equations live in the datasheet YAML (top-level ``equations:`` /
+# ``transient_equations:``, parsed onto the Stimuli). Equations still sitting
+# in settings.json (the pre-datasheet storage) are used as a fallback until
+# the Equations panel migrates them on its next save.
+
+def scalar_equations(stim: Any) -> list[dict[str, str]]:
+    """Scalar (per-run) equations for *stim* — datasheet first, legacy fallback."""
+    return _equations_for(stim, "equations", "custom_equations")
+
+
+def transient_equations(stim: Any) -> list[dict[str, str]]:
+    """Waveform equations for *stim* — datasheet first, legacy fallback."""
+    return _equations_for(stim, "transient_equations", "transient_equations")
+
+
+def _equations_for(stim: Any, stim_attr: str, legacy_key: str) -> list[dict[str, str]]:
+    eqs = getattr(stim, stim_attr, None) or []
+    if eqs:
+        return [dict(eq) for eq in eqs]
+    from chipify import app_config
+    legacy = app_config.load_config().get(legacy_key, []) or []
+    return [dict(eq) for eq in legacy if isinstance(eq, dict)]
 
 
 def apply_scalar_equations(

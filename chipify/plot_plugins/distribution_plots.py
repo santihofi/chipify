@@ -64,12 +64,15 @@ def _theme(theme):
     return th
 
 
-def _metric_data(valid_df, stim):
+def _metric_data(valid_df, stim, param=None):
     """[(name, vmin, vmax, values)] for datasheet measurements found in the results.
 
     Order follows the datasheet; ``values:`` entries carry their limits,
     ``measure:`` expressions come limitless. Columns missing from the
     DataFrame or with fewer than _MIN_POINTS finite values are skipped.
+
+    *param* narrows the result to that single measurement (the host's
+    measurement selector); ``None`` keeps every declared measurement.
     """
     declared, seen = [], set()
     for test in getattr(stim, "tests", None) or []:
@@ -81,6 +84,9 @@ def _metric_data(valid_df, stim):
             if name not in seen:
                 seen.add(name)
                 declared.append((name, None, None))
+
+    if param:
+        declared = [d for d in declared if d[0] == param]
 
     out = []
     for name, vmin, vmax in declared:
@@ -132,17 +138,25 @@ _NO_METRICS_MSG = ("No datasheet measurements found in the results.\n"
                    "Define values:/measure: entries in the datasheet YAML.")
 
 
+def _no_data_msg(param) -> str:
+    if param:
+        return (f"No data for measurement {param!r}.\n"
+                "It may be missing from this run or have too few points.")
+    return _NO_METRICS_MSG
+
+
 class QQPlot(PlotPlugin):
     """Normal quantile-quantile plot per measurement."""
 
     name = "QQ Plot (Normality)"
+    supports_param = True
 
-    def draw(self, fig, ax, valid_df, stim, *, theme=None):
+    def draw(self, fig, ax, valid_df, stim, *, theme=None, param=None):
         import scipy.stats as stats  # lazy: keeps scipy off the GUI launch path
         th = _theme(theme)
-        metrics = _metric_data(valid_df, stim)
+        metrics = _metric_data(valid_df, stim, param)
         if not metrics:
-            _message(ax, _NO_METRICS_MSG, th)
+            _message(ax, _no_data_msg(param), th)
             return
         for ax_i, (name, _vmin, _vmax, data) in zip(_grid(fig, len(metrics), th), metrics):
             (osm, osr), (slope, intercept, r) = stats.probplot(data, dist="norm")
@@ -161,12 +175,13 @@ class ECDFSpecLimits(PlotPlugin):
     """Empirical CDF per measurement with spec limits and fail shading."""
 
     name = "ECDF + Spec Limits"
+    supports_param = True
 
-    def draw(self, fig, ax, valid_df, stim, *, theme=None):
+    def draw(self, fig, ax, valid_df, stim, *, theme=None, param=None):
         th = _theme(theme)
-        metrics = _metric_data(valid_df, stim)
+        metrics = _metric_data(valid_df, stim, param)
         if not metrics:
-            _message(ax, _NO_METRICS_MSG, th)
+            _message(ax, _no_data_msg(param), th)
             return
         for ax_i, (name, vmin, vmax, data) in zip(_grid(fig, len(metrics), th), metrics):
             x = np.sort(data)
@@ -197,12 +212,13 @@ class YieldVsSpecCurve(PlotPlugin):
     """Yield as a function of spec-limit placement, per measurement."""
 
     name = "Yield vs Spec Curve"
+    supports_param = True
 
-    def draw(self, fig, ax, valid_df, stim, *, theme=None):
+    def draw(self, fig, ax, valid_df, stim, *, theme=None, param=None):
         th = _theme(theme)
-        metrics = _metric_data(valid_df, stim)
+        metrics = _metric_data(valid_df, stim, param)
         if not metrics:
-            _message(ax, _NO_METRICS_MSG, th)
+            _message(ax, _no_data_msg(param), th)
             return
         for ax_i, (name, vmin, vmax, data) in zip(_grid(fig, len(metrics), th), metrics):
             n = data.size

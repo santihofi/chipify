@@ -2,17 +2,23 @@
 """
 equations_tab.py – Custom scalar / transient equation editor.
 
-Edits the ``custom_equations`` (scalar, per-run) and ``transient_equations``
-(waveform-level) lists in ``settings.json`` and applies them via the shared
-:mod:`chipify.uikit.services.equation_service`. Scalar equations are re-applied
-to the loaded results through the window's ``reapply_equations`` callback so
-derived columns flow into every tab; transient equations are picked up by the
-Transient tab on its next redraw.
+Equations are stored **in the active datasheet** (top-level ``equations:``
+and ``transient_equations:`` YAML mappings) so they travel with the design.
+The panel edits the datasheet editor's in-memory YAML document and persists
+through the editor's save path, keeping form, raw view, and file consistent.
+
+Equations still found in ``settings.json`` (the pre-datasheet storage) are
+shown as a fallback when the datasheet has none; the first Apply migrates
+them into the datasheet and removes them from settings.json.
+
+Applied via the shared :mod:`chipify.uikit.services.equation_service`:
+scalar equations re-run through the window's ``reapply_equations`` so derived
+columns flow into every tab; transient equations are picked up by waveform
+plots on the same ``data_changed`` refresh.
 """
 from __future__ import annotations
 
 import logging
-from typing import Callable
 
 from PySide6.QtWidgets import (
     QComboBox,
@@ -31,21 +37,32 @@ from chipify import app_config
 
 log = logging.getLogger("chipify.gui_qt.tabs.equations")
 
-_CONFIG_KEY = {"Scalar": "custom_equations", "Transient": "transient_equations"}
+#: Mode label → (datasheet YAML key, legacy settings.json key)
+_MODE_KEYS = {
+    "Scalar": ("equations", "custom_equations"),
+    "Transient": ("transient_equations", "transient_equations"),
+}
+
+
+def _as_pairs(raw) -> list[tuple[str, str]]:
+    """Normalise a YAML equations block (mapping or legacy list) to pairs."""
+    if isinstance(raw, dict):
+        return [(str(k), str(v)) for k, v in raw.items()]
+    if isinstance(raw, list):
+        return [(str(e.get("name", "")), str(e.get("expr", "")))
+                for e in raw if isinstance(e, dict)]
+    return []
 
 
 class EquationsTab(QWidget):
     """Editable table of ``{name, expr}`` equations with an Apply action."""
 
-    def __init__(
-        self,
-        reapply_equations: Callable[[], None],
-        parent: QWidget | None = None,
-    ) -> None:
+    def __init__(self, editor, parent: QWidget | None = None) -> None:
+        """*editor* is the hosting DatasheetEditorTab (owns the YAML document)."""
         super().__init__(parent)
-        self._reapply = reapply_equations
+        self._editor = editor
         self._build_ui()
-        self._load_rows()
+        self.reload()
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -60,8 +77,8 @@ class EquationsTab(QWidget):
         title.setObjectName("Heading")  # match SWEEP PARAMETERS / TESTBENCHES
         hdr.addWidget(title)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Scalar", "Transient"])
-        self.mode_combo.currentIndexChanged.connect(self._load_rows)
+        self.mode_combo.addItems(list(_MODE_KEYS))
+        self.mode_combo.currentIndexChanged.connect(self.reload)
         hdr.addWidget(self.mode_combo)
         hdr.addStretch(1)
         layout.addLayout(hdr)
@@ -105,12 +122,21 @@ class EquationsTab(QWidget):
         for r in rows:
             self.table.removeRow(r)
 
-    def _load_rows(self) -> None:
-        key = _CONFIG_KEY[self.mode_combo.currentText()]
-        equations = app_config.load_config().get(key, []) or []
+    def reload(self, *_a) -> None:
+        """Repopulate from the editor's YAML document (legacy settings fallback)."""
+        yaml_key, legacy_key = _MODE_KEYS[self.mode_combo.currentText()]
+        data = getattr(self._editor, "current_yaml_data", None) or {}
+        if yaml_key in data:
+            pairs = _as_pairs(data.get(yaml_key))
+        else:
+            # Pre-migration state: show what settings.json still carries so
+            # the next Apply moves it into the datasheet.
+            legacy = app_config.load_config().get(legacy_key, []) or []
+            pairs = [(e.get("name", ""), e.get("expr", ""))
+                     for e in legacy if isinstance(e, dict)]
         self.table.setRowCount(0)
-        for eq in equations:
-            self._append_row(eq.get("name", ""), eq.get("expr", ""))
+        for name, expr in pairs:
+            self._append_row(name, expr)
 
     def _collect(self) -> list[dict[str, str]]:
         out: list[dict[str, str]] = []
@@ -125,23 +151,51 @@ class EquationsTab(QWidget):
 
     def _apply(self) -> None:
         mode = self.mode_combo.currentText()
-        equations = self._collect()
-        cfg = app_config.load_config()
-        cfg[_CONFIG_KEY[mode]] = equations
-        app_config.save_config(cfg)
+        yaml_key, legacy_key = _MODE_KEYS[mode]
+        editor = self._editor
+        if not getattr(editor, "current_yaml_path", None):
+            self.log.setPlainText("No datasheet selected — equations are stored "
+                                  "in the datasheet YAML.")
+            return
 
-        if mode == "Transient":
+        equations = self._collect()
+        bad = [eq["name"] for eq in equations if not eq["name"].isidentifier()]
+        if bad:
             self.log.setPlainText(
-                f"Saved {len(equations)} transient equation(s). "
-                "They apply on the next Transient redraw."
+                "Not saved — equation names must be valid identifiers "
+                f"(they become result columns): {', '.join(bad)}"
             )
             return
 
-        # Scalar: re-apply to the loaded results so derived columns propagate.
-        self._reapply()
+        # Persist through the editor so file, form, and raw view stay
+        # consistent (and concurrent edits in either view are kept).
+        value = {eq["name"]: eq["expr"] for eq in equations} if equations else None
+        if not editor.set_document_key(yaml_key, value):
+            self.log.setPlainText("Could not save the datasheet — see error dialog.")
+            return
+
+        # Hard migration: the datasheet is the storage now.
+        cfg = app_config.load_config()
+        if cfg.get(legacy_key):
+            cfg.pop(legacy_key, None)
+            app_config.save_config(cfg)
+            log.info("Migrated %s from settings.json into the datasheet.", legacy_key)
+
+        # Refresh: re-parses the stim (datasheet), reapplies scalar equations,
+        # and emits data_changed so waveform tabs pick up transient equations.
+        editor.window_reapply_equations()
+
+        if mode == "Transient":
+            self.log.setPlainText(
+                f"Saved {len(equations)} transient equation(s) to the datasheet. "
+                "Waveform plots list them as signals."
+            )
+            return
+
         derived = ", ".join(c for c in (self._last_derived or [])) or "—"
         self.log.setPlainText(
-            f"Applied {len(equations)} scalar equation(s). Derived columns: {derived}"
+            f"Saved {len(equations)} scalar equation(s) to the datasheet. "
+            f"Derived columns: {derived}"
         )
 
     #: Set by the window after a reapply so the log can report derived names.

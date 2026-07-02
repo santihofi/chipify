@@ -55,6 +55,8 @@ Every `.py` file in that directory is imported when the first plugin is requeste
 
 Three plot modes ship as built-in PlotPlugins: `"QQ Plot (Normality)"`, `"ECDF + Spec Limits"`, and `"Yield vs Spec Curve"` (see `chipify/plot_plugins/`). They register through this same interface — a user plugin whose `name` matches a built-in **overrides** the built-in.
 
+A plugin may declare `supports_param = True` to receive a measurement selector: the host then shows a measurement dropdown plus an "All measurements" checkbox, and calls `draw(..., param=<name>)` with the selected output column — or `param=None` when everything should be plotted (the built-in distribution plots work this way). Plugins without the attribute keep the plain `draw(fig, ax, valid_df, stim, theme=...)` call.
+
 ### Class attributes
 
 | Attribute | Type | Required | Description |

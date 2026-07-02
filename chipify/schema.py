@@ -197,6 +197,44 @@ def validate_parameters(params_raw: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _validate_equations(data: dict[str, Any], key: str) -> list[dict[str, str]]:
+    """Validate a top-level equations block into ``[{"name", "expr"}]`` form.
+
+    Accepts the natural YAML mapping (``name: expr``) as well as the legacy
+    settings.json list-of-dicts shape. Names must be Python identifiers —
+    they become DataFrame column names / plot signal names.
+    """
+    raw = data.get(key)
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        pairs = list(raw.items())
+    elif isinstance(raw, list):
+        pairs = []
+        for i, entry in enumerate(raw):
+            if not isinstance(entry, dict):
+                raise SchemaError(f"{key}[{i}]: expected a mapping, got {entry!r}")
+            pairs.append((entry.get("name", ""), entry.get("expr", "")))
+    else:
+        raise SchemaError(
+            f"{key}: expected a mapping of name → expression, got {type(raw).__name__}"
+        )
+
+    out: list[dict[str, str]] = []
+    for name, expr in pairs:
+        name_s = str(name).strip()
+        expr_s = str(expr).strip() if expr is not None else ""
+        if not name_s.isidentifier():
+            raise SchemaError(
+                f"{key}.{name_s or '<empty>'}: equation name must be a valid "
+                f"identifier (it becomes a result column)."
+            )
+        if not expr_s:
+            raise SchemaError(f"{key}.{name_s}: expression must not be empty.")
+        out.append({"name": name_s, "expr": expr_s})
+    return out
+
+
 def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
     """
     Build and return a validated ``util.Stimuli`` object from a raw YAML dict.
@@ -225,6 +263,10 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
             break
 
     stim.params = validate_parameters(params_raw)
+
+    # ── Custom equations (scalar + waveform) ──────────────────────────────────
+    stim.equations = _validate_equations(data, "equations")
+    stim.transient_equations = _validate_equations(data, "transient_equations")
 
     # ── Tests / Testbenches ───────────────────────────────────────────────────
     tests_raw: dict[str, Any] = {}

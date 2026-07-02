@@ -84,3 +84,30 @@ def test_builtin_draw_handles_empty(cls):
     fig = Figure()
     ax = fig.add_subplot(111)
     cls().draw(fig, ax, _df(0).iloc[0:0], _stim(), theme=None)  # must not raise
+
+
+# ── Measurement selector (param=) ─────────────────────────────────────────────
+
+def test_builtins_declare_param_support():
+    assert all(cls.supports_param for cls in BUILTIN_PLOT_PLUGINS)
+
+
+@pytest.mark.parametrize("cls", BUILTIN_PLOT_PLUGINS, ids=lambda c: c.name)
+def test_builtin_draw_single_param(cls):
+    """param= narrows the plot to one measurement — a single full-size panel."""
+    fig = Figure()
+    ax = fig.add_subplot(111)
+    cls().draw(fig, ax, _df(), _stim(), theme=None, param="offset_mv")
+    assert len(fig.axes) == 1                       # one panel, not a grid
+    texts = " ".join(t.get_text() for t in
+                     [fig.axes[0].title, fig.axes[0].xaxis.label, fig.axes[0].yaxis.label])
+    assert "offset_mv" in texts
+
+
+@pytest.mark.parametrize("cls", BUILTIN_PLOT_PLUGINS, ids=lambda c: c.name)
+def test_builtin_draw_unknown_param_shows_message(cls):
+    fig = Figure()
+    ax = fig.add_subplot(111)
+    cls().draw(fig, ax, _df(), _stim(), theme=None, param="nonexistent")
+    # No grid is built; the original axes carries the message text.
+    assert any("nonexistent" in t.get_text() for t in ax.texts)

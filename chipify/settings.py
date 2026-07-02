@@ -10,7 +10,8 @@ once at import, so edits to ``settings.json`` take effect on the next launch.
 Configurable keys (in ``settings.json``):
     in_dir    – input datasheets    (default: ``datasheets/``)
     out_dir   – simulation output   (default: ``out/``)
-    work_dir  – scratch / temp      (default: ``tmp/``)
+    work_dir  – model files staged to the simulator scratch dir
+                (*.lib/*.mod/*.inc; default: ``work/``)
     tb_dir    – testbench files     (default: ``tb/``)
 
 Relative paths are resolved against the project root; absolute paths are used
@@ -34,11 +35,13 @@ PROJECT_ROOT = os.getcwd()
 # settings.json lives in the project root (the same file app_config reads/writes).
 _CONFIG_PATH = os.path.join(PROJECT_ROOT, "settings.json")
 
-# Default folder layout, relative to PROJECT_ROOT.
+# Default folder layout, relative to PROJECT_ROOT. work_dir was "tmp" before
+# 0.3 — misleading, since it never held temporary data (FAST_TMP does); it is
+# the input folder for model files that get staged next to the netlists.
 _DEFAULT_DIRS = {
     "in_dir": "datasheets",
     "out_dir": "out",
-    "work_dir": "tmp",
+    "work_dir": "work",
     "tb_dir": "tb",
 }
 

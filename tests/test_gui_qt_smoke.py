@@ -196,11 +196,27 @@ def test_histogram_and_analytics_redraw(window):
     assert at._sc_plot is not None          # scatter artist created for hover
 
 
-def test_equations_tab_applies_derived_column(window, monkeypatch):
+def _select_datasheet(window, monkeypatch, path) -> None:
+    """Point the window's read-only current_yaml_path property at *path*."""
+    monkeypatch.setattr(type(window), "current_yaml_path",
+                        property(lambda self: str(path)))
+
+
+def test_equations_tab_applies_derived_column(window, monkeypatch, tmp_path):
     from chipify import app_config
     store = {"custom_equations": []}
     monkeypatch.setattr(app_config, "load_config", lambda: dict(store))
     monkeypatch.setattr(app_config, "save_config", lambda cfg: store.update(cfg))
+
+    # Equations are stored in the datasheet, so the panel needs one selected.
+    ds = tmp_path / "ds.yaml"
+    ds.write_text(
+        "parameters:\n  temp: [27]\n"
+        "tests:\n  tb_x:\n    gain:\n      min: 9.0\n      max: 11.0\n",
+        encoding="utf-8",
+    )
+    _select_datasheet(window, monkeypatch, ds)
+    window.editor_tab.load_datasheet()
 
     window.show_results(_sample_df(), _FakeStim(), switch_tab=False)
     eq = window.equations_tab
@@ -214,6 +230,8 @@ def test_equations_tab_applies_derived_column(window, monkeypatch):
     assert "gain2" in window.app_state.derived_cols
     # Derived column shows up as a histogram parameter option.
     assert window.histogram_tab.param_combo.findText("gain2") >= 0
+    # And it was persisted into the datasheet YAML.
+    assert "gain2" in ds.read_text(encoding="utf-8")
 
 
 def test_deferred_runs_on_next_tick(qt_app):
@@ -501,6 +519,75 @@ def test_multiplot_cells_fit_viewport(qt_app, window, monkeypatch):
                 )
     finally:
         mp.close()
+
+
+def test_multiplot_restores_config_after_late_data_load(qt_app, window, monkeypatch):
+    """Regression: a dashboard opened before the first data load dropped its
+    saved selections (and then persisted the degraded config on close)."""
+    from chipify import app_config
+    saved = [{"mode": "Histogram", "param": "bw", "bins": "50"}]
+    monkeypatch.setattr(app_config, "load_config",
+                        lambda: {"multiplot_config": saved})
+    monkeypatch.setattr(app_config, "save_config", lambda _cfg: None)
+
+    # Open the dashboard on an empty AppState (no run loaded yet).
+    from chipify.gui_qt.multiplot_window import MultiPlotWindow
+    from chipify.uikit.state import AppState
+    state = AppState()
+    mp = MultiPlotWindow(state, window.plot_theme)
+    try:
+        assert mp._cells[0].param_combo.currentText() == ""
+
+        # Data arrives later (simulation finished / history load).
+        state.current_df = _sweep_df()
+        state.current_stim = _SweepStim()
+        state.data_changed.emit(df=state.current_df, stim=state.current_stim,
+                                switch_tab=False)
+        qt_app.processEvents()
+
+        cell = mp._cells[0]
+        assert cell.param_combo.currentText() == "bw"       # restored, not "gain"
+        assert cell.get_config()["param"] == "bw"           # and persisted correctly
+        assert cell.bins_combo.currentText() == "50"
+    finally:
+        mp.close()
+
+
+def test_equations_panel_saves_to_datasheet_and_migrates(qt_app, window, monkeypatch, tmp_path):
+    """Equations live in the datasheet: Apply writes the YAML keys and removes
+    the legacy settings.json entries (hard migration)."""
+    import yaml as _yaml
+
+    from chipify import app_config
+    store = {"custom_equations": [{"name": "gain_x2", "expr": "gain * 2"}]}
+    monkeypatch.setattr(app_config, "load_config", lambda: dict(store))
+    monkeypatch.setattr(app_config, "save_config", lambda cfg: (store.clear(), store.update(cfg)))
+
+    ds = tmp_path / "ds.yaml"
+    ds.write_text(
+        "parameters:\n  temp: [27]\n"
+        "tests:\n  tb_x:\n    gain:\n      min: 0.0\n",
+        encoding="utf-8",
+    )
+    _select_datasheet(window, monkeypatch, ds)
+    window.editor_tab.load_datasheet()
+
+    panel = window.editor_tab.equations_panel
+    panel.mode_combo.setCurrentText("Scalar")
+    panel.reload()
+    # Pre-migration: the legacy settings equation shows as the starting point.
+    assert panel.table.rowCount() == 1
+    assert panel.table.item(0, 0).text() == "gain_x2"
+
+    panel._append_row("gain_half", "gain / 2")
+    panel._apply()
+
+    data = _yaml.safe_load(ds.read_text(encoding="utf-8"))
+    assert data["equations"] == {"gain_x2": "gain * 2", "gain_half": "gain / 2"}
+    assert "custom_equations" not in store          # migrated out of settings
+    # The parsed datasheet now carries them (what show_results consumes).
+    from chipify.util import Stimuli
+    assert {e["name"] for e in Stimuli(str(ds)).equations} == {"gain_x2", "gain_half"}
 
 
 def test_histogram_param_options_exclude_inputs(window):

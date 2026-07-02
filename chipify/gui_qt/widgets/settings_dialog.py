@@ -181,7 +181,7 @@ class SettingsDialog(QDialog):
         for key, label in (
             ("in_dir", "Input datasheets"),
             ("out_dir", "Output"),
-            ("work_dir", "Scratch / temp"),
+            ("work_dir", "Model files (staged)"),
             ("tb_dir", "Testbenches"),
         ):
             edit = QLineEdit(self._cfg.get(key) or "")

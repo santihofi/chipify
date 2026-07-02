@@ -148,7 +148,8 @@ class MeasurementsTab(QWidget):
         rows = _meas.measurement_rows(valid_df, stim)
         self._fill_parameter_rows(rows)
 
-        equations = app_config.load_config().get("custom_equations", []) or []
+        from chipify.uikit.services import equation_service as _eq_svc
+        equations = _eq_svc.scalar_equations(stim)
         eq_rows = _meas.equation_rows(valid_df, equations)
         self._fill_equation_rows(eq_rows)
 

@@ -15,6 +15,8 @@ tests:
       min: -0.1
       max: 0.1
       typ: 0.0
+    transient_signals: [outp, outn]
   tb_sf_gain:
     gain: {}
     bandwidth: {}
+    ac_signals: [outp, outn]

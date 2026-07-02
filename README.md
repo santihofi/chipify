@@ -130,8 +130,9 @@ for the full list of options.
 ## Configuration
 
 User preferences are stored in `settings.json` in the directory you launch
-Chipify from (CPU cores, simulator engine, theme, live plotting, custom
-equations, …). The file is created/updated by the GUI's settings dialog.
+Chipify from (CPU cores, simulator engine, theme, live plotting, …). The file
+is created/updated by the GUI's settings dialog. Custom equations live in the
+datasheet YAML (`equations:` / `transient_equations:`), not in `settings.json`.
 
 ### Folder paths
 
@@ -141,7 +142,7 @@ By default Chipify uses this layout under the working directory:
 | -------------- | ------------------- | -------------- |
 | Input datasheets | `in_dir`          | `datasheets/`  |
 | Simulation output | `out_dir`        | `out/`         |
-| Scratch / temp | `work_dir`          | `tmp/`         |
+| Model files (`*.lib`/`*.mod`/`*.inc` staged for simulation) | `work_dir` | `work/` |
 | Testbench files | `tb_dir`           | `tb/`          |
 
 To relocate any of them, set the corresponding key in `settings.json` to an

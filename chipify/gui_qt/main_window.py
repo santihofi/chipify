@@ -487,7 +487,7 @@ class MainWindow(QMainWindow):
         emit ``data_changed``.
         """
         df = _dl.compute_global_pass(_dl.normalise_sim_error(df))
-        equations = app_config.load_config().get("custom_equations", []) or []
+        equations = _eq_svc.scalar_equations(stim)
         df, derived, _logs = _eq_svc.apply_scalar_equations(df, equations)
         self.app_state.derived_cols = derived
 
@@ -502,10 +502,22 @@ class MainWindow(QMainWindow):
 
     def reapply_equations(self) -> None:
         """Re-run the current results through ``show_results`` to refresh
-        derived columns after the equation list changes."""
+        derived columns after the equation list changes.
+
+        The stim is re-parsed from the active datasheet first — equations live
+        in the datasheet YAML, so the in-memory stim would otherwise keep
+        serving the pre-edit equation list."""
         df = self.app_state.current_df
-        if df is not None:
-            self.show_results(df, self.app_state.current_stim, switch_tab=False)
+        if df is None:
+            return
+        stim = self.app_state.current_stim
+        if self.current_yaml_path:
+            try:
+                from chipify import util
+                stim = util.Stimuli(self.current_yaml_path)
+            except Exception as exc:  # noqa: BLE001 — keep the old stim on parse errors
+                log.warning("reapply_equations: could not re-parse datasheet: %s", exc)
+        self.show_results(df, stim, switch_tab=False)
 
     def show_error(self, message: str) -> None:
         """Surface a simulation error on the measurements tab."""

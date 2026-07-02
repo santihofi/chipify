@@ -66,3 +66,13 @@ tests:
     # expressions (name: expression).
     measure:
       gbw: "gain * bandwidth"
+
+# ── Custom equations (optional) ───────────────────────────────────────────────
+# Derived columns computed from the results, evaluated in a sandbox. They are
+# edited by the GUI's CUSTOM EQUATIONS panel and travel with the datasheet.
+#
+# equations:            # scalar, one value per run (any result column usable)
+#   gain_lin: "10 ** (gain / 20)"
+#
+# transient_equations:  # waveform-level, plottable as extra signals
+#   vdiff: "v(outp) - v(outn)"

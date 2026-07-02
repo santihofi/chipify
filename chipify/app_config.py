@@ -38,7 +38,7 @@ DEFAULTS: dict[str, Any] = {
     # ── Project folders (None/absent/blank ⇒ default structure; see settings.py) ──
     "in_dir": None,                   # input datasheets   (default: datasheets/)
     "out_dir": None,                  # simulation output  (default: out/)
-    "work_dir": None,                 # scratch / temp     (default: tmp/)
+    "work_dir": None,                 # model files staged for simulation (default: work/)
     "tb_dir": None,                   # testbench files    (default: tb/)
 }
 

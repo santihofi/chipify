@@ -517,9 +517,13 @@ def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list
 # ── Section 4: Correlation heatmap ────────────────────────────────────────────
 
 def _add_correlation(pdf: PdfPages, valid_df: pd.DataFrame):
+    import copy as _copy
     numeric = valid_df.select_dtypes(include=[np.number]).columns.tolist()
+    # run_id / duration are bookkeeping, not data (matches the GUI heatmap).
+    non_data = {"run_id", "simulation_duration_s_total"}
     cols = [c for c in numeric
             if not c.endswith("_pass") and c != "global_pass"
+            and c not in non_data
             and valid_df[c].nunique() > 1]
     if len(cols) < 2:
         return
@@ -533,7 +537,12 @@ def _add_correlation(pdf: PdfPages, valid_df: pd.DataFrame):
     ax = fig.add_axes([0.20, 0.24, 0.60, 0.60])
     ax.set_facecolor("white")
 
-    cax  = ax.matshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
+    # Mask the self-correlation diagonal (always 1.0 → deep red); grey reads
+    # as "not informative" — same treatment as the GUI heatmap.
+    masked = np.ma.masked_where(np.eye(n, dtype=bool), corr.values)
+    cmap = _copy.copy(plt.cm.coolwarm)
+    cmap.set_bad("#bfbfbf")
+    cax  = ax.matshow(masked, cmap=cmap, vmin=-1, vmax=1)
     cbar = fig.colorbar(cax, ax=ax, fraction=0.036, pad=0.04)
     cbar.ax.tick_params(labelsize=8)
     cbar.set_label("Pearson r", fontsize=9)
@@ -541,6 +550,8 @@ def _add_correlation(pdf: PdfPages, valid_df: pd.DataFrame):
     fs = max(6, 10 - n // 3)
     for i in range(n):
         for j in range(n):
+            if i == j:
+                continue  # masked grey diagonal carries no value
             v  = corr.iloc[i, j]
             fc = "black" if abs(v) < 0.6 else "white"
             ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=fs, color=fc)

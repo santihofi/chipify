@@ -27,3 +27,7 @@ tests:
   tb_sf_tran:
     transient_signals: [outp, outn]
     engine: ngspice
+equations:
+  vd_tr: outp-outn
+transient_equations:
+  out_d: outp-outn

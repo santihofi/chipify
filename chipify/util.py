@@ -25,6 +25,10 @@ class Stimuli:
     def __init__(self, yaml_file: str | None = None) -> None:
         self.params: dict[str, Any] = {}
         self.tests: list[Test] = []
+        # Custom equations from the datasheet's top-level ``equations:`` /
+        # ``transient_equations:`` blocks, as [{"name", "expr"}] dicts.
+        self.equations: list[dict[str, str]] = []
+        self.transient_equations: list[dict[str, str]] = []
         if yaml_file:
             self._load_from_yaml(yaml_file)
 
@@ -48,6 +52,8 @@ class Stimuli:
 
         self.params = validated.params
         self.tests = validated.tests
+        self.equations = getattr(validated, "equations", [])
+        self.transient_equations = getattr(validated, "transient_equations", [])
 
     def addTest(self, test: "Test") -> None:
         self.tests.append(test)

@@ -14,6 +14,7 @@ import logging
 from typing import Callable
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -43,6 +44,16 @@ _BASE_MODES = [
 ]
 _XY_MODES = {"Scatter Plot", "Corner Yield Matrix"}
 _TARGET_MODES = {"Sensitivity (Tornado)"}
+
+
+def _param_plugin_modes() -> set[str]:
+    """Names of plot plugins that take a measurement selector (supports_param)."""
+    try:
+        from chipify.plugin_loader import get_plot_plugins
+        return {cls.name for cls in get_plot_plugins()
+                if getattr(cls, "supports_param", False)}
+    except Exception:  # noqa: BLE001
+        return set()
 
 
 class AnalyticsTab(QWidget):
@@ -99,8 +110,13 @@ class AnalyticsTab(QWidget):
         self.target_combo = QComboBox()
         for _c in (self.x_combo, self.y_combo, self.target_combo):
             compact_combo(_c)
+        self.all_params_check = QCheckBox("All measurements")
+        self.all_params_check.setToolTip(
+            "Plot every datasheet measurement as a panel grid instead of the "
+            "single selected one."
+        )
         for w in (self.lbl_x, self.x_combo, self.lbl_y, self.y_combo,
-                  self.lbl_target, self.target_combo):
+                  self.lbl_target, self.target_combo, self.all_params_check):
             controls.addWidget(w)
         controls.addStretch(1)
         self.btn_export = QPushButton("Export…")
@@ -114,6 +130,7 @@ class AnalyticsTab(QWidget):
         self.mode_combo.currentIndexChanged.connect(deferred(self._on_mode_change))
         for combo in (self.x_combo, self.y_combo, self.target_combo):
             combo.currentIndexChanged.connect(deferred(self._redraw))
+        self.all_params_check.toggled.connect(self._on_all_params_toggle)
         self._apply_mode_visibility()
 
     @staticmethod
@@ -131,11 +148,18 @@ class AnalyticsTab(QWidget):
     def _apply_mode_visibility(self) -> None:
         mode = self.mode_combo.currentText()
         xy = mode in _XY_MODES
-        tgt = mode in _TARGET_MODES
+        param_mode = mode in _param_plugin_modes()
+        tgt = mode in _TARGET_MODES or param_mode
         for w in (self.lbl_x, self.x_combo, self.lbl_y, self.y_combo):
             w.setVisible(xy)
         for w in (self.lbl_target, self.target_combo):
             w.setVisible(tgt)
+        self.all_params_check.setVisible(param_mode)
+        self.target_combo.setEnabled(not (param_mode and self.all_params_check.isChecked()))
+
+    def _on_all_params_toggle(self, *_a) -> None:
+        self._apply_mode_visibility()
+        self._redraw()
 
     def _on_mode_change(self, *_a) -> None:
         self._apply_mode_visibility()
@@ -158,6 +182,10 @@ class AnalyticsTab(QWidget):
             for v in test.value_lst:
                 if v.name in df.columns and v.name not in meas_names:
                     meas_names.append(v.name)
+            # measure: expression results are measurements too (limitless).
+            for name in (getattr(test, "measure", None) or {}):
+                if name in df.columns and name not in meas_names:
+                    meas_names.append(name)
 
         mode = self.mode_combo.currentText()
         if mode == "Corner Yield Matrix":
@@ -195,13 +223,20 @@ class AnalyticsTab(QWidget):
 
         theme = self._plot_theme()
         self.canvas.set_background(theme["bg"])
+        mode = self.mode_combo.currentText()
+        target = self.target_combo.currentText()
+        # Param-aware plugin modes plot the selected measurement only, unless
+        # the "All measurements" box asks for the panel grid.
+        plugin_param = None
+        if mode in _param_plugin_modes() and not self.all_params_check.isChecked():
+            plugin_param = target if target and target != "-" else None
         self._sc_plot, self._scatter_df = PlotManager.draw_adv_plot(
             self.canvas.figure, None, self.canvas.canvas, valid_df, stim,
-            self.mode_combo.currentText(),
+            mode,
             self.x_combo.currentText(),
             self.y_combo.currentText(),
-            self.target_combo.currentText(),
-            bg_color=theme["bg"], theme=theme,
+            target,
+            bg_color=theme["bg"], theme=theme, plugin_param=plugin_param,
         )
         # draw_adv_plot did fig.clf() — drop the stale tooltip annotation.
         self._hover.invalidate()

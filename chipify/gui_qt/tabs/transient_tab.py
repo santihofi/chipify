@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from chipify import app_config, settings
+from chipify import settings
 from chipify.uikit.services import transient_loader as _tl
 from chipify.uikit.state import AppState
 from chipify.gui_qt.widgets.helpers import compact_combo, deferred
@@ -156,14 +156,30 @@ class TransientTab(QWidget):
                         if sig not in seen:
                             seen.append(sig)
         if kind == "transient":
-            for eq in app_config.load_config().get("transient_equations", []):
+            for eq in self._tran_equations():
                 name = (eq.get("name") or "").strip()
                 if name and name not in seen:
                     seen.append(name)
 
+        # Preserve the user's selection across refreshes (e.g. after an
+        # equation edit). Signals that were not in the old list at all — a
+        # freshly added equation — start selected so they show up immediately.
+        old_items = {self.signal_list.item(i).text()
+                     for i in range(self.signal_list.count())}
+        prev_selected = {i.text() for i in self.signal_list.selectedItems()}
         self.signal_list.clear()
         self.signal_list.addItems(seen)
-        self.signal_list.selectAll()
+        if old_items:
+            for i in range(self.signal_list.count()):
+                item = self.signal_list.item(i)
+                item.setSelected(item.text() in prev_selected
+                                 or item.text() not in old_items)
+        else:
+            self.signal_list.selectAll()
+
+    def _tran_equations(self) -> list[dict[str, str]]:
+        from chipify.uikit.services import equation_service as _eq_svc
+        return _eq_svc.transient_equations(self._state.current_stim)
 
     # ── Rendering ─────────────────────────────────────────────────────────────
 
@@ -210,10 +226,7 @@ class TransientTab(QWidget):
         adir = self._resolve_dir() if df is not None else ""
         signals = [i.text() for i in self.signal_list.selectedItems()]
         run_ids = self._selected_run_ids(df) if df is not None else []
-        equations = (
-            app_config.load_config().get("transient_equations", [])
-            if kind == "transient" else []
-        )
+        equations = self._tran_equations() if kind == "transient" else []
         export_overlay_latex(self, kind, adir, run_ids, signals, equations)
 
     def _redraw(self, *_args) -> None:
@@ -240,10 +253,7 @@ class TransientTab(QWidget):
         if "global_pass" in df.columns and "run_id" in df.columns:
             for _, r in df[["run_id", "global_pass"]].dropna(subset=["run_id"]).iterrows():
                 pass_map[str(r["run_id"]).zfill(6)] = bool(r["global_pass"])
-        equations = (
-            app_config.load_config().get("transient_equations", [])
-            if kind == "transient" else []
-        )
+        equations = self._tran_equations() if kind == "transient" else []
         draw_fn(
             fig, canvas, adir, run_ids, signals,
             pass_map=pass_map, bg_color=theme["bg"],

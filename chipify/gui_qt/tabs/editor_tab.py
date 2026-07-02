@@ -147,7 +147,7 @@ class DatasheetEditorTab(QWidget):
         body.addWidget(self.stack, stretch=2)
 
         from chipify.gui_qt.tabs.equations_tab import EquationsTab
-        self.equations_panel = EquationsTab(self._window.reapply_equations)
+        self.equations_panel = EquationsTab(self)
         body.addWidget(self.equations_panel, stretch=1)
         root.addLayout(body, stretch=1)
 
@@ -213,6 +213,7 @@ class DatasheetEditorTab(QWidget):
             self.title_label.setText("—")
             self.raw_editor.setPlainText("")
             self._build_form()
+            self.equations_panel.reload()
             return
         try:
             with open(path, "r", encoding="utf-8") as fh:
@@ -229,6 +230,7 @@ class DatasheetEditorTab(QWidget):
         self.title_label.setText(os.path.basename(path))
         self.raw_editor.setPlainText(raw)
         self._build_form()
+        self.equations_panel.reload()
 
     # ── Form build ────────────────────────────────────────────────────────────
 
@@ -525,6 +527,49 @@ class DatasheetEditorTab(QWidget):
             return
         self.raw_text = text
         self._window.set_status("Datasheet saved.", "#2ecc71")
+
+    def set_document_key(self, key: str, value) -> bool:
+        """Set (or remove, when *value* is None) a top-level YAML key and save.
+
+        Used by the embedded equations panel to persist ``equations:`` /
+        ``transient_equations:`` without clobbering concurrent edits: the
+        current view's state (form widgets or raw text) is synced into the
+        document first, then the key is applied and the file written. Returns
+        True on success; failures surface a dialog and return False.
+        """
+        if not self.current_yaml_path:
+            QMessageBox.warning(self, "Save", "No datasheet selected.")
+            return False
+        if self.mode_combo.currentText() == "Form View":
+            self._sync_to_state()
+        else:
+            try:
+                self.current_yaml_data = yaml.safe_load(self.raw_editor.toPlainText()) or {}
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, "YAML Error",
+                                     f"Raw view has invalid YAML:\n{exc}")
+                return False
+        if value is None:
+            self.current_yaml_data.pop(key, None)
+        else:
+            self.current_yaml_data[key] = value
+        text = self._dump()
+        try:
+            with open(self.current_yaml_path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Save Error", f"Could not save datasheet:\n{exc}")
+            return False
+        self.raw_text = text
+        self.raw_editor.setPlainText(text)
+        if self.mode_combo.currentText() == "Form View":
+            self._build_form()  # reflect any raw-synced changes
+        self._window.set_status("Datasheet saved.", "#2ecc71")
+        return True
+
+    def window_reapply_equations(self) -> None:
+        """Delegate for the embedded equations panel."""
+        self._window.reapply_equations()
 
     def autosave_for_run(self, yaml_path: str) -> bool:
         """Persist unsaved edits for the datasheet about to be simulated.

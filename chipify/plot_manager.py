@@ -1,11 +1,18 @@
 ﻿# Copyright (c) 2026 Santiago Hofwimmer
 import copy
+import logging
 import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from chipify import settings
+
+log = logging.getLogger("chipify.plot_manager")
+
+#: Numeric result columns that are bookkeeping, not data — never plotted as
+#: correlation inputs (run_id is an index; the duration lives on one row only).
+_NON_DATA_COLS = frozenset({"run_id", "simulation_duration_s_total"})
 
 # NOTE: ``scipy.stats`` (~0.8s to import, and it drags in ``scipy.spatial``) is
 # imported lazily inside ``draw_histogram`` — the only consumer — so it stays off
@@ -184,7 +191,7 @@ class PlotManager:
                             except Exception:
                                 pass
             except Exception as e:
-                print(f"Could not overlay comparison run: {e}")
+                log.warning("Could not overlay comparison run %r: %s", comp_run, e)
 
         spec_min, spec_max = None, None
         if current_stim:
@@ -210,7 +217,7 @@ class PlotManager:
         canvas.draw()
 
     @staticmethod
-    def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b", theme=None):
+    def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b", theme=None, plugin_param=None):
         th = _resolve_theme(theme, bg_color=bg_color)
         fg = th["fg"]
         if ax_dummy is None or ax_dummy not in fig.axes:
@@ -288,7 +295,8 @@ class PlotManager:
 
         elif mode == "Correlation Heatmap":
             numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
-            plot_cols = [c for c in numeric_cols if not c.endswith('_pass')]
+            plot_cols = [c for c in numeric_cols
+                         if not c.endswith('_pass') and c not in _NON_DATA_COLS]
             active_cols = [c for c in plot_cols if valid_df[c].nunique() > 1]
 
             if len(active_cols) < 2:
@@ -305,10 +313,14 @@ class PlotManager:
                 cbar.ax.yaxis.set_tick_params(color=fg)
                 cbar.outline.set_edgecolor(th["spine"])
                 plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=fg)
+                fs = 9 if len(active_cols) <= 12 else 7
                 ax.set_xticks(range(len(active_cols)))
                 ax.set_yticks(range(len(active_cols)))
-                ax.set_xticklabels(active_cols, rotation=45, ha='left', color=fg, fontsize=9)
-                ax.set_yticklabels(active_cols, color=fg, fontsize=9)
+                # Bottom labels rotated 45° must anchor at their right end —
+                # anchored left they extend under the matrix and get clipped.
+                ax.set_xticklabels(active_cols, rotation=45, ha='right',
+                                   rotation_mode='anchor', color=fg, fontsize=fs)
+                ax.set_yticklabels(active_cols, color=fg, fontsize=fs)
                 ax.xaxis.set_ticks_position('bottom')
                 ax.set_title("Parameter Correlation Matrix", color=fg, pad=20)
 
@@ -367,8 +379,13 @@ class PlotManager:
                 for cls in get_plot_plugins():
                     if cls.name == mode:
                         plugin = cls()
+                        kwargs = {"theme": th}
+                        # Only param-aware plugins get the measurement filter
+                        # (None = "all measurements", the pre-selector layout).
+                        if getattr(cls, "supports_param", False):
+                            kwargs["param"] = plugin_param
                         try:
-                            plugin.draw(fig, ax, valid_df, current_stim, theme=th)
+                            plugin.draw(fig, ax, valid_df, current_stim, **kwargs)
                         except TypeError:
                             # Older plugins without theme kwarg — fall back gracefully.
                             plugin.draw(fig, ax, valid_df, current_stim)

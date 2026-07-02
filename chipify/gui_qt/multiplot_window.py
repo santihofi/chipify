@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from chipify import app_config, settings
 from chipify import data_loader as _dl
+from chipify.uikit.services import equation_service as _eq_svc
 from chipify.uikit.services import transient_loader as _tl
 from chipify.uikit.services.scatter_hover import HoverState, ScatterHoverManager
 from chipify.uikit.state import AppState
@@ -60,6 +61,16 @@ def _all_modes() -> list[str]:
     except Exception:  # noqa: BLE001
         pass
     return modes
+
+
+def _param_plugin_modes() -> set[str]:
+    """Names of plot plugins that take a measurement selector (supports_param)."""
+    try:
+        from chipify.plugin_loader import get_plot_plugins
+        return {cls.name for cls in get_plot_plugins()
+                if getattr(cls, "supports_param", False)}
+    except Exception:  # noqa: BLE001
+        return set()
 
 
 class PlotCell(QFrame):
@@ -137,13 +148,16 @@ class PlotCell(QFrame):
             (self.tran_signal_combo, "Signal"), (self.tran_mode_combo, "Runs"),
         ):
             combo.setToolTip(tip)
+        self.all_check = QCheckBox("All")
+        self.all_check.setToolTip("Plot every measurement as a panel grid "
+                                  "instead of the single selected one.")
         row_top = [
             self.param_combo, self.group_combo, self.dist_combo,
             self.x_combo, self.y_combo, self.target_combo, self.tran_signal_combo,
         ]
         row_bottom = [
             self.compare_combo, self.bins_combo, self.zoom_check,
-            self.tran_mode_combo, self.tran_n_edit,
+            self.tran_mode_combo, self.tran_n_edit, self.all_check,
         ]
         self._ctl_widgets = row_top + row_bottom
         for row, widgets in ((self.controls, row_top),
@@ -170,7 +184,12 @@ class PlotCell(QFrame):
                 w.currentIndexChanged.connect(deferred(self._request_redraw))
         self.tran_n_edit.editingFinished.connect(self._request_redraw)
         self.zoom_check.toggled.connect(self._request_redraw)
+        self.all_check.toggled.connect(self._on_all_toggle)
         self._apply_mode_visibility()
+
+    def _on_all_toggle(self, *_a) -> None:
+        self._apply_mode_visibility()
+        self._request_redraw()
 
     def _apply_mode_visibility(self) -> None:
         mode = self.mode_combo.currentText()
@@ -186,8 +205,13 @@ class PlotCell(QFrame):
         elif mode == "Transient":
             vis[self.tran_signal_combo] = vis[self.tran_mode_combo] = True
             vis[self.tran_n_edit] = True
+        elif mode in _param_plugin_modes():
+            vis[self.target_combo] = vis[self.all_check] = True
         for w, on in vis.items():
             w.setVisible(on)
+        self.target_combo.setEnabled(
+            not (mode in _param_plugin_modes() and self.all_check.isChecked())
+        )
 
     def _on_mode_change(self, *_a) -> None:
         self._apply_mode_visibility()
@@ -213,6 +237,10 @@ class PlotCell(QFrame):
             for v in test.value_lst:
                 if v.name in valid_df.columns and v.name not in meas:
                     meas.append(v.name)
+            # measure: expression results are measurements too (limitless).
+            for name in (getattr(test, "measure", None) or {}):
+                if name in valid_df.columns and name not in meas:
+                    meas.append(name)
         # Histogram params: outputs only — input parameters make no sense as a
         # distribution (they're the sweep grid); they stay in "Group by" and
         # in the scatter X/Y axes below.
@@ -226,6 +254,11 @@ class PlotCell(QFrame):
                     for s in an.signals:
                         if s not in signals:
                             signals.append(s)
+        # Transient-equation results are plottable signals too.
+        for eq in _eq_svc.transient_equations(stim):
+            name = (eq.get("name") or "").strip()
+            if name and name not in signals:
+                signals.append(name)
 
         self._set(self.param_combo, params)
         self._set(self.group_combo, ["None"] + sweep_params)
@@ -249,6 +282,10 @@ class PlotCell(QFrame):
 
     def redraw(self, valid_df, stim, sweep_params, derived_cols, tran_dir="") -> None:
         self._populate(valid_df, stim, sweep_params, derived_cols)
+        # Re-apply remembered selections now that the option lists exist —
+        # a dashboard opened before the first data load would otherwise draw
+        # (and later persist) defaults instead of its saved configuration.
+        self.restore_pending()
         mode = self.mode_combo.currentText()
         theme = self._plot_theme()
         self.canvas.set_background(theme["bg"])
@@ -273,10 +310,15 @@ class PlotCell(QFrame):
             elif mode == "Transient":
                 self._draw_transient(valid_df, stim, tran_dir, theme)
             else:
+                target = self.target_combo.currentText()
+                plugin_param = None
+                if mode in _param_plugin_modes() and not self.all_check.isChecked():
+                    plugin_param = target if target and target != "-" else None
                 self._sc_plot, self._scatter_df = PlotManager.draw_adv_plot(
                     fig, None, canvas, valid_df, stim, mode,
                     self.x_combo.currentText(), self.y_combo.currentText(),
-                    self.target_combo.currentText(), bg_color=theme["bg"], theme=theme,
+                    target, bg_color=theme["bg"], theme=theme,
+                    plugin_param=plugin_param,
                 )
         except Exception as exc:  # noqa: BLE001
             log.debug("PlotCell redraw failed: %s", exc)
@@ -294,6 +336,10 @@ class PlotCell(QFrame):
                 for an in getattr(test, "analyses", []) or []:
                     if an.kind == "transient":
                         signals.extend(s for s in an.signals if s not in signals)
+            for eq in _eq_svc.transient_equations(stim):
+                name = (eq.get("name") or "").strip()
+                if name and name not in signals:
+                    signals.append(name)
         else:
             signals = [sig]
 
@@ -318,7 +364,7 @@ class PlotCell(QFrame):
             for _, r in df[["run_id", "global_pass"]].dropna(subset=["run_id"]).iterrows():
                 pass_map[str(r["run_id"]).zfill(6)] = bool(r["global_pass"])
 
-        equations = app_config.load_config().get("transient_equations", [])
+        equations = _eq_svc.transient_equations(stim)
         PlotManager.draw_transient_plot(
             self.canvas.figure, self.canvas.canvas, tran_dir, run_ids, signals,
             pass_map=pass_map, bg_color=theme["bg"], equations=equations, theme=theme,
@@ -352,6 +398,7 @@ class PlotCell(QFrame):
             "x_col": self.x_combo.currentText(),
             "y_col": self.y_combo.currentText(),
             "target": self.target_combo.currentText(),
+            "all_params": self.all_check.isChecked(),
             "tran_signals": self.tran_signal_combo.currentText(),
             "tran_run_mode": self.tran_mode_combo.currentText(),
             "tran_n": self.tran_n_edit.text(),
@@ -362,17 +409,25 @@ class PlotCell(QFrame):
         self.dist_combo.setCurrentText(cfg.get("dist", "Gauss (Normal)"))
         self.bins_combo.setCurrentText(cfg.get("bins", "Auto"))
         self.zoom_check.setChecked(bool(cfg.get("zoom", False)))
+        self.all_check.setChecked(bool(cfg.get("all_params", False)))
         self.tran_mode_combo.setCurrentText(cfg.get("tran_run_mode", "First N"))
         self.tran_n_edit.setText(str(cfg.get("tran_n", "10")))
-        # Param/x/y/target selections are restored after options repopulate.
+        # Param/x/y/target selections are restored after options repopulate
+        # (redraw calls restore_pending once the lists exist).
         self._pending_cfg = cfg
         self._apply_mode_visibility()
 
     def restore_pending(self) -> None:
-        """Re-apply remembered selections once option lists are populated."""
+        """Re-apply remembered selections once option lists are populated.
+
+        Selections that aren't in the option lists yet stay pending, so a
+        config saved with data loaded survives sessions that start empty.
+        Signals are blocked — redraw() calls this right before drawing.
+        """
         cfg = getattr(self, "_pending_cfg", None)
         if not cfg:
             return
+        remaining = dict(cfg)
         for combo, key in (
             (self.param_combo, "param"), (self.group_combo, "group"),
             (self.compare_combo, "compare"),
@@ -380,9 +435,17 @@ class PlotCell(QFrame):
             (self.target_combo, "target"), (self.tran_signal_combo, "tran_signals"),
         ):
             val = cfg.get(key)
-            if val and combo.findText(val) >= 0:
+            if not val:
+                remaining.pop(key, None)
+                continue
+            if combo.findText(val) >= 0:
+                combo.blockSignals(True)
                 combo.setCurrentText(val)
-        self._pending_cfg = None
+                combo.blockSignals(False)
+                remaining.pop(key, None)
+        combo_keys = {"param", "group", "compare", "x_col", "y_col",
+                      "target", "tran_signals"}
+        self._pending_cfg = remaining if combo_keys & set(remaining) else None
 
 
 class MultiPlotWindow(QWidget):
@@ -454,8 +517,7 @@ class MultiPlotWindow(QWidget):
         self._reflow()
         snap = self.data_snapshot()
         if snap is not None:
-            cell.redraw(*snap)
-            cell.restore_pending()
+            cell.redraw(*snap)  # redraw restores pending config selections
         return cell
 
     def _remove_cell(self, cell: PlotCell) -> None:

@@ -155,6 +155,11 @@ class PlotPlugin:
     #: Chipify plugin API version this plugin was written for.
     api_version: str = "1"
 
+    #: Declare True when ``draw`` accepts a ``param=`` kwarg: the host then
+    #: shows a measurement selector (plus an "all measurements" checkbox) and
+    #: passes the chosen output name — or ``None`` for "plot everything".
+    supports_param: bool = False
+
     def draw(
         self,
         fig: "Figure",
