@@ -224,3 +224,44 @@ def test_generate_template_no_echo_without_scalars(tmp_path, monkeypatch) -> Non
 
     assert "MY_DATA:" not in out
     assert "WRDATA_MARK" in out
+
+
+# ── VACASK scalar extraction from .raw ────────────────────────────────────────
+
+def _vacask_test(value_names, measure=None):
+    from chipify.util import Test, Value
+    t = Test("tb_v", [Value(n, None, None, None) for n in value_names])
+    t.measure = measure or {}
+    t.analyses = []
+    return t
+
+
+def _patch_raw(monkeypatch, bucket) -> None:
+    monkeypatch.setattr(simulator.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(simulator, "_read_raw_file", lambda _f: {"dc": bucket})
+
+
+def test_vacask_extract_finds_node_voltages(monkeypatch) -> None:
+    _patch_raw(monkeypatch, {"outp": [0.9], "outn": [0.5], "__x__": [0.0]})
+    line, err = simulator._vacask_extract_results("x.raw", _vacask_test(["outp", "outn"]), {})
+    assert err is None
+    assert line.replace("MY_DATA:", "").split() == ["0.9", "0.5"]
+
+
+def test_vacask_extract_reports_available_signals_when_no_match(monkeypatch) -> None:
+    """A run where no requested value matches must surface the .raw's actual
+    signal names (not a silent all-NaN row)."""
+    _patch_raw(monkeypatch, {"outp": [0.9], "outn": [0.5], "__x__": [0.0]})
+    line, err = simulator._vacask_extract_results("x.raw", _vacask_test(["vgain", "pm"]), {})
+    assert line is None
+    assert "NO_MATCHING_SIGNALS" in err
+    assert "outp" in err and "outn" in err
+
+
+def test_vacask_extract_partial_match_is_not_an_error(monkeypatch) -> None:
+    """If at least one value resolves, the row is kept (missing ones → nan)."""
+    _patch_raw(monkeypatch, {"outp": [0.9], "__x__": [0.0]})
+    line, err = simulator._vacask_extract_results("x.raw", _vacask_test(["outp", "outn"]), {})
+    assert err is None
+    vals = line.replace("MY_DATA:", "").split()
+    assert vals[0] == "0.9" and vals[1] == "nan"

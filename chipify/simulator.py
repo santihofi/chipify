@@ -626,44 +626,130 @@ def _log_capture_failures(results: list) -> None:
 
 # ── VACASK helpers ─────────────────────────────────────────────────────────────
 
+def _resolve_vacask_bin(cfg: dict) -> "str | None":
+    """Absolute path to the vacask binary, honoring the ``vacask_binary`` setting.
+
+    An absolute configured path is used as-is (if it exists); otherwise the name
+    is resolved on PATH. Returns None when nothing resolves.
+    """
+    name = (cfg.get("vacask_binary") or "vacask").strip()
+    if os.path.isabs(name):
+        return name if os.path.exists(name) else None
+    return shutil.which(name)
+
+
+def _ng2vc_search_paths(cfg: dict) -> list[str]:
+    """Ordered candidate locations for the ng2vc converter script/binary.
+
+    Beyond PATH and the vacask binary's own dir, this knows the VACASK install
+    layout shipped in IIC-OSIC-TOOLS, where the binary lives in ``<prefix>/bin``
+    but ng2vc sits under ``<prefix>/[…/]lib/vacask/python/ng2vc.py``.
+    """
+    cands: list[str] = []
+    for name in ("ng2vc", "ng2vc.py"):
+        p = shutil.which(name)
+        if p:
+            cands.append(p)
+
+    vacask_bin = _resolve_vacask_bin(cfg)
+    if vacask_bin:
+        bindir = os.path.dirname(os.path.realpath(vacask_bin))
+        prefix = os.path.dirname(bindir)          # <prefix>/bin/vacask → <prefix>
+        cands += [
+            os.path.join(bindir, "ng2vc.py"),
+            os.path.join(bindir, "ng2vc"),
+            # Observed VACASK / IIC-OSIC-TOOLS layout:
+            #   <prefix>/vacask/lib/vacask/python/ng2vc.py
+            os.path.join(prefix, "vacask", "lib", "vacask", "python", "ng2vc.py"),
+            os.path.join(prefix, "lib", "vacask", "python", "ng2vc.py"),
+        ]
+    return cands
+
+
+def _resolve_ng2vc(cfg: dict) -> "str | None":
+    """Locate the ng2vc converter. The explicit ``ng2vc_binary`` setting wins;
+    otherwise fall back to PATH / vacask-relative discovery (`_ng2vc_search_paths`).
+    Returns the path (which the caller verifies exists) or None."""
+    explicit = (cfg.get("ng2vc_binary") or "").strip()
+    if explicit:
+        return explicit
+    return next((p for p in _ng2vc_search_paths(cfg) if os.path.exists(p)), None)
+
+
+def _ng2vc_argv0(ng2vc_path: str) -> list[str]:
+    """Launch prefix for ng2vc: Python scripts run under our interpreter (so the
+    sibling ``ng2vclib`` package resolves via the script dir on sys.path); a
+    native binary is executed directly."""
+    return [sys.executable, ng2vc_path] if ng2vc_path.endswith(".py") else [ng2vc_path]
+
+
 def _run_ng2vc(spice_file: str, sim_file: str) -> None:
     """Convert an ngspice netlist to VACASK .sim format using the ng2vc converter.
 
-    Tries, in order:
-    1. pyopus.simulator.ng2vc  (if PyOPUS is installed with ng2vc support)
-    2. ng2vc / ng2vc.py on the system PATH or next to the vacask binary
+    Resolution order:
+    1. ``pyopus.simulator.ng2vc.convert`` — only if that exact API exists; real
+       errors are surfaced (logged), not silently swallowed.
+    2. An ng2vc script/binary from the ``ng2vc_binary`` setting, PATH, or the
+       VACASK install layout next to the vacask binary (`_resolve_ng2vc`).
+
+    The external converter is invoked tolerantly: VACASK's ng2vc may take the
+    output file as a second positional **or** write the netlist to stdout, so we
+    try the output-arg form first and fall back to capturing stdout.
     """
-    # Try PyOPUS built-in converter
+    cfg = app_config.load_config()
+
+    # 1. PyOPUS in-process converter — only when the API is actually present.
     try:
         from pyopus.simulator import ng2vc as _m  # type: ignore[import]
-        if hasattr(_m, "convert"):
+    except Exception:
+        _m = None
+    if _m is not None and hasattr(_m, "convert"):
+        try:
             _m.convert(spice_file, sim_file)
             log.info("ng2vc conversion via PyOPUS OK: %s → %s", spice_file, sim_file)
             return
-    except Exception:
-        pass
+        except Exception as exc:  # noqa: BLE001 — diagnose, then fall back to the script
+            log.warning("PyOPUS ng2vc.convert failed (%s); trying ng2vc script.", exc)
 
-    # Locate ng2vc script next to the vacask binary or on PATH
-    vacask_bin = shutil.which("vacask")
-    candidates = [
-        shutil.which("ng2vc"),
-        os.path.join(os.path.dirname(vacask_bin), "ng2vc") if vacask_bin else None,
-        os.path.join(os.path.dirname(vacask_bin), "ng2vc.py") if vacask_bin else None,
-    ]
-    ng2vc_path = next((p for p in candidates if p and os.path.exists(p)), None)
-    if ng2vc_path is None:
+    # 2. External ng2vc script / binary.
+    ng2vc_path = _resolve_ng2vc(cfg)
+    if not ng2vc_path:
         raise RuntimeError(
-            "ng2vc converter not found. Install PyOPUS or ensure ng2vc / ng2vc.py "
-            "is on the system PATH alongside the vacask binary."
+            "ng2vc converter not found. Set 'ng2vc_binary' in settings to your "
+            "ng2vc(.py) path (e.g. .../lib/vacask/python/ng2vc.py), add it to PATH, "
+            "or install PyOPUS. Searched: "
+            + ", ".join(_ng2vc_search_paths(cfg) or ["<nothing — vacask binary not found>"])
         )
+    if not os.path.exists(ng2vc_path):
+        raise RuntimeError(f"Configured ng2vc_binary does not exist: {ng2vc_path!r}")
 
-    result = subprocess.run(
-        [sys.executable, ng2vc_path, spice_file, sim_file],
-        capture_output=True, text=True, timeout=60,
+    argv0 = _ng2vc_argv0(ng2vc_path)
+
+    def _attempt(args: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(argv0 + args, capture_output=True, text=True, timeout=120)
+
+    # Form A: ng2vc <in> <out>  (writes the .sim itself).
+    res_a = _attempt([spice_file, sim_file])
+    if res_a.returncode == 0 and os.path.isfile(sim_file) and os.path.getsize(sim_file) > 0:
+        log.info("ng2vc conversion via script OK: %s → %s", ng2vc_path, sim_file)
+        return
+
+    # Form B: ng2vc <in>  (writes the netlist to stdout).
+    res_b = _attempt([spice_file])
+    if res_b.returncode == 0 and res_b.stdout.strip():
+        with open(sim_file, "w", encoding="utf-8") as fh:
+            fh.write(res_b.stdout)
+        log.info("ng2vc conversion via script (stdout) OK: %s → %s", ng2vc_path, sim_file)
+        return
+
+    err = (res_a.stderr or "").strip() or (res_b.stderr or "").strip() or "(no stderr output)"
+    # Show the TAIL of the traceback — a Python traceback's actual exception
+    # message is on its last line, so head-truncation would hide the real cause.
+    err_tail = "\n".join(err.splitlines()[-12:])[-1000:]
+    raise RuntimeError(
+        f"ng2vc conversion failed using {ng2vc_path} "
+        f"(rc[in,out]={res_a.returncode}, rc[in→stdout]={res_b.returncode}):\n{err_tail}"
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"ng2vc conversion failed: {result.stderr.strip()}")
-    log.info("ng2vc conversion via script OK: %s → %s", spice_file, sim_file)
 
 
 _RE_SANITISE = re.compile(r"[^a-zA-Z0-9_]")
@@ -965,7 +1051,9 @@ def _vacask_extract_results(raw_file: str, test, analysis_tab_paths: dict):
     if not value_lst:
         return "", None
 
+    available = sorted(scalar_bucket.keys())
     scalar_strs: list[str] = []
+    n_resolved = 0
     for val_obj in value_lst:
         # 1. Direct .raw signal lookup by value name (works with VACASK meas
         #    statements and direct node-voltage reads). Try a handful of
@@ -988,6 +1076,7 @@ def _vacask_extract_results(raw_file: str, test, analysis_tab_paths: dict):
             arr = np.asarray(raw_val, dtype=float)
             # Scalar meas result → use directly; vector → take last point
             scalar_strs.append(str(float(arr) if arr.ndim == 0 else float(arr.flat[-1])))
+            n_resolved += 1
             continue
 
         # 2. Explicit measure: expression from YAML
@@ -996,18 +1085,29 @@ def _vacask_extract_results(raw_file: str, test, analysis_tab_paths: dict):
             try:
                 val = _eval_measure_expr(expr, scalar_bucket)
                 scalar_strs.append(str(float(val)))
+                n_resolved += 1
                 continue
             except Exception as exc:
                 log.warning("Measure eval error for '%s': %s", val_obj.name, exc)
                 return None, f"MEASURE_ERROR({val_obj.name}): {exc}"
 
-        # 3. Nothing found
+        # 3. Nothing found — name it AND list what the .raw actually contains, so
+        #    the naming mismatch is diagnosable (worker logs don't reach the file).
         log.warning(
-            "No value found for '%s' in VACASK .raw output. "
+            "No value found for '%s' in VACASK .raw. Available signals: %s. "
             "Add a 'meas' statement in the testbench or a 'measure:' block in the YAML.",
-            val_obj.name,
+            val_obj.name, available,
         )
         scalar_strs.append("nan")
+
+    # If not a single requested value resolved, the row was silently all-NaN
+    # before. Surface it as an error that names the signals the .raw *does*
+    # carry, so the right value/measure names are obvious from the result table.
+    if n_resolved == 0:
+        return None, (
+            f"NO_MATCHING_SIGNALS: none of {[v.name for v in value_lst]} found "
+            f"in VACASK .raw; available signals: {available[:40]}"
+        )
 
     return "MY_DATA: " + " ".join(scalar_strs), None
 

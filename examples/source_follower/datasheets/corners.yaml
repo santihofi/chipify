@@ -17,13 +17,13 @@ tests:
       max: 0.1
       typ: 0.0
       unit: 'V'
-    engine: vacask
+    engine: ngspice
   tb_sf_gain:
     gain: {}
     bandwidth:
       unit: 'Hz'
-    engine: vacask
+    engine: ngspice
     ac_signals: [outp, outn]
   tb_sf_tran:
     transient_signals: [outp, outn]
-    engine: vacask
+    engine: ngspice

@@ -102,6 +102,14 @@ class SettingsDialog(QDialog):
         self.vacask_src.addItems(["xschem", "ng2vc"])
         self.vacask_src.setCurrentText(self._cfg.get("vacask_netlist_source", "xschem"))
         form.addRow("VACASK netlist source", self.vacask_src)
+        self.ng2vc_binary = QLineEdit(self._cfg.get("ng2vc_binary", ""))
+        self.ng2vc_binary.setPlaceholderText("(auto-discover: PATH / beside vacask)")
+        self.ng2vc_binary.setToolTip(
+            "Path to the ng2vc converter (ng2vc.py), used only when 'VACASK "
+            "netlist source' is 'ng2vc'. Blank = auto-discover on PATH or in the "
+            "VACASK install next to the binary."
+        )
+        form.addRow("ng2vc converter", self.ng2vc_binary)
         self.vacask_pdk = QLineEdit(self._cfg.get("vacask_pdk_dir", ""))
         form.addRow("VACASK PDK dir", self.vacask_pdk)
         return w
@@ -175,6 +183,7 @@ class SettingsDialog(QDialog):
         cfg["simulator_engine"] = self.engine_combo.currentText()
         cfg["vacask_binary"] = self.vacask_binary.text().strip() or "vacask"
         cfg["vacask_netlist_source"] = self.vacask_src.currentText()
+        cfg["ng2vc_binary"] = self.ng2vc_binary.text().strip()
         cfg["vacask_pdk_dir"] = self.vacask_pdk.text().strip()
         cfg["process_start_method"] = self.start_method.currentText()
         cfg["chunk_size"] = "auto" if self.chunk_spin.value() == 0 else str(self.chunk_spin.value())

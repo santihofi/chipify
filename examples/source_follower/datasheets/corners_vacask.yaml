@@ -1,0 +1,16 @@
+parameters:
+  temp: [27]
+  vdd: [1.5]
+  vincm: [0.75]
+  corner_mos: ['tt']
+tests:
+  tb_sf_op_vacask:
+    engine: vacask
+    measure:
+      vd: outp - outn
+      ve: (outp + outn) / 2
+    net1:
+      unit: 'V'
+    net2:
+      unit: 'V'
+    outp: {}

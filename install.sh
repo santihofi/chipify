@@ -37,7 +37,7 @@ else
 fi
 
 # ── Python package in a virtual environment ────────────────────────────────────
-python -m venv venv && source ./venv/bin/activate && pip install .
+python -m venv venv && source ./venv/bin/activate && pip install -e .
 
 # ── Expose the commands on PATH without activating the venv ────────────────────
 # The console scripts in venv/bin carry an absolute shebang (the venv's own

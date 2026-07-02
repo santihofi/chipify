@@ -22,6 +22,7 @@ DEFAULTS: dict[str, Any] = {
     "simulator_engine": "ngspice",    # ngspice|vacask
     "vacask_binary": "vacask",        # path or PATH-resolvable name
     "vacask_netlist_source": "xschem",# xschem|ng2vc
+    "ng2vc_binary": "",               # path to ng2vc(.py); blank → auto-discover (PATH / beside vacask)
     "vacask_pdk_dir": "/foss/pdks/ihp-sg13g2/libs.tech/vacask",  # contains osdi/ and models/
     "process_start_method": "auto",   # auto|forkserver|spawn
     "chunk_size": "auto",             # auto|1|2|4|8|16|32|64|128|256
