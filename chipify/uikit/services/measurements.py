@@ -126,9 +126,10 @@ def equation_rows(
 ) -> list[EquationRow]:
     """Per-equation min/typ/max for each applied scalar equation column.
 
-    *equations* is the ``custom_equations`` list (``{name, expr}`` dicts). Only
-    equations whose column actually landed in *valid_df* (i.e. evaluated
-    successfully and carry numeric data) produce a row.
+    *equations* is the datasheet's scalar-equation list (``{name, expr}``
+    dicts, see ``equation_service.scalar_equations``). Only equations whose
+    column actually landed in *valid_df* (i.e. evaluated successfully and
+    carry numeric data) produce a row.
     """
     rows: list[EquationRow] = []
     for eq in equations or []:

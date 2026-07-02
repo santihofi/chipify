@@ -50,16 +50,24 @@ def export_histogram_latex(
 
     out_dir = _latex_dir()
     try:
-        export_latex.generate_latex_export(param, data_series, dist_type, bins, out_dir)
+        written = export_latex.generate_latex_export(
+            param, data_series, dist_type, bins, out_dir,
+        )
     except Exception as exc:  # noqa: BLE001
         log.exception("Histogram LaTeX export failed: %s", exc)
         QMessageBox.critical(parent, "TeX Export", f"LaTeX export failed:\n{exc}")
         return
+    if written is None:
+        QMessageBox.information(
+            parent, "TeX Export",
+            f"{param} carries no numeric data in this run — nothing exported.",
+        )
+        return
+    csv_path, tex_path = written
     log.info("Exported %s histogram LaTeX to %s", param, out_dir)
     QMessageBox.information(
         parent, "TeX Export",
-        f"Exported {param} to:\n  {os.path.join(out_dir, param + '_plot.tex')}\n"
-        f"  {os.path.join(out_dir, param + '_plot.csv')}",
+        f"Exported {param} to:\n  {tex_path}\n  {csv_path}",
     )
 
 

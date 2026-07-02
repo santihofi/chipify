@@ -548,10 +548,15 @@ def generate_bode_latex_export(
 
 
 def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
+    """Write ``<param>_plot.csv`` + ``.tex`` for one measurement's distribution.
+
+    Returns ``(csv_path, tex_path)``, or ``None`` when the series holds no
+    numeric data (callers must not report success then).
+    """
     import scipy.stats as stats  # only needed for the histogram fit path
     data = data_series.dropna().values
     if len(data) == 0:
-        return
+        return None
 
     # 1. Compute the histogram.
     # 'ybar interval' in PGFPlots needs the bin edges, not the centers!
@@ -635,11 +640,15 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
 
     df = pd.DataFrame(csv_dict)
     os.makedirs(output_dir, exist_ok=True)
-    csv_filename = f"{param_name}_plot.csv"
-    df.to_csv(os.path.join(output_dir, csv_filename), index=False)
+    # Measurement names may carry SPICE syntax (v(out), slashes …) — sanitise
+    # for the filesystem; titles/labels keep the original name.
+    stem = _safe_col(param_name)
+    csv_filename = f"{stem}_plot.csv"
+    csv_path = os.path.join(output_dir, csv_filename)
+    df.to_csv(csv_path, index=False)
 
     # 4. Generate the LaTeX code.
-    tex_filename = f"{param_name}_plot.tex"
+    tex_filename = f"{stem}_plot.tex"
     
     read_macros = ""
     for key in fit_params.keys():
@@ -690,5 +699,7 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
 \\end{center}
 """
 
-    with open(os.path.join(output_dir, tex_filename), 'w') as f:
+    tex_path = os.path.join(output_dir, tex_filename)
+    with open(tex_path, 'w') as f:
         f.write(tex_content)
+    return csv_path, tex_path

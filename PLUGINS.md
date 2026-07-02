@@ -499,7 +499,7 @@ The `context` object handed to every TabPlugin call is the **only supported way*
 |--------|---------|
 | `datasheet_path` | Absolute path of the selected datasheet YAML, or `None`. |
 | `datasheet_text()` | Raw YAML text (comments included); `""` when none. |
-| `specs()` | **JSON-serializable** dict of the parsed datasheet: `{"datasheet", "parameters", "tests": {tb: {"measurements": {name: {min, typ, max}}, "signals", "measure"}}}`. Designed to be dumped straight into an LLM prompt. |
+| `specs()` | **JSON-serializable** dict of the parsed datasheet: `{"datasheet", "parameters", "equations", "transient_equations", "tests": {tb: {"measurements": {name: {min, typ, max}}, "signals", "measure"}}}`. Designed to be dumped straight into an LLM prompt. |
 
 ### Netlists & testbenches
 

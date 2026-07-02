@@ -163,6 +163,8 @@ class PluginContext:
             {
               "datasheet": "corner.yaml" | None,
               "parameters": {"temp": [-40, 27, 100], ...},
+              "equations": {"gain_lin": "10 ** (gain / 20)", ...},
+              "transient_equations": {"vdiff": "v(outp) - v(outn)", ...},
               "tests": {
                 "tb_ota_gain": {
                   "measurements": {"gain": {"min": 40.0, "typ": 60.0, "max": 80.0}},
@@ -184,6 +186,15 @@ class PluginContext:
             return out
         out["parameters"] = {
             str(k): _jsonable(v) for k, v in getattr(stim, "params", {}).items()
+        }
+        # Datasheet-level custom equations (may be absent on older stims).
+        out["equations"] = {
+            eq["name"]: eq["expr"]
+            for eq in getattr(stim, "equations", None) or []
+        }
+        out["transient_equations"] = {
+            eq["name"]: eq["expr"]
+            for eq in getattr(stim, "transient_equations", None) or []
         }
         for test in getattr(stim, "tests", []) or []:
             signals = {
@@ -214,11 +225,12 @@ class PluginContext:
         stim = self._app_state.current_stim
         if stim is None:
             return out
+        from chipify.uikit.services.netlist_export import _candidate_extensions
         for test in getattr(stim, "tests", []) or []:
             text = getattr(test, "template_str", "") or ""
             if not text:
                 stem = os.path.splitext(os.path.basename(test.tb_path))[0]
-                for ext in (".spice", ".sim"):
+                for ext in _candidate_extensions(test):
                     fp = os.path.join(settings.FAST_TMP, stem + ext)
                     if os.path.isfile(fp):
                         try:

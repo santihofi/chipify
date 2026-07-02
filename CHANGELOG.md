@@ -33,6 +33,9 @@ Preparation for the initial public release.
   Dashboard's Transient cells (the main Transient tab already listed them);
   signal lists now refresh immediately when equations change, preserving the
   current selection.
+- `PluginContext.specs()` exposes the datasheet's `equations` /
+  `transient_equations` blocks; `netlists()` resolves plugin-engine netlist
+  extensions.
 - Built-in distribution plot modes registered via the PlotPlugin interface
   (`chipify/plot_plugins/`): QQ plot (normality check), ECDF with spec
   limits, and yield-vs-spec curve. User plugins with the same name override
@@ -83,6 +86,10 @@ Preparation for the initial public release.
   now logs a warning before falling back to ngspice.
 - Stale *copies* of staged VACASK `.osdi` files are refreshed when the PDK
   changes (symlinked ones always tracked the source already).
+- Histogram TeX export: measurement names with SPICE syntax (`v(out)`, …) are
+  sanitised for the output filenames, the success dialog shows the paths that
+  were actually written, and an all-NaN series reports "nothing exported"
+  instead of a false success message.
 
 ### Removed
 - SSH/remote-dispatch feature (not ready for release); preserved on the
