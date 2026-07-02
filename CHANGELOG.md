@@ -32,6 +32,13 @@ Preparation for the initial public release.
   via `settings.json`, falling back to the default structure when unset.
 
 ### Fixed
+- Multi-Plot Dashboard: cells in the right-hand grid columns were cut off at
+  the window edge. The per-cell controls row forced an ~830 px minimum cell
+  width; controls now wrap onto two rows, combos may shrink (popups still
+  show full text), and grid columns share the viewport width evenly.
+- Histogram selectors (main tab and dashboard cells) no longer offer input
+  parameters as "measurements" — a distribution of an input is just the sweep
+  grid. Inputs remain available for grouping and as scatter X/Y axes.
 - A Jinja2 template-rendering error (e.g. a parameter-name typo in a
   testbench) now fails only that testbench's row with
   `TEMPLATE_RENDER_ERROR`; previously the exception silently discarded the

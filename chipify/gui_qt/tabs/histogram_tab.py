@@ -157,7 +157,10 @@ class HistogramTab(QWidget):
             for v in test.value_lst:
                 if v.name in df.columns and v.name not in meas_names:
                     meas_names.append(v.name)
-        params = list(dict.fromkeys(meas_names + cols.all_numeric_cols))
+        # Outputs only: a histogram of an input parameter is just the sweep
+        # grid, so parameter columns are excluded (they remain available as
+        # the "Group:" dimension).
+        params = list(dict.fromkeys(meas_names + cols.output_cols))
 
         runs = ["None"] + _dl.list_history_runs(settings.OUT_DIR)
 

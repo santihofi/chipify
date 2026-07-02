@@ -100,6 +100,9 @@ class PlotCell(QFrame):
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(_all_modes())
         compact_combo(self.mode_combo, length=16)
+        # Allow the header to shrink with the cell; the popup still shows
+        # every mode's full name.
+        self.mode_combo.setMinimumWidth(96)
         header.addWidget(self.mode_combo, stretch=1)
         btn_remove = QPushButton("✕")
         btn_remove.setFixedWidth(28)
@@ -107,8 +110,13 @@ class PlotCell(QFrame):
         header.addWidget(btn_remove)
         layout.addLayout(header)
 
-        # Context controls (shown/hidden per mode).
+        # Context controls (shown/hidden per mode), split over two rows: a
+        # single row of five compact combos carries a ~830px minimum width per
+        # cell, which at two or more grid columns exceeds the dashboard
+        # viewport and pushes the right-hand cells out of view (same issue as
+        # the histogram tab's control rows, see histogram_tab._build_ui).
         self.controls = QHBoxLayout()
+        self.controls_extra = QHBoxLayout()
         self.param_combo = QComboBox()
         self.group_combo = QComboBox()
         self.dist_combo = QComboBox(); self.dist_combo.addItems(_FIT_CURVES)
@@ -129,17 +137,29 @@ class PlotCell(QFrame):
             (self.tran_signal_combo, "Signal"), (self.tran_mode_combo, "Runs"),
         ):
             combo.setToolTip(tip)
-        self._ctl_widgets = [
-            self.param_combo, self.group_combo, self.dist_combo, self.compare_combo,
-            self.bins_combo, self.zoom_check, self.x_combo, self.y_combo, self.target_combo,
-            self.tran_signal_combo, self.tran_mode_combo, self.tran_n_edit,
+        row_top = [
+            self.param_combo, self.group_combo, self.dist_combo,
+            self.x_combo, self.y_combo, self.target_combo, self.tran_signal_combo,
         ]
-        for w in self._ctl_widgets:
-            if isinstance(w, QComboBox):
-                compact_combo(w, length=8)
-            self.controls.addWidget(w)
-        self.controls.addStretch(1)
+        row_bottom = [
+            self.compare_combo, self.bins_combo, self.zoom_check,
+            self.tran_mode_combo, self.tran_n_edit,
+        ]
+        self._ctl_widgets = row_top + row_bottom
+        for row, widgets in ((self.controls, row_top),
+                             (self.controls_extra, row_bottom)):
+            for w in widgets:
+                if isinstance(w, QComboBox):
+                    compact_combo(w, length=8)
+                    # An explicit minimum overrides the ~146px minimumSizeHint
+                    # of a compact combo, letting cells share a narrow window
+                    # instead of overflowing it. Tooltips + popups keep the
+                    # full text readable.
+                    w.setMinimumWidth(64)
+                row.addWidget(w)
+            row.addStretch(1)
         layout.addLayout(self.controls)
+        layout.addLayout(self.controls_extra)
 
         self.canvas = MplCanvas(figsize=(4, 3), toolbar=False)
         layout.addWidget(self.canvas, stretch=1)
@@ -193,7 +213,10 @@ class PlotCell(QFrame):
             for v in test.value_lst:
                 if v.name in valid_df.columns and v.name not in meas:
                     meas.append(v.name)
-        params = list(dict.fromkeys(meas + cols.all_numeric_cols + list(derived_cols or [])))
+        # Histogram params: outputs only — input parameters make no sense as a
+        # distribution (they're the sweep grid); they stay in "Group by" and
+        # in the scatter X/Y axes below.
+        params = list(dict.fromkeys(meas + cols.output_cols + list(derived_cols or [])))
         xy = list(dict.fromkeys(sweep_params + meas + list(derived_cols or [])))
 
         signals = ["All Signals"]
@@ -446,6 +469,11 @@ class MultiPlotWindow(QWidget):
         cols = self.cols_spin.value()
         for i, cell in enumerate(self._cells):
             self._grid.addWidget(cell, i // cols, i % cols)
+        # Equal stretch across the active columns (and none on columns left
+        # over from a previous, larger column count) so cells share the
+        # viewport width instead of packing left.
+        for c in range(self.cols_spin.maximum()):
+            self._grid.setColumnStretch(c, 1 if c < cols else 0)
 
     def refresh_all(self) -> None:
         snap = self.data_snapshot()

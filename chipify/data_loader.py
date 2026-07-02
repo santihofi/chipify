@@ -27,9 +27,15 @@ class PlotColumns:
 
     This enforces the invariant described in context.md §3: the Corner Yield
     Matrix requires discrete inputs and must never receive continuous outputs.
+    Conversely, distribution plots (histogram) must only offer *outputs* —
+    the histogram of an input parameter is just the sweep grid, so
+    ``output_cols`` excludes every datasheet parameter column.
     """
     sweep_params: list[str] = field(default_factory=list)
     all_numeric_cols: list[str] = field(default_factory=list)
+    #: ``all_numeric_cols`` minus input-parameter columns (swept or constant)
+    #: and per-run bookkeeping — what measurement/distribution dropdowns show.
+    output_cols: list[str] = field(default_factory=list)
 
 
 # ── DataFrame helpers ─────────────────────────────────────────────────────────
@@ -134,7 +140,9 @@ def compute_plot_cols(df: pd.DataFrame, stim: Any) -> PlotColumns:
     all_numeric = [c for c in numeric_cols if not c.endswith("_pass")]
 
     sweep: list[str] = []
+    param_names: set[str] = set()
     if stim is not None:
+        param_names = set(getattr(stim, "params", {}) or {})
         for p_name, p_values in stim.params.items():
             if p_name not in df.columns:
                 continue
@@ -145,7 +153,14 @@ def compute_plot_cols(df: pd.DataFrame, stim: Any) -> PlotColumns:
             except Exception:
                 continue
 
-    return PlotColumns(sweep_params=sweep, all_numeric_cols=all_numeric)
+    # Outputs = numeric columns that are neither an input parameter (swept or
+    # constant) nor per-run bookkeeping.
+    bookkeeping = {"simulation_duration_s_total"}
+    outputs = [c for c in all_numeric
+               if c not in param_names and c not in bookkeeping]
+
+    return PlotColumns(sweep_params=sweep, all_numeric_cols=all_numeric,
+                       output_cols=outputs)
 
 
 # ── History helpers ───────────────────────────────────────────────────────────

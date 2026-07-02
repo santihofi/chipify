@@ -449,6 +449,89 @@ def test_multiplot_dashboard(window, monkeypatch):
         mp.close()
 
 
+class _SweepStim:
+    """Stim with swept input parameters and two measurements."""
+
+    def __init__(self):
+        self.tests = [_FakeTest([_FakeVal("gain", 9.0, 11.0),
+                                 _FakeVal("bw", 1e6, None)])]
+        self.params = {"temp": [-40, 27, 85], "vdd": [1.7, 1.8, 1.9]}
+
+
+def _sweep_df():
+    return pd.DataFrame({
+        "temp": [-40, 27, 85] * 3,
+        "vdd": [1.7] * 3 + [1.8] * 3 + [1.9] * 3,
+        "gain": [10.0 + i * 0.05 for i in range(9)],
+        "bw": [2e6 + i * 1e4 for i in range(9)],
+        "gain_pass": [True] * 9,
+        "bw_pass": [True] * 9,
+        "sim_error": ["None"] * 9,
+    })
+
+
+def test_multiplot_cells_fit_viewport(qt_app, window, monkeypatch):
+    """Regression: right-column cells were pushed past the viewport because a
+    single controls row gave each cell an ~830px minimum width."""
+    from PySide6.QtWidgets import QScrollArea
+
+    from chipify import app_config
+    monkeypatch.setattr(app_config, "load_config", lambda: {})
+    monkeypatch.setattr(app_config, "save_config", lambda _cfg: None)
+
+    window.show_results(_sweep_df(), _SweepStim(), switch_tab=False)
+    from chipify.gui_qt.multiplot_window import MultiPlotWindow
+    mp = MultiPlotWindow(window.app_state, window.plot_theme)
+    try:
+        while len(mp._cells) < 4:
+            mp._add_cell()
+        mp.resize(1100, 800)
+        mp.show()
+        qt_app.processEvents()
+        viewport = mp.findChild(QScrollArea).viewport()
+
+        for ncols in (2, 3, 4):
+            mp.cols_spin.setValue(ncols)
+            qt_app.processEvents()
+            for i, cell in enumerate(mp._cells):
+                right = cell.geometry().x() + cell.geometry().width()
+                assert right <= viewport.width(), (
+                    f"cell {i} cut off at {ncols} cols: "
+                    f"right={right} viewport={viewport.width()}"
+                )
+    finally:
+        mp.close()
+
+
+def test_histogram_param_options_exclude_inputs(window):
+    """Regression: input parameters (sweep grid) offered as histogram
+    'measurements' — a distribution of an input makes no sense."""
+    df, stim = _sweep_df(), _SweepStim()
+    window.show_results(df, stim, switch_tab=False)
+
+    tab = window.histogram_tab
+    tab._repopulate_options(df, stim)
+    items = [tab.param_combo.itemText(i) for i in range(tab.param_combo.count())]
+    assert "gain" in items and "bw" in items
+    assert "temp" not in items and "vdd" not in items
+    # Inputs remain available as the grouping dimension.
+    groups = [tab.group_combo.itemText(i) for i in range(tab.group_combo.count())]
+    assert "temp" in groups
+
+    # Same rule for dashboard plot cells; scatter X/Y keeps the inputs.
+    from chipify.gui_qt.multiplot_window import PlotCell
+    cell = PlotCell(window.app_state, window.plot_theme, lambda _c: None)
+    try:
+        cell._populate(df, stim, ["temp", "vdd"], [])
+        cell_params = [cell.param_combo.itemText(i)
+                       for i in range(cell.param_combo.count())]
+        assert "gain" in cell_params and "temp" not in cell_params
+        xy = [cell.x_combo.itemText(i) for i in range(cell.x_combo.count())]
+        assert "temp" in xy and "gain" in xy
+    finally:
+        cell.deleteLater()
+
+
 def test_figure_export_uses_exporter(window, monkeypatch, tmp_path):
     from chipify.gui_qt.services import figure_export
     out = tmp_path / "hist.png"
