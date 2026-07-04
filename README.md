@@ -11,6 +11,7 @@
 Institute for Integrated Circuits and Quantum Computing, Johannes Kepler University (JKU), Linz, Austria
 
 [Link to repository](https://github.com/santihofi/chipify/)
+[Link to Youtube Channel (tutorials following soon)](https://www.youtube.com/@chipify-eda)
 
 > [!WARNING]
 > This repository is a Work in Progress.
