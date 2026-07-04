@@ -266,13 +266,5 @@ def main():
         except Exception as exc:
             print(f"[!] Markdown report failed: {exc}")
 
-
-def run_gui():
-    """Starts the PySide6 (Qt) desktop GUI for chipify."""
-    from chipify.gui_qt.app import main as _gui_main
-    print("[*] Starting Chipify Desktop GUI...")
-    _gui_main()
-
-
 if __name__ == "__main__":
     main()

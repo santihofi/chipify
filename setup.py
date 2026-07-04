@@ -51,10 +51,7 @@ setup(
     entry_points={
         "console_scripts": [
             "chipify-cli=chipify.cli:main",
-            # `chipify` launches the PySide6 (Qt) desktop GUI. `chipify-qt` is a
-            # retained alias for the same app.
-            "chipify=chipify.cli:run_gui",
-            "chipify-qt=chipify.gui_qt.app:main",
+            "chipify=chipify.gui_qt.app:main",
         ]
     },
     classifiers=[

@@ -47,8 +47,7 @@ python -m venv venv && source ./venv/bin/activate && pip install -e .
 VENV_BIN="$(cd venv/bin && pwd)"
 USER_BIN="${HOME}/.local/bin"
 mkdir -p "${USER_BIN}"
-ln -sf "${VENV_BIN}/chipify-qt"  "${USER_BIN}/chipify"      # Qt GUI = default
-ln -sf "${VENV_BIN}/chipify-qt"  "${USER_BIN}/chipify-qt"
+ln -sf "${VENV_BIN}/chipify"  "${USER_BIN}/chipify"      # Qt GUI = default
 ln -sf "${VENV_BIN}/chipify-cli" "${USER_BIN}/chipify-cli"
 
 # Make sure ~/.local/bin is on PATH for future shells (bash and zsh).
@@ -59,6 +58,6 @@ for RC in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
     grep -qsF '.local/bin' "${RC}" || printf '%s\n' "${PATH_LINE}" >> "${RC}"
 done
 
-echo "[*] Linked chipify, chipify-qt, chipify-cli into ${USER_BIN} (chipify -> Qt GUI)."
+echo "[*] Linked chipify and chipify-cli into ${USER_BIN} (chipify -> Qt GUI)."
 echo "    Run 'chipify' in a new shell, or load it now with:"
 echo "        export PATH=\"\$HOME/.local/bin:\$PATH\""
