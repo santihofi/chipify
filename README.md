@@ -79,15 +79,7 @@ It is highly recommended to install and run Chipify inside the [IIC-OSIC-TOOLS](
 
 ```bash
 git clone https://github.com/santihofi/chipify.git
-cd chipify
-
-python -m venv venv
-# Linux/macOS:
-source venv/bin/activate
-# Windows (PowerShell):
-venv\Scripts\Activate.ps1
-
-pip install .
+bash install.sh
 ```
 
 Optional extras:
