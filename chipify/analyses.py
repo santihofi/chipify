@@ -39,9 +39,9 @@ ngspice tab layout (paired, written by ``wrdata``)
 from __future__ import annotations
 
 import logging
-import os
 import re
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -76,7 +76,8 @@ def _write_tab_columns(out_path: str, x_vec: np.ndarray,
                                                for v in y_vecs]
     n = min(len(c) for c in cols)
     try:
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as fh:
             for i in range(n):
                 fh.write("  ".join(f"{c[i]:.6e}" for c in cols) + "\n")
@@ -183,14 +184,14 @@ class TransientAnalysis(Analysis):
                 cols = min(ncols - 1, n_sigs)
                 for i in range(cols):
                     result[self.signals[i]] = df.iloc[:, i + 1]
-            os.makedirs(os.path.dirname(dest_csv), exist_ok=True)
+            Path(dest_csv).parent.mkdir(parents=True, exist_ok=True)
             result.to_csv(dest_csv, index=False)
         except Exception as exc:
             log.warning("Could not persist %s data %s → %s: %s",
                         self.kind, src_tab, dest_csv, exc)
         finally:
             try:
-                os.remove(src_tab)
+                Path(src_tab).unlink(missing_ok=True)
             except OSError:
                 pass
 
@@ -306,14 +307,14 @@ class ACAnalysis(Analysis):
                 cols = min(ncols - 1, n_yvecs)
                 for i in range(cols):
                     result[col_names[i]] = df.iloc[:, i + 1]
-            os.makedirs(os.path.dirname(dest_csv), exist_ok=True)
+            Path(dest_csv).parent.mkdir(parents=True, exist_ok=True)
             result.to_csv(dest_csv, index=False)
         except Exception as exc:
             log.warning("Could not persist ac data %s → %s: %s",
                         src_tab, dest_csv, exc)
         finally:
             try:
-                os.remove(src_tab)
+                Path(src_tab).unlink(missing_ok=True)
             except OSError:
                 pass
 

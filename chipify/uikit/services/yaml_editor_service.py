@@ -8,8 +8,8 @@ files from a starter template.
 """
 from __future__ import annotations
 
-import os
 import re
+from pathlib import Path
 from typing import Any
 
 _RE_BAD_FILENAME = re.compile(r'[\\/:*?"<>|]+')
@@ -90,13 +90,13 @@ def create_datasheet(in_dir: str, name: str) -> str:
     if not base.lower().endswith((".yaml", ".yml")):
         base += ".yaml"
 
-    os.makedirs(in_dir, exist_ok=True)
-    path = os.path.join(in_dir, base)
-    if os.path.exists(path):
+    in_dir = Path(in_dir)
+    in_dir.mkdir(parents=True, exist_ok=True)
+    path = in_dir / base
+    if path.exists():
         raise FileExistsError(f"{base} already exists in {in_dir}.")
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(new_datasheet_template())
-    return path
+    path.write_text(new_datasheet_template(), encoding="utf-8")
+    return str(path)
 
 
 # ── YAML structural helpers ───────────────────────────────────────────────────

@@ -11,7 +11,7 @@ dispatch, and all user-facing messaging so the tab methods stay thin.
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 
 from PySide6.QtWidgets import QMessageBox, QWidget
 
@@ -28,7 +28,7 @@ _OVERLAY = {
 
 
 def _latex_dir() -> str:
-    return os.path.join(settings.OUT_DIR, "latex")
+    return str(Path(settings.OUT_DIR) / "latex")
 
 
 def export_histogram_latex(

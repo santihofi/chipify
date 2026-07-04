@@ -12,10 +12,10 @@ Page structure (strict A4 portrait throughout):
   4. Correlation    – white-background Pearson heatmap
 """
 
-import os
 import datetime
 import math
 import textwrap
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -198,7 +198,7 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim, sim_durat
     ax.set_ylim(0, 1)
 
     # ── Title block ──────────────────────────────────────────────────────────
-    yaml_name = os.path.basename(yaml_path) if yaml_path else "Unknown"
+    yaml_name = Path(yaml_path).name if yaml_path else "Unknown"
     ax.text(0.5, 0.955, yaml_name,
             ha="center", va="top", fontsize=12, weight="bold", color=DGRAY)
     ax.text(0.5, 0.925,
@@ -597,9 +597,10 @@ def _add_plugin_pages(pdf: PdfPages, valid_df: pd.DataFrame, stim):
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_path = os.path.join(out_dir, f"report_{ts}.pdf")
+    pdf_path = out_dir / f"report_{ts}.pdf"
 
     prepared = _build_global_pass(df)
     valid_df = prepared[prepared["sim_error"] == "None"]
@@ -612,4 +613,4 @@ def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
         _add_correlation(pdf, valid_df)
         _add_plugin_pages(pdf, valid_df, stim)
 
-    return pdf_path
+    return str(pdf_path)

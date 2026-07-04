@@ -19,8 +19,8 @@ callable, which keeps this module unit-testable headlessly.
 from __future__ import annotations
 
 import logging
-import os
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
@@ -177,7 +177,7 @@ class PluginContext:
         """
         path = self._get_yaml_path()
         out: dict[str, Any] = {
-            "datasheet": os.path.basename(path) if path else None,
+            "datasheet": Path(path).name if path else None,
             "parameters": {},
             "tests": {},
         }
@@ -229,14 +229,13 @@ class PluginContext:
         for test in getattr(stim, "tests", []) or []:
             text = getattr(test, "template_str", "") or ""
             if not text:
-                stem = os.path.splitext(os.path.basename(test.tb_path))[0]
+                stem = Path(test.tb_path).stem
+                fast_tmp = Path(settings.FAST_TMP)
                 for ext in _candidate_extensions(test):
-                    fp = os.path.join(settings.FAST_TMP, stem + ext)
-                    if os.path.isfile(fp):
+                    fp = fast_tmp / (stem + ext)
+                    if fp.is_file():
                         try:
-                            with open(fp, "r", encoding="utf-8",
-                                      errors="replace") as fh:
-                                text = fh.read()
+                            text = fp.read_text(encoding="utf-8", errors="replace")
                         except OSError:
                             text = ""
                         break
@@ -250,10 +249,11 @@ class PluginContext:
         stim = self._app_state.current_stim
         if stim is None:
             return out
+        tb_dir = Path(settings.TB_DIR)
         for test in getattr(stim, "tests", []) or []:
-            path = os.path.join(settings.TB_DIR, test.tb_path + ".sch")
-            if os.path.isfile(path):
-                out[test.tb_path] = os.path.abspath(path)
+            path = tb_dir / (test.tb_path + ".sch")
+            if path.is_file():
+                out[test.tb_path] = str(path.resolve())
         return out
 
     # ── History runs ──────────────────────────────────────────────────────────

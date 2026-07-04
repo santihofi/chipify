@@ -18,9 +18,9 @@ No tkinter imports.
 """
 from __future__ import annotations
 
-import glob
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -49,70 +49,71 @@ def resolve_analysis_dir(df: pd.DataFrame, out_dir: str, kind: str,
     5. Newest sub-directory under ``{out_dir}/analysis_data/{kind}/``.
     6. (transient only) newest sub-directory under the legacy ``{out_dir}/tran_data/``.
     """
+    out_path = Path(out_dir)
+
     # 1. DataFrame attribute set by the live simulation run.
     if hasattr(df, "attrs"):
         adirs = df.attrs.get("analysis_dirs", {})
         if isinstance(adirs, dict):
             d = str(adirs.get(kind, "") or "")
-            if d and os.path.isdir(d):
+            if d and Path(d).is_dir():
                 return d
         # 2. Back-compat alias for transient.
         if kind == "transient":
             d = str(df.attrs.get("tran_dir", "") or "")
-            if d and os.path.isdir(d):
+            if d and Path(d).is_dir():
                 return d
 
     # 3. History run's meta sidecar.
     if isinstance(meta, dict):
         meta_adirs = meta.get("analysis_dirs", {})
         d = str(meta_adirs.get(kind, "") or "") if isinstance(meta_adirs, dict) else ""
-        if d and os.path.isdir(d):
+        if d and Path(d).is_dir():
             return d
         if kind == "transient":
             d = str(meta.get("tran_dir", "") or "")
-            if d and os.path.isdir(d):
+            if d and Path(d).is_dir():
                 return d
 
     # 4. Pointer files.
-    pointers = [os.path.join(out_dir, "analysis_data", kind, ".latest")]
+    pointers = [out_path / "analysis_data" / kind / ".latest"]
     if kind == "transient":
-        pointers.append(os.path.join(out_dir, "tran_data", ".latest"))
+        pointers.append(out_path / "tran_data" / ".latest")
     for ptr in pointers:
-        if os.path.exists(ptr):
+        if ptr.exists():
             try:
-                with open(ptr, encoding="utf-8") as fh:
-                    d = fh.read().strip()
-                if d and os.path.isdir(d):
+                d = ptr.read_text(encoding="utf-8").strip()
+                if d and Path(d).is_dir():
                     return d
             except Exception:
                 pass
 
     # 5. Newest timestamped subdir under analysis_data/<kind>/.
-    base = os.path.join(out_dir, "analysis_data", kind)
-    newest = _newest_subdir(base)
+    newest = _newest_subdir(out_path / "analysis_data" / kind)
     if newest:
         return newest
 
     # 6. Legacy transient location.
     if kind == "transient":
-        legacy = _newest_subdir(os.path.join(out_dir, "tran_data"))
+        legacy = _newest_subdir(out_path / "tran_data")
         if legacy:
             return legacy
 
     return ""
 
 
-def _newest_subdir(base: str) -> str:
-    if not os.path.isdir(base):
+def _newest_subdir(base: str | os.PathLike[str]) -> str:
+    base = Path(base)
+    if not base.is_dir():
         return ""
     subdirs = [
-        d for d in os.listdir(base)
-        if os.path.isdir(os.path.join(base, d)) and not d.startswith(".")
+        d for d in base.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
     ]
     if not subdirs:
         return ""
-    subdirs.sort(reverse=True)
-    return os.path.join(base, subdirs[0])
+    subdirs.sort(key=lambda p: p.name, reverse=True)
+    return str(subdirs[0])
 
 
 def list_analysis_signals(adir: str, kind: str) -> list[str]:
@@ -123,12 +124,12 @@ def list_analysis_signals(adir: str, kind: str) -> list[str]:
     helper collapses them back to ``<sig>`` so the GUI picker shows one entry
     per requested signal. The Bode plotter then reads both columns by suffix.
     """
-    if not adir or not os.path.isdir(adir):
+    if not adir or not Path(adir).is_dir():
         return []
 
     x_cols = {"time", "frequency", "sweep", "run_id"}
     signals: set[str] = set()
-    for fname in glob.glob(os.path.join(adir, "run_*.csv")):
+    for fname in Path(adir).glob("run_*.csv"):
         try:
             header = pd.read_csv(fname, nrows=0)
         except Exception:
@@ -161,8 +162,8 @@ def load_analysis_df(
     run_id_set = set(run_ids)
     chunks: list[pd.DataFrame] = []
 
-    for fname in glob.glob(os.path.join(adir, "run_*.csv")):
-        rid = os.path.basename(fname)[4:].split("__", 1)[0]
+    for fname in Path(adir).glob("run_*.csv"):
+        rid = fname.name[4:].split("__", 1)[0]
         if rid not in run_id_set:
             continue
         try:

@@ -122,6 +122,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Type
 
 if TYPE_CHECKING:
@@ -133,7 +134,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("chipify.plugins")
 
 _PLUGIN_DIR_ENV = "CHIPIFY_PLUGINS"
-_DEFAULT_PLUGIN_DIR = os.path.join(os.path.expanduser("~"), ".chipify", "plugins")
+_DEFAULT_PLUGIN_DIR = str(Path.home() / ".chipify" / "plugins")
 _CURRENT_API_VERSION = "1"
 
 _plot_plugins:       list[Type["PlotPlugin"]]       | None = None
@@ -432,7 +433,7 @@ def _load_module_from_file(path: str):
     """Import a Python file as a module.  Returns the module or None on error."""
     try:
         spec = importlib.util.spec_from_file_location(
-            f"_chipify_plugin_{os.path.basename(path)}", path
+            f"_chipify_plugin_{Path(path).name}", path
         )
         mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -446,14 +447,14 @@ def _discover(base_class: type) -> list[type]:
     """Scan the plugin directory and return all subclasses of *base_class*."""
     found: list[type] = []
     seen_names: set[str] = set()
-    plugin_dir = _plugin_dir()
-    if not os.path.isdir(plugin_dir):
+    plugin_dir = Path(_plugin_dir())
+    if not plugin_dir.is_dir():
         return found
 
-    for filename in sorted(os.listdir(plugin_dir)):
-        if not filename.endswith(".py"):
+    for fpath in sorted(plugin_dir.iterdir(), key=lambda p: p.name):
+        if fpath.suffix != ".py":
             continue
-        mod = _load_module_from_file(os.path.join(plugin_dir, filename))
+        mod = _load_module_from_file(fpath)
         if mod is None:
             continue
         for attr_name in dir(mod):
@@ -469,7 +470,7 @@ def _discover(base_class: type) -> list[type]:
                     if plugin_name in seen_names:
                         log.warning(
                             "Duplicate plugin name %r in %s – skipping.",
-                            plugin_name, filename,
+                            plugin_name, fpath.name,
                         )
                         continue
                     seen_names.add(plugin_name)
@@ -481,7 +482,7 @@ def _discover(base_class: type) -> list[type]:
                             plugin_name, api_ver, _CURRENT_API_VERSION,
                         )
                     found.append(obj)
-                    log.info("Loaded plugin: %s from %s", plugin_name, filename)
+                    log.info("Loaded plugin: %s from %s", plugin_name, fpath.name)
             except Exception:
                 pass
     return found

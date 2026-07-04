@@ -11,9 +11,8 @@ controllers call back into.
 """
 from __future__ import annotations
 
-import glob
 import logging
-import os
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
@@ -414,8 +413,8 @@ class MainWindow(QMainWindow):
         self.refresh_history()
 
     def open_output_folder(self) -> None:
-        os.makedirs(settings.OUT_DIR, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(settings.OUT_DIR))
+        Path(settings.OUT_DIR).mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(settings.OUT_DIR)))
 
     def export_pdf(self) -> None:
         df = self.app_state.current_df
@@ -428,7 +427,7 @@ class MainWindow(QMainWindow):
             from chipify import pdf_export
             path = pdf_export.generate_pdf_report(
                 df, stim, self.current_yaml_path,
-                os.path.join(settings.OUT_DIR, "reports"),
+                Path(settings.OUT_DIR) / "reports",
                 sim_duration_sec=self.app_state.last_sim_duration_sec,
             )
         except Exception as exc:  # noqa: BLE001
@@ -436,7 +435,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export PDF", f"Failed to generate PDF:\n{exc}")
             return
         self.set_status("PDF saved to out/reports/", "#2ecc71")
-        QMessageBox.information(self, "Export PDF", f"Report saved as:\n{os.path.basename(path)}")
+        QMessageBox.information(self, "Export PDF", f"Report saved as:\n{Path(path).name}")
 
     # ── Selectors ─────────────────────────────────────────────────────────────
 
@@ -446,14 +445,15 @@ class MainWindow(QMainWindow):
         name = self.datasheet_combo.currentText()
         if not name or name == self.NO_DATASHEETS:
             return None
-        return os.path.join(settings.IN_DIR, name)
+        return str(Path(settings.IN_DIR) / name)
 
     def refresh_datasheets(self) -> None:
         """Rescan the input folder for ``*.yaml`` / ``*.yml`` datasheets."""
+        in_dir = Path(settings.IN_DIR)
         files = sorted(
-            os.path.basename(p)
+            p.name
             for ext in ("*.yaml", "*.yml")
-            for p in glob.glob(os.path.join(settings.IN_DIR, ext))
+            for p in in_dir.glob(ext)
         )
         self.datasheet_combo.blockSignals(True)
         self.datasheet_combo.clear()

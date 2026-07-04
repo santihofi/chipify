@@ -34,7 +34,7 @@ Usage
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 
 import yaml
 
@@ -42,7 +42,7 @@ from chipify import settings
 
 log = logging.getLogger("chipify.project_config")
 
-PROJECT_FILE = os.path.join(settings.PROJECT_ROOT, "project.yaml")
+PROJECT_FILE = Path(settings.PROJECT_ROOT) / "project.yaml"
 
 _ALLOWED_KEYS = {
     "name",
@@ -61,7 +61,7 @@ def load() -> dict:
 
     Returns an empty dict if the file does not exist or cannot be parsed.
     """
-    if not os.path.exists(PROJECT_FILE):
+    if not PROJECT_FILE.exists():
         return {}
     try:
         with open(PROJECT_FILE, "r", encoding="utf-8") as f:

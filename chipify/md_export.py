@@ -18,7 +18,7 @@ Usage (programmatic):
 from __future__ import annotations
 import datetime
 import math
-import os
+from pathlib import Path
 
 import pandas as pd
 
@@ -123,7 +123,7 @@ def generate_md_report(
     total, crashes, valid, passed, yield_ = (
         s.total, s.crashes, s.valid, s.passed, s.yield_pct)
 
-    yaml_name = os.path.basename(yaml_path)
+    yaml_name = Path(yaml_path).name
     now       = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     yield_badge = "PASS" if yield_ == 100.0 else ("WARN" if yield_ > 0 else "FAIL")
@@ -185,7 +185,7 @@ def generate_md_report(
         pass
 
     content = "\n".join(lines)
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(content)
+    out_path = Path(output_path)
+    out_path.resolve().parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(content, encoding="utf-8")
     return output_path

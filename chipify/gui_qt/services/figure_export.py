@@ -10,7 +10,7 @@ from :func:`chipify.plugin_loader.get_exporter_plugins`.
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
@@ -39,7 +39,7 @@ def export_figure(
     if not path:
         return
 
-    ext = os.path.splitext(path)[1].lstrip(".").lower()
+    ext = Path(path).suffix.lstrip(".").lower()
     exporter_cls = by_ext.get(ext)
     if exporter_cls is None:
         exporter_cls = next((e for e in exporters if e.name in selected), exporters[0])

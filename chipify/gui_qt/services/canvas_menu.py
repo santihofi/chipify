@@ -10,7 +10,7 @@ itself is reused unchanged from that module's pure functions
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QFileDialog, QMenu, QMessageBox, QWidget
@@ -57,7 +57,7 @@ def _export(parent: QWidget, test, row, run_id: str, templates_dir: str) -> None
         return
 
     ext = netlist_export.engine_extension(test)
-    stem = os.path.splitext(os.path.basename(test.tb_path))[0]
+    stem = Path(test.tb_path).stem
     path, _ = QFileDialog.getSaveFileName(
         parent,
         f"Export netlist for run #{run_id}",

@@ -6,16 +6,16 @@ Config file : settings.json  in PROJECT_ROOT
 Log file    : out/chipify.log (rotating, max 2 MB × 3 files)
 """
 
-import os
 import json
 import logging
 import logging.handlers
+from pathlib import Path
 from typing import Any
 
 from chipify import settings
 
-CONFIG_PATH = os.path.join(settings.PROJECT_ROOT, "settings.json")
-LOG_PATH    = os.path.join(settings.OUT_DIR, "chipify.log")
+CONFIG_PATH = Path(settings.PROJECT_ROOT) / "settings.json"
+LOG_PATH    = Path(settings.OUT_DIR) / "chipify.log"
 
 DEFAULTS: dict[str, Any] = {
     "num_cores": None,                # None → auto-detect via util.get_num_cores()
@@ -56,7 +56,7 @@ def setup_logging(level: int = logging.DEBUG) -> None:
     if _logging_ready:
         return
 
-    os.makedirs(settings.OUT_DIR, exist_ok=True)
+    Path(settings.OUT_DIR).mkdir(parents=True, exist_ok=True)
 
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
@@ -99,9 +99,9 @@ def load_config() -> dict[str, Any]:
     global _config_cache, _config_mtime
 
     current_mtime: float | None = None
-    if os.path.exists(CONFIG_PATH):
+    if CONFIG_PATH.exists():
         try:
-            current_mtime = os.path.getmtime(CONFIG_PATH)
+            current_mtime = CONFIG_PATH.stat().st_mtime
         except OSError:
             pass
 

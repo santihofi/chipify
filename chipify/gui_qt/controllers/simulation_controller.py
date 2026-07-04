@@ -11,7 +11,7 @@ cross-thread Qt signals marshal to the GUI thread on their own.
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QThread
@@ -50,7 +50,7 @@ class SimulationController(QObject):
         selected = self.window.datasheet_combo.currentText()
         if not selected or selected == self.window.NO_DATASHEETS:
             return
-        yaml_path = os.path.join(settings.IN_DIR, selected)
+        yaml_path = str(Path(settings.IN_DIR) / selected)
         log.info("SimulationController.start: %s", selected)
 
         # Persist any unsaved editor edits so the sweep runs against what the

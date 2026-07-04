@@ -23,6 +23,7 @@ import itertools
 import time
 import logging
 import datetime
+from pathlib import Path
 from multiprocessing import get_context
 
 import pandas as pd
@@ -143,15 +144,15 @@ def _persist_analyses(analyses, analysis_tab_paths, analysis_dirs,
             continue
 
         reason = ""
-        if not os.path.exists(tab):
+        if not Path(tab).exists():
             reason = (
                 f"{eng_name} wrote no {an.kind} tab to capture "
                 f"(does the testbench run its .{an.kind} analysis?)"
             )
         else:
-            dest_csv = os.path.join(dest_dir, f"run_{run_id}__{tb_safe}.csv")
+            dest_csv = Path(dest_dir) / f"run_{run_id}__{tb_safe}.csv"
             an.persist_to_csv(tab, dest_csv)
-            if not os.path.exists(dest_csv):
+            if not dest_csv.exists():
                 reason = (
                     f"{eng_name} wrote an empty/unreadable {an.kind} tab "
                     f"(capture vectors were empty)"
@@ -277,9 +278,11 @@ def _simulate_single_case(params, tests, engine_for,
         for an in analyses:
             if not analysis_dirs.get(an.kind):
                 continue
-            tab = os.path.join(
-                settings.FAST_TMP,
-                f"sim_{pid}_{run_id}_{tb_safe}_{an.kind}.tab",
+            # Kept as str: this path is baked into the rendered netlist (ngspice
+            # wrdata target) and travels through the engine as a plain path.
+            tab = str(
+                Path(settings.FAST_TMP)
+                / f"sim_{pid}_{run_id}_{tb_safe}_{an.kind}.tab"
             )
             render_kwargs[an.jinja_var()] = tab
             analysis_tab_paths[an.kind] = tab
@@ -447,9 +450,8 @@ def generate_templates(stim, templates_dir: str = "") -> None:
         try:
             if templates_dir:
                 safe = test.tb_path.replace("/", "__").replace("\\", "__")
-                fp = os.path.join(templates_dir, safe + ext)
-                with open(fp, "r", encoding="utf-8") as fh:
-                    test.template_str = fh.read()
+                fp = Path(templates_dir) / (safe + ext)
+                test.template_str = fp.read_text(encoding="utf-8")
             else:
                 test.template_str = engine.generate_test_template(test)
         except InterruptedError:
@@ -498,17 +500,17 @@ def write_analysis_pointers(analysis_dirs: dict) -> None:
     restart; the legacy ``tran_data/.latest`` pointer is also kept for
     transient so older consumers keep working.
     """
+    out_dir = Path(settings.OUT_DIR)
     for kind, d in (analysis_dirs or {}).items():
         if not d:
             continue
-        targets = [os.path.join(settings.OUT_DIR, "analysis_data", kind, ".latest")]
+        targets = [out_dir / "analysis_data" / kind / ".latest"]
         if kind == "transient":
-            targets.append(os.path.join(settings.OUT_DIR, "tran_data", ".latest"))
+            targets.append(out_dir / "tran_data" / ".latest")
         for ptr in targets:
             try:
-                os.makedirs(os.path.dirname(ptr), exist_ok=True)
-                with open(ptr, "w", encoding="utf-8") as fh:
-                    fh.write(d)
+                ptr.parent.mkdir(parents=True, exist_ok=True)
+                ptr.write_text(str(d), encoding="utf-8")
             except Exception as exc:
                 log.warning("Could not write %s pointer %s: %s", kind, ptr, exc)
 
@@ -581,11 +583,11 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
                 any(a.kind == kind for a in getattr(t, "analyses", []) or [])
                 for t in stim.tests
             ):
-                d = os.path.join(
-                    settings.OUT_DIR, "analysis_data", kind, sim_timestamp,
-                )
-                os.makedirs(d, exist_ok=True)
-                analysis_dirs[kind] = d
+                d = Path(settings.OUT_DIR) / "analysis_data" / kind / sim_timestamp
+                d.mkdir(parents=True, exist_ok=True)
+                # Stored as str: rides df.attrs and is JSON-serialised into the
+                # run's .meta.json sidecar.
+                analysis_dirs[kind] = str(d)
                 log.info("%s store: %s", kind, d)
 
         results = []

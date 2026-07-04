@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 from jinja2 import StrictUndefined, Template
 
@@ -53,26 +54,26 @@ def _candidate_extensions(test) -> tuple[str, ...]:
     return tuple(exts)
 
 
-def persist_templates(stim, dest_dir: str) -> str:
+def persist_templates(stim, dest_dir: str | os.PathLike[str]) -> str:
     """Write every test's in-memory Jinja2 template into *dest_dir*.
 
     File naming matches ``simulator.generate_templates(templates_dir=...)``
     (``<safe_tb><.spice|.sim>``), so the directory is both the faithful
     source for per-sample netlist exports and directly reusable for re-runs.
 
-    Returns *dest_dir* if at least one template was written, else "".
+    Returns *dest_dir* (as a str) if at least one template was written, else "".
     """
+    dest_dir = Path(dest_dir)
     wrote_any = False
     for test in getattr(stim, "tests", []) or []:
         text = getattr(test, "template_str", "") or ""
         if not text:
             continue
-        os.makedirs(dest_dir, exist_ok=True)
-        fp = os.path.join(dest_dir, _safe_tb(test.tb_path) + engine_extension(test))
-        with open(fp, "w", encoding="utf-8") as fh:
-            fh.write(text)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        fp = dest_dir / (_safe_tb(test.tb_path) + engine_extension(test))
+        fp.write_text(text, encoding="utf-8")
         wrote_any = True
-    return dest_dir if wrote_any else ""
+    return str(dest_dir) if wrote_any else ""
 
 
 def resolve_template_text(test, templates_dir: str = "") -> str:
@@ -87,25 +88,25 @@ def resolve_template_text(test, templates_dir: str = "") -> str:
     ``""`` if none exists (no simulation ran in this project yet).
     """
     if templates_dir:
+        tdir = Path(templates_dir)
         safe = _safe_tb(test.tb_path)
         for ext in _candidate_extensions(test):
-            fp = os.path.join(templates_dir, safe + ext)
-            if os.path.isfile(fp):
+            fp = tdir / (safe + ext)
+            if fp.is_file():
                 try:
-                    with open(fp, "r", encoding="utf-8", errors="replace") as fh:
-                        return fh.read()
+                    return fp.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     break
 
     text = getattr(test, "template_str", "") or ""
     if not text:
-        stem = os.path.splitext(os.path.basename(test.tb_path))[0]
+        stem = Path(test.tb_path).stem
+        fast_tmp = Path(settings.FAST_TMP)
         for ext in _candidate_extensions(test):
-            fp = os.path.join(settings.FAST_TMP, stem + ext)
-            if os.path.isfile(fp):
+            fp = fast_tmp / (stem + ext)
+            if fp.is_file():
                 try:
-                    with open(fp, "r", encoding="utf-8", errors="replace") as fh:
-                        text = fh.read()
+                    text = fp.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     text = ""
                 break

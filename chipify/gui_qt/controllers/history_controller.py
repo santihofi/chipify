@@ -9,6 +9,7 @@ into the window via ``show_results``.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject
@@ -37,8 +38,7 @@ class HistoryController(QObject):
         yaml_path = self.window.current_yaml_path
         yaml_name = None
         if yaml_path:
-            import os
-            yaml_name = os.path.basename(yaml_path)
+            yaml_name = Path(yaml_path).name
 
         runs = _dl.list_history_runs(settings.OUT_DIR, yaml_name=yaml_name)
 

@@ -4,7 +4,7 @@
 Writes the failed runs of a results DataFrame to a CSV and generates a ready-to-run
 SPICE deck for the worst-case failure, so it can be re-simulated in isolation.
 """
-import os
+from pathlib import Path
 
 
 def export_fails(df, stim, out_dir):
@@ -12,22 +12,23 @@ def export_fails(df, stim, out_dir):
 
     Returns the number of failing runs found (0 if none / no ``global_pass`` column).
     """
-    os.makedirs(out_dir, exist_ok=True)
-    
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     if 'global_pass' not in df.columns:
         return 0
-        
+
     fails_df = df[df['global_pass'] == False]
-    
+
     if fails_df.empty:
         return 0
-        
+
     # 1. Save all failing runs as a small CSV
-    csv_path = os.path.join(out_dir, "failed_runs.csv")
+    csv_path = out_dir / "failed_runs.csv"
     fails_df.to_csv(csv_path, index=False)
 
     # 2. Generate a ready-to-run SPICE deck for the first failing run
-    spice_path = os.path.join(out_dir, "debug_worst_case.spice")
+    spice_path = out_dir / "debug_worst_case.spice"
     with open(spice_path, 'w') as f:
         row = fails_df.iloc[0]
         # The run_id column is the simulator's identifier; the DataFrame

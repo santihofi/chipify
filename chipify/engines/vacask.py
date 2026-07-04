@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 from chipify import app_config, settings
 from chipify.engines.abort import is_aborted
@@ -38,8 +39,8 @@ def _resolve_vacask_bin(cfg: dict) -> "str | None":
     is resolved on PATH. Returns None when nothing resolves.
     """
     name = (cfg.get("vacask_binary") or "vacask").strip()
-    if os.path.isabs(name):
-        return name if os.path.exists(name) else None
+    if Path(name).is_absolute():
+        return name if Path(name).exists() else None
     return shutil.which(name)
 
 
@@ -58,15 +59,17 @@ def _ng2vc_search_paths(cfg: dict) -> list[str]:
 
     vacask_bin = _resolve_vacask_bin(cfg)
     if vacask_bin:
-        bindir = os.path.dirname(os.path.realpath(vacask_bin))
-        prefix = os.path.dirname(bindir)          # <prefix>/bin/vacask → <prefix>
+        # os.path.realpath (not Path.resolve) keeps the historical, test-pinned
+        # normalisation of the discovered candidate strings.
+        bindir = Path(os.path.realpath(vacask_bin)).parent
+        prefix = bindir.parent                      # <prefix>/bin/vacask → <prefix>
         cands += [
-            os.path.join(bindir, "ng2vc.py"),
-            os.path.join(bindir, "ng2vc"),
+            str(bindir / "ng2vc.py"),
+            str(bindir / "ng2vc"),
             # Observed VACASK / IIC-OSIC-TOOLS layout:
             #   <prefix>/vacask/lib/vacask/python/ng2vc.py
-            os.path.join(prefix, "vacask", "lib", "vacask", "python", "ng2vc.py"),
-            os.path.join(prefix, "lib", "vacask", "python", "ng2vc.py"),
+            str(prefix / "vacask" / "lib" / "vacask" / "python" / "ng2vc.py"),
+            str(prefix / "lib" / "vacask" / "python" / "ng2vc.py"),
         ]
     return cands
 
@@ -78,7 +81,7 @@ def _resolve_ng2vc(cfg: dict) -> "str | None":
     explicit = (cfg.get("ng2vc_binary") or "").strip()
     if explicit:
         return explicit
-    return next((p for p in _ng2vc_search_paths(cfg) if os.path.exists(p)), None)
+    return next((p for p in _ng2vc_search_paths(cfg) if Path(p).exists()), None)
 
 
 def _ng2vc_argv0(ng2vc_path: str) -> list[str]:
@@ -88,7 +91,8 @@ def _ng2vc_argv0(ng2vc_path: str) -> list[str]:
     return [sys.executable, ng2vc_path] if ng2vc_path.endswith(".py") else [ng2vc_path]
 
 
-def _run_ng2vc(spice_file: str, sim_file: str) -> None:
+def _run_ng2vc(spice_file: str | os.PathLike[str],
+               sim_file: str | os.PathLike[str]) -> None:
     """Convert an ngspice netlist to VACASK .sim format using the ng2vc converter.
 
     Resolution order:
@@ -102,6 +106,8 @@ def _run_ng2vc(spice_file: str, sim_file: str) -> None:
     try the output-arg form first and fall back to capturing stdout.
     """
     cfg = app_config.load_config()
+    spice_file = Path(spice_file)
+    sim_file = Path(sim_file)
 
     # 1. PyOPUS in-process converter — only when the API is actually present.
     try:
@@ -110,7 +116,7 @@ def _run_ng2vc(spice_file: str, sim_file: str) -> None:
         _m = None
     if _m is not None and hasattr(_m, "convert"):
         try:
-            _m.convert(spice_file, sim_file)
+            _m.convert(str(spice_file), str(sim_file))
             log.info("ng2vc conversion via PyOPUS OK: %s → %s", spice_file, sim_file)
             return
         except Exception as exc:  # noqa: BLE001 — diagnose, then fall back to the script
@@ -125,7 +131,7 @@ def _run_ng2vc(spice_file: str, sim_file: str) -> None:
             "or install PyOPUS. Searched: "
             + ", ".join(_ng2vc_search_paths(cfg) or ["<nothing — vacask binary not found>"])
         )
-    if not os.path.exists(ng2vc_path):
+    if not Path(ng2vc_path).exists():
         raise RuntimeError(f"Configured ng2vc_binary does not exist: {ng2vc_path!r}")
 
     argv0 = _ng2vc_argv0(ng2vc_path)
@@ -134,16 +140,15 @@ def _run_ng2vc(spice_file: str, sim_file: str) -> None:
         return subprocess.run(argv0 + args, capture_output=True, text=True, timeout=120)
 
     # Form A: ng2vc <in> <out>  (writes the .sim itself).
-    res_a = _attempt([spice_file, sim_file])
-    if res_a.returncode == 0 and os.path.isfile(sim_file) and os.path.getsize(sim_file) > 0:
+    res_a = _attempt([str(spice_file), str(sim_file)])
+    if res_a.returncode == 0 and sim_file.is_file() and sim_file.stat().st_size > 0:
         log.info("ng2vc conversion via script OK: %s → %s", ng2vc_path, sim_file)
         return
 
     # Form B: ng2vc <in>  (writes the netlist to stdout).
-    res_b = _attempt([spice_file])
+    res_b = _attempt([str(spice_file)])
     if res_b.returncode == 0 and res_b.stdout.strip():
-        with open(sim_file, "w", encoding="utf-8") as fh:
-            fh.write(res_b.stdout)
+        sim_file.write_text(res_b.stdout, encoding="utf-8")
         log.info("ng2vc conversion via script (stdout) OK: %s → %s", ng2vc_path, sim_file)
         return
 
@@ -190,7 +195,8 @@ def _vacask_write_analysis_tabs(buckets: dict, test, analysis_tab_paths: dict) -
                 log.warning("write_tab_from_raw failed for %s: %s", an.kind, exc)
 
 
-def _vacask_extract_results(raw_file: str, test, analysis_tab_paths: dict):
+def _vacask_extract_results(raw_file: str | os.PathLike[str], test,
+                            analysis_tab_paths: dict):
     """Read VACASK .raw output, extract scalars, return (MY_DATA line, error).
 
     Scalar extraction order (first match wins for each value):
@@ -201,10 +207,10 @@ def _vacask_extract_results(raw_file: str, test, analysis_tab_paths: dict):
     """
     import numpy as np
 
-    if not os.path.exists(raw_file):
+    if not raw_file or not Path(raw_file).exists():
         return None, "NO_RAW_FILE"
 
-    buckets = _read_raw_file(raw_file)
+    buckets = _read_raw_file(str(raw_file))
     if buckets is None:
         return None, "RAW_PARSE_ERROR"
 
@@ -307,8 +313,8 @@ class VacaskSimulator(BaseSimulator):
         """
         cfg = app_config.load_config()
         pdk_dir = cfg.get("vacask_pdk_dir") or "/foss/pdks/ihp-sg13g2/libs.tech/vacask"
-        osdi_dir = os.path.join(pdk_dir, "osdi")
-        if not os.path.isdir(osdi_dir):
+        osdi_dir = Path(pdk_dir) / "osdi"
+        if not osdi_dir.is_dir():
             log.warning(
                 "vacask osdi dir not found: %s — netlist 'load \"*.osdi\"' "
                 "directives will fail. Set 'vacask_pdk_dir' in settings.",
@@ -316,21 +322,21 @@ class VacaskSimulator(BaseSimulator):
             )
             return
 
+        fast_tmp = Path(settings.FAST_TMP)
         staged = 0
-        for filename in os.listdir(osdi_dir):
-            if not filename.endswith(".osdi"):
+        for src in osdi_dir.iterdir():
+            if src.suffix != ".osdi":
                 continue
-            src = os.path.join(osdi_dir, filename)
-            dest = os.path.join(settings.FAST_TMP, filename)
-            if os.path.lexists(dest):
+            dest = fast_tmp / src.name
+            if dest.is_symlink() or dest.exists():
                 # A symlink always tracks its source; a real copy (symlink
                 # fallback) can go stale when the PDK is updated — refresh it.
-                if os.path.islink(dest) or not staged_copy_is_stale(src, dest):
+                if dest.is_symlink() or not staged_copy_is_stale(src, dest):
                     continue
                 try:
-                    os.remove(dest)
+                    dest.unlink()
                 except OSError as exc:
-                    log.warning("Could not refresh stale osdi %s: %s", filename, exc)
+                    log.warning("Could not refresh stale osdi %s: %s", src.name, exc)
                     continue
             try:
                 os.symlink(src, dest)
@@ -338,11 +344,11 @@ class VacaskSimulator(BaseSimulator):
                 try:
                     shutil.copy2(src, dest)
                 except Exception as exc:
-                    log.warning("Could not stage osdi %s: %s", filename, exc)
+                    log.warning("Could not stage osdi %s: %s", src.name, exc)
                     continue
             staged += 1
         log.info("Staged %d vacask .osdi files from %s into %s",
-                 staged, osdi_dir, settings.FAST_TMP)
+                 staged, osdi_dir, fast_tmp)
 
     def generate_test_template(self, test) -> str:
         cfg = app_config.load_config()
@@ -350,24 +356,21 @@ class VacaskSimulator(BaseSimulator):
         tb_path = safe_tb_path(test.tb_path)
         # run_xschem names its output after the schematic's basename (nested
         # tb_path like "sub/tb_x" yields FAST_TMP/tb_x.<ext>).
-        stem = os.path.splitext(os.path.basename(tb_path))[0]
+        fast_tmp = Path(settings.FAST_TMP)
+        stem = tb_path.stem
+        sim_file = fast_tmp / (stem + ".sim")
 
         if source == "ng2vc":
             # Generate ngspice netlist via Xschem, then convert to VACASK syntax
             run_xschem(tb_path)
-            spice_file = os.path.join(settings.FAST_TMP, stem + ".spice")
-            sim_file = os.path.join(settings.FAST_TMP, stem + ".sim")
+            spice_file = fast_tmp / (stem + ".spice")
             _run_ng2vc(spice_file, sim_file)
         else:
             # User picked xschem: produce the Spectre netlist directly via xschem.
             # No silent fallback — switch the setting to "ng2vc" to opt into that path.
-            sim_file = os.path.join(settings.FAST_TMP, stem + ".sim")
             run_xschem(tb_path, netlist_mode="spectre")
 
-        with open(sim_file, "r", encoding="utf-8") as fh:
-            netlist = fh.read()
-
-        return netlist
+        return sim_file.read_text(encoding="utf-8")
 
     def run(self, netlist: str, timeout_sec: float = 10,
             test=None, analysis_tab_paths: dict | None = None) -> tuple:
@@ -378,24 +381,24 @@ class VacaskSimulator(BaseSimulator):
         custom_env["OMP_NUM_THREADS"] = "1"
 
         pid = os.getpid()
+        fast_tmp = Path(settings.FAST_TMP)
         # VACASK names its .raw output after the analysis (e.g. `analysis nmos
         # op` → nmos.raw), so concurrent workers running in the same dir would
         # clobber each other. Each invocation gets its own subdir, with the
         # parent FAST_TMP contents symlinked in so OSDI / model loads still
         # resolve relative to cwd.
-        workdir = tempfile.mkdtemp(prefix=f"vc_{pid}_", dir=settings.FAST_TMP)
-        temp_sim_file = os.path.join(workdir, "sim.sim")
-        temp_log_file = os.path.join(workdir, "sim.log")
-        temp_raw_file = ""  # resolved post-run by scanning workdir for *.raw
+        workdir = Path(tempfile.mkdtemp(prefix=f"vc_{pid}_", dir=str(fast_tmp)))
+        temp_sim_file = workdir / "sim.sim"
+        temp_log_file = workdir / "sim.log"
+        temp_raw_file: Path | None = None  # resolved post-run by scanning workdir
 
         # Make staged files (osdi, libs, models) visible inside the workdir.
-        for fname in os.listdir(settings.FAST_TMP):
-            if fname == os.path.basename(workdir):
+        for src in fast_tmp.iterdir():
+            if src.name == workdir.name:
                 continue
-            src = os.path.join(settings.FAST_TMP, fname)
-            if not (os.path.isfile(src) or os.path.islink(src)):
+            if not (src.is_file() or src.is_symlink()):
                 continue
-            dest = os.path.join(workdir, fname)
+            dest = workdir / src.name
             try:
                 os.symlink(src, dest)
             except OSError:
@@ -404,14 +407,13 @@ class VacaskSimulator(BaseSimulator):
                 except OSError:
                     pass
 
-        with open(temp_sim_file, "w", encoding="utf-8") as fh:
-            fh.write(netlist)
+        temp_sim_file.write_text(netlist, encoding="utf-8")
 
         process = None
         try:
             with open(temp_log_file, "w") as log_fh:
                 process = subprocess.Popen(
-                    [vacask_binary, temp_sim_file],
+                    [vacask_binary, str(temp_sim_file)],
                     stdout=log_fh,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -434,13 +436,13 @@ class VacaskSimulator(BaseSimulator):
 
             # Vacask wrote its .raw somewhere in our private workdir. Take it.
             raw_candidates = sorted(
-                f for f in os.listdir(workdir) if f.endswith(".raw")
+                p for p in workdir.iterdir() if p.suffix == ".raw"
             )
             if raw_candidates:
-                temp_raw_file = os.path.join(workdir, raw_candidates[0])
+                temp_raw_file = raw_candidates[0]
                 if len(raw_candidates) > 1:
                     log.warning("Multiple .raw files from vacask: %s — picked %s",
-                                raw_candidates, raw_candidates[0])
+                                [p.name for p in raw_candidates], temp_raw_file.name)
             else:
                 # No .raw produced even though vacask exited 0 — preserve the
                 # log so the user can see what vacask actually did.
@@ -451,7 +453,7 @@ class VacaskSimulator(BaseSimulator):
             #   printf "MY_DATA: %g %g\n" gain bw
             # This makes the testbench+YAML format identical to the ngspice path.
             my_data_line = ""
-            if os.path.exists(temp_log_file):
+            if temp_log_file.exists():
                 with open(temp_log_file, "r") as lf:
                     for line in lf:
                         if line.startswith("MY_DATA:"):
@@ -462,8 +464,8 @@ class VacaskSimulator(BaseSimulator):
             # analysis tab files so the GUI sees the waveforms. Without it we
             # also need to extract scalars from the .raw — done in one call.
             if my_data_line:
-                if analysis_tab_paths and os.path.exists(temp_raw_file):
-                    buckets = _read_raw_file(temp_raw_file)
+                if analysis_tab_paths and temp_raw_file is not None and temp_raw_file.exists():
+                    buckets = _read_raw_file(str(temp_raw_file))
                     _vacask_write_analysis_tabs(buckets or {}, test,
                                                 analysis_tab_paths)
                 return my_data_line, None
@@ -471,20 +473,21 @@ class VacaskSimulator(BaseSimulator):
             # ── Fallback: extract scalars from .raw file ──────────────────────
             # Used when the testbench saves named meas results or the YAML
             # defines explicit measure: expressions.
-            return _vacask_extract_results(temp_raw_file, test, analysis_tab_paths)
+            return _vacask_extract_results(temp_raw_file or "", test, analysis_tab_paths)
 
         except subprocess.CalledProcessError:
             err_msg = "CRASH"
             saved_log = ""
-            if os.path.exists(temp_log_file):
+            if temp_log_file.exists():
                 with open(temp_log_file, "r") as lf:
                     err_msg = "".join(lf.readlines()[-5:]).strip()
                 try:
-                    os.makedirs(settings.OUT_DIR, exist_ok=True)
-                    saved_log = os.path.join(
-                        settings.OUT_DIR,
-                        f"vacask_crash_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.log",
-                    )
+                    out_dir = Path(settings.OUT_DIR)
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    saved_log = str(out_dir / (
+                        f"vacask_crash_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                        f"_{os.getpid()}.log"
+                    ))
                     shutil.copy2(temp_log_file, saved_log)
                     log.error("vacask crash. Saved log: %s", saved_log)
                 except Exception as copy_exc:
@@ -519,19 +522,21 @@ class VacaskSimulator(BaseSimulator):
         return "\n".join(lines[-n_lines:]).strip()
 
     @staticmethod
-    def _preserve_vacask_log(temp_log_file: str, reason: str) -> str:
+    def _preserve_vacask_log(temp_log_file: str | os.PathLike[str], reason: str) -> str:
         """Copy a vacask log into OUT_DIR so it survives workdir cleanup."""
-        if not os.path.exists(temp_log_file):
+        temp_log_file = Path(temp_log_file)
+        if not temp_log_file.exists():
             return ""
         try:
-            os.makedirs(settings.OUT_DIR, exist_ok=True)
-            dest = os.path.join(
-                settings.OUT_DIR,
-                f"vacask_{reason}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.log",
+            out_dir = Path(settings.OUT_DIR)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            dest = out_dir / (
+                f"vacask_{reason}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                f"_{os.getpid()}.log"
             )
             shutil.copy2(temp_log_file, dest)
             log.warning("vacask produced no .raw — saved log: %s", dest)
-            return dest
+            return str(dest)
         except Exception as exc:
             log.warning("Could not preserve vacask log: %s", exc)
             return ""

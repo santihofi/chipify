@@ -9,10 +9,10 @@ mirrored there. Engine-specific extras are staged via each engine's
 """
 from __future__ import annotations
 
-import glob
 import logging
 import os
 import shutil
+from pathlib import Path
 
 from chipify import settings
 from chipify.engines.base import BaseSimulator
@@ -20,15 +20,16 @@ from chipify.engines.base import BaseSimulator
 log = logging.getLogger("chipify.engines.staging")
 
 
-def staged_copy_is_stale(src: str, dest: str) -> bool:
+def staged_copy_is_stale(src: str | os.PathLike[str],
+                         dest: str | os.PathLike[str]) -> bool:
     """True if *dest* is missing or differs from *src* (size or older mtime).
 
     ``shutil.copy2`` preserves mtime, so an up-to-date staged copy has the
     same size and an mtime within filesystem resolution of the source.
     """
     try:
-        s = os.stat(src)
-        d = os.stat(dest)
+        s = Path(src).stat()
+        d = Path(dest).stat()
     except OSError:
         return True
     return s.st_size != d.st_size or s.st_mtime > d.st_mtime + 1.0
@@ -47,25 +48,26 @@ def stage_files_to_ram(engines=None) -> None:
     FAST_TMP. A mixed-engine sweep therefore stages the extras for every
     engine it uses.
     """
-    log.info("Staging library files to RAM disk: %s", settings.FAST_TMP)
+    work_dir = Path(settings.WORK_DIR)
+    fast_tmp = Path(settings.FAST_TMP)
+    log.info("Staging library files to RAM disk: %s", fast_tmp)
     for pattern in ("*.lib", "*.mod", "*.inc"):
-        for file_path in glob.glob(os.path.join(settings.WORK_DIR, pattern)):
-            filename = os.path.basename(file_path)
-            dest_path = os.path.join(settings.FAST_TMP, filename)
+        for file_path in work_dir.glob(pattern):
+            dest_path = fast_tmp / file_path.name
             if staged_copy_is_stale(file_path, dest_path):
                 try:
                     shutil.copy2(file_path, dest_path)
-                    log.debug("Staged: %s", filename)
+                    log.debug("Staged: %s", file_path.name)
                 except Exception as exc:
-                    log.warning("Could not stage %s: %s", filename, exc)
+                    log.warning("Could not stage %s: %s", file_path.name, exc)
 
     # Stage tb/xschemrc (project-local xschem rc, no leading dot) so xschem
     # picks up XSCHEM_LIBRARY_PATH etc. and can resolve the DUT during
     # netlisting. Overwrite each run — FAST_TMP isn't cleaned between runs,
     # so a stale cached copy would mask edits.
-    xschemrc_src = os.path.join(settings.TB_DIR, "xschemrc")
-    if os.path.isfile(xschemrc_src):
-        xschemrc_dest = os.path.join(settings.FAST_TMP, "xschemrc")
+    xschemrc_src = Path(settings.TB_DIR) / "xschemrc"
+    if xschemrc_src.is_file():
+        xschemrc_dest = fast_tmp / "xschemrc"
         try:
             shutil.copy2(xschemrc_src, xschemrc_dest)
             log.info("Staged tb/xschemrc → %s", xschemrc_dest)

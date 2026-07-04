@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
@@ -108,17 +108,17 @@ class SimWorker(QObject):
 
     def _persist(self, df, stim, elapsed: float) -> None:
         """Write the live CSV, archive a history copy, and emit meta sidecars."""
-        csv_out = os.path.join(settings.OUT_DIR, "simulation_results.csv")
+        csv_out = Path(settings.OUT_DIR) / "simulation_results.csv"
         df.to_csv(csv_out, index=False)
 
         analysis_dirs = df.attrs.get("analysis_dirs", {}) or {}
         simulator.write_analysis_pointers(analysis_dirs)
 
         try:
-            history_dir = os.path.join(settings.OUT_DIR, "history")
-            os.makedirs(history_dir, exist_ok=True)
+            history_dir = Path(settings.OUT_DIR) / "history"
+            history_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            history_file = os.path.join(history_dir, f"run_{timestamp}.csv")
+            history_file = history_dir / f"run_{timestamp}.csv"
             df.to_csv(history_file, index=False)
 
             total = len(df)
@@ -131,14 +131,14 @@ class SimWorker(QObject):
 
             try:
                 templates_dir = netlist_export.persist_templates(
-                    stim, os.path.join(history_dir, f"run_{timestamp}_templates"),
+                    stim, history_dir / f"run_{timestamp}_templates",
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("Could not persist netlist templates: %s", exc)
                 templates_dir = ""
 
             meta_kwargs = dict(
-                yaml_name=os.path.basename(self._yaml_path),
+                yaml_name=Path(self._yaml_path).name,
                 duration_s=elapsed,
                 total_runs=total,
                 valid_runs=valid,

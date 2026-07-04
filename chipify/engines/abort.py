@@ -10,31 +10,29 @@ subprocess runs.
 from __future__ import annotations
 
 import logging
-import os
+from pathlib import Path
 
 from chipify import settings
 
 log = logging.getLogger("chipify.engines.abort")
 
-ABORT_FLAG_PATH = os.path.join(settings.FAST_TMP, "abort.flag")
+ABORT_FLAG_PATH = Path(settings.FAST_TMP) / "abort.flag"
 
 
 def is_aborted() -> bool:
-    return os.path.exists(ABORT_FLAG_PATH)
+    return ABORT_FLAG_PATH.exists()
 
 
 def clear_abort_flag() -> None:
-    if os.path.exists(ABORT_FLAG_PATH):
-        try:
-            os.remove(ABORT_FLAG_PATH)
-        except Exception:
-            pass
+    try:
+        ABORT_FLAG_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def abort_simulation() -> None:
     log.info("abort_simulation() called – writing abort flag.")
     try:
-        with open(ABORT_FLAG_PATH, "w", encoding="utf-8") as f:
-            f.write("abort")
-    except Exception as exc:
+        ABORT_FLAG_PATH.write_text("abort", encoding="utf-8")
+    except OSError as exc:
         log.error("Could not write abort flag: %s", exc)

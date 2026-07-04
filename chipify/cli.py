@@ -3,6 +3,7 @@ import argparse
 import os
 import sys
 import json
+from pathlib import Path
 
 from chipify import util
 from chipify import settings
@@ -36,11 +37,11 @@ def _make_progress_stream_cb():
     return _cb
 
 
-def _run_single(yaml_path: str, *, json_out: bool = False,
+def _run_single(yaml_path: str | os.PathLike[str], *, json_out: bool = False,
                 simulator_override: str | None = None,
                 templates_dir: str | None = None,
                 progress_stream: bool = False,
-                out_dir: str | None = None) -> dict | None:
+                out_dir: str | os.PathLike[str] | None = None) -> dict | None:
     """Run simulation for one yaml file. Returns summary dict or None on failure.
 
     out_dir:
@@ -49,9 +50,10 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
         consecutive runs don't overwrite each other.
     """
     import time
-    print(f"[*] Loading configuration: {os.path.basename(yaml_path)}")
-    out_dir = out_dir or settings.OUT_DIR
-    os.makedirs(out_dir, exist_ok=True)
+    yaml_path = Path(yaml_path)
+    print(f"[*] Loading configuration: {yaml_path.name}")
+    out_dir = Path(out_dir) if out_dir else Path(settings.OUT_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
     stim = util.Stimuli(yaml_path)
     t0 = time.perf_counter()
     progress_cb = _make_progress_stream_cb() if progress_stream else None
@@ -67,7 +69,7 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
         print(f"[-] Simulation returned no data for {yaml_path}")
         return None
 
-    csv_out = os.path.join(out_dir, "simulation_results.csv")
+    csv_out = out_dir / "simulation_results.csv"
     df.to_csv(csv_out, index=False)
     print(f"[+] Results saved to {csv_out}")
 
@@ -78,14 +80,14 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
     try:
         import datetime
         from chipify import run_meta
-        history_dir = os.path.join(out_dir, "history")
-        os.makedirs(history_dir, exist_ok=True)
+        history_dir = out_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
         ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        hist = os.path.join(history_dir, f"run_{ts}.csv")
+        hist = history_dir / f"run_{ts}.csv"
         df.to_csv(hist, index=False)
         from chipify import data_loader as _dl
         s = _dl.result_summary(_dl.prepare_results(df))
-        run_meta.write_meta(hist, yaml_name=os.path.basename(yaml_path),
+        run_meta.write_meta(hist, yaml_name=yaml_path.name,
                             duration_s=duration_s, total_runs=s.total,
                             valid_runs=s.valid, global_yield=round(s.yield_pct, 2),
                             tran_dir=analysis_dirs.get("transient", ""),
@@ -95,7 +97,7 @@ def _run_single(yaml_path: str, *, json_out: bool = False,
 
     print_summary(df, stim)
 
-    summary = _json_summary(df, os.path.basename(yaml_path), duration_s)
+    summary = _json_summary(df, yaml_path.name, duration_s)
     if json_out:
         print(json.dumps(summary))
     return summary
@@ -187,9 +189,8 @@ def main():
 
     # ── Batch mode ────────────────────────────────────────────────────────────
     if args.batch:
-        import glob
-        batch_dir = args.batch
-        yaml_files = sorted(glob.glob(os.path.join(batch_dir, "*.yaml")))
+        batch_dir = Path(args.batch)
+        yaml_files = sorted(batch_dir.glob("*.yaml"))
         if not yaml_files:
             print(f"[-] No *.yaml files found in: {batch_dir}")
             sys.exit(1)
@@ -201,8 +202,8 @@ def main():
             print(f"\n{'='*60}")
             # Per-datasheet output subdirectory so consecutive runs don't
             # overwrite each other's simulation_results.csv.
-            stem = os.path.splitext(os.path.basename(yaml_path))[0]
-            run_out_dir = os.path.join(settings.OUT_DIR, stem)
+            stem = yaml_path.stem
+            run_out_dir = Path(settings.OUT_DIR) / stem
             summary = _run_single(yaml_path, json_out=args.json,
                                   simulator_override=args.simulator,
                                   templates_dir=args.templates_dir,
@@ -210,15 +211,15 @@ def main():
                                   out_dir=run_out_dir)
             if summary is None:
                 all_ok = False
-                summary = {"yaml": os.path.basename(yaml_path), "error": "no data"}
+                summary = {"yaml": yaml_path.name, "error": "no data"}
             elif args.markdown:
                 try:
                     from chipify import md_export
                     import pandas as pd
-                    md_dir = args.markdown
-                    os.makedirs(md_dir, exist_ok=True)
-                    md_path = os.path.join(md_dir, f"{stem}.md")
-                    df = pd.read_csv(os.path.join(run_out_dir, "simulation_results.csv"))
+                    md_dir = Path(args.markdown)
+                    md_dir.mkdir(parents=True, exist_ok=True)
+                    md_path = md_dir / f"{stem}.md"
+                    df = pd.read_csv(run_out_dir / "simulation_results.csv")
                     stim = util.Stimuli(yaml_path)
                     md_export.generate_md_report(df, stim, yaml_path, md_path)
                     print(f"[+] Markdown report saved to {md_path}")
@@ -240,8 +241,8 @@ def main():
         sys.exit(0 if all_ok else 1)
 
     # ── Single run ────────────────────────────────────────────────────────────
-    yaml_path = os.path.join(settings.IN_DIR, args.config)
-    if not os.path.exists(yaml_path):
+    yaml_path = Path(settings.IN_DIR) / args.config
+    if not yaml_path.exists():
         print(f"[-] Fatal Error: configuration file '{yaml_path}' not found!")
         sys.exit(1)
 
@@ -259,7 +260,7 @@ def main():
             from chipify import md_export
             stim = util.Stimuli(yaml_path)
             import pandas as pd
-            df = pd.read_csv(os.path.join(settings.OUT_DIR, "simulation_results.csv"))
+            df = pd.read_csv(Path(settings.OUT_DIR) / "simulation_results.csv")
             md_export.generate_md_report(df, stim, yaml_path, args.markdown)
             print(f"[+] Markdown report saved to {args.markdown}")
         except Exception as exc:

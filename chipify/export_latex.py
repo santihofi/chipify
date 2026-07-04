@@ -1,7 +1,6 @@
 ﻿# Copyright (c) 2026 Santiago Hofwimmer
-import glob
-import os
 import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -18,14 +17,14 @@ def _safe_col(text: str) -> str:
 
 def _collect_run_files(adir: str, run_ids: list[str]) -> list[tuple[str, str]]:
     """Return ``[(run_id, csv_path), …]`` for the given run IDs."""
-    if not adir or not os.path.isdir(adir) or not run_ids:
+    if not adir or not Path(adir).is_dir() or not run_ids:
         return []
     run_id_set = set(run_ids)
     matched: list[tuple[str, str]] = []
-    for fname in glob.glob(os.path.join(adir, "run_*.csv")):
-        rid = os.path.basename(fname)[4:].split("__", 1)[0]
+    for fname in Path(adir).glob("run_*.csv"):
+        rid = fname.name[4:].split("__", 1)[0]
         if rid in run_id_set:
-            matched.append((rid, fname))
+            matched.append((rid, str(fname)))
     matched.sort(key=lambda rf: rf[0])
     return matched
 
@@ -347,9 +346,8 @@ def _write_overlay_tex(
         "\\end{center}\n"
     )
 
-    out_path = os.path.join(output_dir, tex_filename)
-    with open(out_path, "w", encoding="utf-8") as fh:
-        fh.write(tex_content)
+    out_path = Path(output_dir) / tex_filename
+    out_path.write_text(tex_content, encoding="utf-8")
     return out_path
 
 
@@ -368,7 +366,7 @@ def generate_transient_latex_export(
     Returns ``(csv_path, tex_path)``. Raises ``ValueError`` if no data could be
     collected (no matching runs, missing 'time' column, etc.).
     """
-    os.makedirs(out_dir, exist_ok=True)
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
     run_files = _collect_run_files(tran_dir, run_ids)
 
     def y_for(df, sig):
@@ -393,7 +391,7 @@ def generate_transient_latex_export(
             table[c] = table[c] * t_scale
 
     csv_filename = f"{name}_plot.csv"
-    csv_path = os.path.join(out_dir, csv_filename)
+    csv_path = Path(out_dir) / csv_filename
     table.to_csv(csv_path, index=False)
     tex_path = _write_overlay_tex(
         out_dir, name, csv_filename, series_keys, series_x,
@@ -412,7 +410,7 @@ def generate_dc_sweep_latex_export(
     equations: list | None = None,
 ) -> tuple[str, str]:
     """Export a DC sweep overlay (sweep vs signal) as CSV + pgfplots .tex."""
-    os.makedirs(out_dir, exist_ok=True)
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
     run_files = _collect_run_files(dc_dir, run_ids)
 
     def y_for(df, sig):
@@ -428,7 +426,7 @@ def generate_dc_sweep_latex_export(
         raise ValueError("No DC sweep data available for the current selection.")
 
     csv_filename = f"{name}_plot.csv"
-    csv_path = os.path.join(out_dir, csv_filename)
+    csv_path = Path(out_dir) / csv_filename
     table.to_csv(csv_path, index=False)
     tex_path = _write_overlay_tex(
         out_dir, name, csv_filename, series_keys, series_x,
@@ -451,7 +449,7 @@ def generate_bode_latex_export(
     Uses pgfplots' ``groupplots`` library to stack magnitude (dB) above phase
     (degrees) with a shared logarithmic frequency axis.
     """
-    os.makedirs(out_dir, exist_ok=True)
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
     run_files = _collect_run_files(ac_dir, run_ids)
 
     def y_for(df, sig):
@@ -473,7 +471,7 @@ def generate_bode_latex_export(
         raise ValueError("No AC/Bode data available for the current selection.")
 
     csv_filename = f"{name}_plot.csv"
-    csv_path = os.path.join(out_dir, csv_filename)
+    csv_path = Path(out_dir) / csv_filename
     table.to_csv(csv_path, index=False)
 
     color_defs, curve_color, alpha, _single, legend_lines = \
@@ -539,9 +537,8 @@ def generate_bode_latex_export(
         "\\end{tikzpicture}\n"
         "\\end{center}\n"
     )
-    tex_path = os.path.join(out_dir, tex_filename)
-    with open(tex_path, "w", encoding="utf-8") as fh:
-        fh.write(tex_content)
+    tex_path = Path(out_dir) / tex_filename
+    tex_path.write_text(tex_content, encoding="utf-8")
     return csv_path, tex_path
 
 
@@ -639,12 +636,12 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
         csv_dict[key] = arr
 
     df = pd.DataFrame(csv_dict)
-    os.makedirs(output_dir, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     # Measurement names may carry SPICE syntax (v(out), slashes …) — sanitise
     # for the filesystem; titles/labels keep the original name.
     stem = _safe_col(param_name)
     csv_filename = f"{stem}_plot.csv"
-    csv_path = os.path.join(output_dir, csv_filename)
+    csv_path = Path(output_dir) / csv_filename
     df.to_csv(csv_path, index=False)
 
     # 4. Generate the LaTeX code.
@@ -699,7 +696,6 @@ def generate_latex_export(param_name, data_series, dist_type, bins, output_dir):
 \\end{center}
 """
 
-    tex_path = os.path.join(output_dir, tex_filename)
-    with open(tex_path, 'w') as f:
-        f.write(tex_content)
+    tex_path = Path(output_dir) / tex_filename
+    tex_path.write_text(tex_content)
     return csv_path, tex_path

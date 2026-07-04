@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -165,17 +166,18 @@ def compute_plot_cols(df: pd.DataFrame, stim: Any) -> PlotColumns:
 
 # ── History helpers ───────────────────────────────────────────────────────────
 
-def resolve_csv_path(selection: str, out_dir: str) -> str | None:
+def resolve_csv_path(selection: str, out_dir: str | os.PathLike[str]) -> str | None:
     """
     Convert a history dropdown label to an absolute CSV path.
 
     Returns ``None`` if the path does not exist.
     """
+    out = Path(out_dir)
     if selection == "Latest (simulation_results)":
-        path = os.path.join(out_dir, "simulation_results.csv")
+        path = out / "simulation_results.csv"
     else:
-        path = os.path.join(out_dir, "history", selection)
-    return path if os.path.exists(path) else None
+        path = out / "history" / selection
+    return str(path) if path.exists() else None
 
 
 def load_csv(csv_path: str) -> pd.DataFrame:
@@ -198,26 +200,25 @@ def list_history_runs(out_dir: str, yaml_name: str | None = None) -> list[str]:
     sidecar attributes it to a datasheet, but stays visible when it has no
     (or pre-sidecar) metadata — it is the live run, not archive clutter.
     """
-    import glob as _glob
-
     from chipify import run_meta
 
+    out = Path(out_dir)
     runs: list[str] = []
-    latest = os.path.join(out_dir, "simulation_results.csv")
-    if os.path.exists(latest):
+    latest = out / "simulation_results.csv"
+    if latest.exists():
         latest_yaml = run_meta.read_meta(latest).get("yaml", "") if yaml_name else ""
         if not yaml_name or not latest_yaml or latest_yaml == yaml_name:
             runs.append("Latest (simulation_results)")
 
-    history_dir = os.path.join(out_dir, "history")
-    if os.path.exists(history_dir):
-        hist_files = _glob.glob(os.path.join(history_dir, "run_*.csv"))
-        hist_files.sort(reverse=True)
+    history_dir = out / "history"
+    if history_dir.exists():
+        hist_files = sorted(history_dir.glob("run_*.csv"),
+                            key=lambda p: p.name, reverse=True)
         if yaml_name:
             hist_files = [
                 f for f in hist_files
                 if run_meta.read_meta(f).get("yaml") == yaml_name
             ]
-        runs.extend(os.path.basename(f) for f in hist_files)
+        runs.extend(f.name for f in hist_files)
 
     return runs

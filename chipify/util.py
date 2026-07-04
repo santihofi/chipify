@@ -15,6 +15,7 @@ get_num_cores()  – Returns a safe core count for multiprocessing.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 import yaml
 
@@ -22,7 +23,7 @@ import yaml
 class Stimuli:
     """Parses a ``datasheet.yaml`` file into a test plan."""
 
-    def __init__(self, yaml_file: str | None = None) -> None:
+    def __init__(self, yaml_file: str | os.PathLike[str] | None = None) -> None:
         self.params: dict[str, Any] = {}
         self.tests: list[Test] = []
         # Custom equations from the datasheet's top-level ``equations:`` /
@@ -32,7 +33,7 @@ class Stimuli:
         if yaml_file:
             self._load_from_yaml(yaml_file)
 
-    def _load_from_yaml(self, file_path: str) -> None:
+    def _load_from_yaml(self, file_path: str | os.PathLike[str]) -> None:
         """
         Load and validate the datasheet YAML.
 
@@ -41,8 +42,7 @@ class Stimuli:
           via a strict AST whitelist — no eval() involved.
         - validates structural correctness and reports precise error paths.
         """
-        with open(file_path, "r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh)
+        data = yaml.safe_load(Path(file_path).read_text(encoding="utf-8"))
 
         from chipify.schema import validate_datasheet, SchemaError
         try:

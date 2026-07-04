@@ -1,7 +1,8 @@
 ﻿# Copyright (c) 2026 Santiago Hofwimmer
 import copy
 import logging
-import os
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -121,9 +122,9 @@ class PlotManager:
         if comp_run != "None" and comp_run != "-" and group_col == "None":
             try:
                 if comp_run == "Latest (simulation_results)":
-                    c_path = os.path.join(settings.OUT_DIR, "simulation_results.csv")
+                    c_path = Path(settings.OUT_DIR) / "simulation_results.csv"
                 else:
-                    c_path = os.path.join(settings.OUT_DIR, "history", comp_run)
+                    c_path = Path(settings.OUT_DIR) / "history" / comp_run
 
                 c_df = pd.read_csv(c_path)
                 if 'sim_error' in c_df.columns:
@@ -449,12 +450,10 @@ class PlotManager:
         # ── Discover matching files ───────────────────────────────────────────
         run_id_set = set(run_ids)
         matched: list[tuple[str, str]] = []
-        for fname in os.listdir(adir):
-            if not fname.endswith(".csv") or not fname.startswith("run_"):
-                continue
-            rid = fname[4:].split("__", 1)[0]
+        for fpath in Path(adir).glob("run_*.csv"):
+            rid = fpath.name[4:].split("__", 1)[0]
             if rid in run_id_set:
-                matched.append((rid, os.path.join(adir, fname)))
+                matched.append((rid, str(fpath)))
 
         if not matched:
             ax.text(0.5, 0.5, no_files_msg, ha="center", va="center", color="gray",
@@ -699,12 +698,10 @@ class PlotManager:
 
         run_id_set = set(run_ids)
         matched: list[tuple[str, str]] = []
-        for fname in os.listdir(ac_dir):
-            if not fname.endswith(".csv") or not fname.startswith("run_"):
-                continue
-            rid = fname[4:].split("__", 1)[0]
+        for fpath in Path(ac_dir).glob("run_*.csv"):
+            rid = fpath.name[4:].split("__", 1)[0]
             if rid in run_id_set:
-                matched.append((rid, os.path.join(ac_dir, fname)))
+                matched.append((rid, str(fpath)))
 
         if not matched:
             ax = fig.add_subplot(111)

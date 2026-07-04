@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Santiago Hofwimmer
+# Copyright (c) 2026 Santiago Hofwimmer
 # settings.py
 """Project path configuration.
 
@@ -19,21 +19,23 @@ as-is. ``FAST_TMP`` (volatile scratch, tmpfs-backed on typical Linux/Docker
 setups) is not configurable; it is namespaced per project so concurrent
 chipify instances on different projects do not share staged files or the
 abort flag.
+
+All path constants exported here are :class:`pathlib.Path` objects.
 """
 import hashlib
 import json
 import logging
-import os
 import tempfile
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("chipify.settings")
 
 # The directory chipify was launched from — anchor for relative paths.
-PROJECT_ROOT = os.getcwd()
+PROJECT_ROOT = Path.cwd()
 
 # settings.json lives in the project root (the same file app_config reads/writes).
-_CONFIG_PATH = os.path.join(PROJECT_ROOT, "settings.json")
+_CONFIG_PATH = PROJECT_ROOT / "settings.json"
 
 # Default folder layout, relative to PROJECT_ROOT. work_dir was "tmp" before
 # 0.3 — misleading, since it never held temporary data (FAST_TMP does); it is
@@ -60,7 +62,7 @@ def _load_path_overrides() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _resolve_dir(key: str, overrides: dict[str, Any]) -> str:
+def _resolve_dir(key: str, overrides: dict[str, Any]) -> Path:
     """Return the absolute path for *key*, honouring a settings.json override.
 
     Uses the override when it is a non-empty string (resolved against
@@ -68,15 +70,15 @@ def _resolve_dir(key: str, overrides: dict[str, Any]) -> str:
     The resulting directory is created. If a configured custom path cannot be
     created, a warning is logged and the default folder is used instead.
     """
-    default_abs = os.path.join(PROJECT_ROOT, _DEFAULT_DIRS[key])
+    default_abs = PROJECT_ROOT / _DEFAULT_DIRS[key]
 
     raw = overrides.get(key)
     if isinstance(raw, str) and raw.strip():
-        custom = raw.strip()
-        if not os.path.isabs(custom):
-            custom = os.path.join(PROJECT_ROOT, custom)
+        custom = Path(raw.strip())
+        if not custom.is_absolute():
+            custom = PROJECT_ROOT / custom
         try:
-            os.makedirs(custom, exist_ok=True)
+            custom.mkdir(parents=True, exist_ok=True)
             return custom
         except OSError as exc:
             log.warning(
@@ -84,7 +86,7 @@ def _resolve_dir(key: str, overrides: dict[str, Any]) -> str:
                 key, raw, exc, default_abs,
             )
 
-    os.makedirs(default_abs, exist_ok=True)
+    default_abs.mkdir(parents=True, exist_ok=True)
     return default_abs
 
 
@@ -101,6 +103,6 @@ TB_DIR = _resolve_dir("tb_dir", _overrides)
 #   - staged .lib/.mod/.inc files from different projects never collide,
 #   - Windows gets a real temp location instead of a literal "\tmp" folder.
 # On typical Linux/Docker setups the system temp dir is tmpfs (RAM-backed).
-_project_tag = hashlib.md5(PROJECT_ROOT.encode("utf-8")).hexdigest()[:10]
-FAST_TMP = os.path.join(tempfile.gettempdir(), f"chipify_{_project_tag}")
-os.makedirs(FAST_TMP, exist_ok=True)
+_project_tag = hashlib.md5(str(PROJECT_ROOT).encode("utf-8")).hexdigest()[:10]
+FAST_TMP = Path(tempfile.gettempdir()) / f"chipify_{_project_tag}"
+FAST_TMP.mkdir(parents=True, exist_ok=True)

@@ -16,6 +16,7 @@ data (it re-saves the original text); otherwise it dumps the edited dict.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import yaml
 from PySide6.QtGui import QFont
@@ -226,8 +227,7 @@ class DatasheetEditorTab(QWidget):
         self.raw_text = raw
         self.param_key, _ = _ye.get_params_dict(self.current_yaml_data)
         self.test_key, _ = _ye.get_tests_dict(self.current_yaml_data)
-        import os
-        self.title_label.setText(os.path.basename(path))
+        self.title_label.setText(Path(path).name)
         self.raw_editor.setPlainText(raw)
         self._build_form()
         self.equations_panel.reload()
@@ -492,9 +492,8 @@ class DatasheetEditorTab(QWidget):
         except (ValueError, FileExistsError, OSError) as exc:
             QMessageBox.critical(self, "New Datasheet", str(exc))
             return
-        import os
-        self._window.set_active_datasheet(os.path.basename(path))
-        self._window.set_status(f"Created {os.path.basename(path)}", "#2ecc71")
+        self._window.set_active_datasheet(Path(path).name)
+        self._window.set_status(f"Created {Path(path).name}", "#2ecc71")
 
     def _compute_save_text(self) -> str:
         """Return the YAML text to persist for the current editor state.

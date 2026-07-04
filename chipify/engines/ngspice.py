@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import time
+from pathlib import Path
 
 from chipify import settings
 from chipify.engines.abort import is_aborted
@@ -55,8 +56,7 @@ class NgspiceSimulator(BaseSimulator):
 
         # run_xschem names its output after the schematic's basename, so a
         # nested tb_path like "sub/tb_x" still yields FAST_TMP/tb_x.spice.
-        stem = os.path.splitext(os.path.basename(tb_path))[0]
-        spice_file = os.path.join(settings.FAST_TMP, stem + ".spice")
+        spice_file = Path(settings.FAST_TMP) / (tb_path.stem + ".spice")
         with open(spice_file, "r") as f:
             netlist = f.read()
             if ".control" in netlist:
@@ -104,8 +104,9 @@ class NgspiceSimulator(BaseSimulator):
         custom_env["OMP_NUM_THREADS"] = "1"
 
         pid = os.getpid()
-        temp_spice_file = os.path.join(settings.FAST_TMP, f"sim_{pid}.spice")
-        temp_log_file = os.path.join(settings.FAST_TMP, f"sim_{pid}.log")
+        fast_tmp = Path(settings.FAST_TMP)
+        temp_spice_file = fast_tmp / f"sim_{pid}.spice"
+        temp_log_file = fast_tmp / f"sim_{pid}.log"
 
         with open(temp_spice_file, "w") as f:
             f.write(netlist)
@@ -114,11 +115,11 @@ class NgspiceSimulator(BaseSimulator):
         try:
             with open(temp_log_file, "w") as log_file:
                 process = subprocess.Popen(
-                    ["ngspice", "-b", "-r", os.devnull, temp_spice_file],
+                    ["ngspice", "-b", "-r", os.devnull, str(temp_spice_file)],
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    cwd=settings.FAST_TMP,
+                    cwd=fast_tmp,
                     env=custom_env,
                 )
 
@@ -146,7 +147,7 @@ class NgspiceSimulator(BaseSimulator):
 
         except subprocess.CalledProcessError:
             err_msg = "CRASH"
-            if os.path.exists(temp_log_file):
+            if temp_log_file.exists():
                 with open(temp_log_file, "r") as f:
                     err_msg = "".join(f.readlines()[-5:]).strip()
             return None, f"CRASH: {err_msg}"
@@ -162,7 +163,7 @@ class NgspiceSimulator(BaseSimulator):
         that run's output. Used to explain why a declared analysis produced no
         output tab.
         """
-        log_path = os.path.join(settings.FAST_TMP, f"sim_{os.getpid()}.log")
+        log_path = Path(settings.FAST_TMP) / f"sim_{os.getpid()}.log"
         try:
             with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
                 lines = fh.readlines()

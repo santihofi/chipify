@@ -36,6 +36,7 @@ import subprocess
 import sys
 import datetime
 import logging
+from pathlib import Path
 
 log = logging.getLogger("chipify.run_meta")
 
@@ -77,10 +78,9 @@ def _git_commit() -> str:
         return ""
 
 
-def _meta_path(csv_path: str) -> str:
+def _meta_path(csv_path: str | os.PathLike[str]) -> Path:
     """Given a run CSV path, return the companion .meta.json path."""
-    base, _ = os.path.splitext(csv_path)
-    return base + ".meta.json"
+    return Path(csv_path).with_suffix(".meta.json")
 
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -169,7 +169,7 @@ def read_meta(csv_path: str) -> dict:
     Returns an empty dict if the file does not exist or cannot be parsed.
     """
     path = _meta_path(csv_path)
-    if not os.path.exists(path):
+    if not path.exists():
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:

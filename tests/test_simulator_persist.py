@@ -239,7 +239,9 @@ def _vacask_test(value_names, measure=None):
 
 def _patch_raw(monkeypatch, bucket) -> None:
     from chipify.engines import vacask as vacask_mod
-    monkeypatch.setattr(vacask_mod.os.path, "exists", lambda _p: True)
+    # _vacask_extract_results guards on Path(raw_file).exists(); make any path
+    # report as present so the in-memory bucket below is what gets exercised.
+    monkeypatch.setattr(vacask_mod.Path, "exists", lambda _self: True)
     monkeypatch.setattr(vacask_mod, "_read_raw_file", lambda _f: {"dc": bucket})
 
 
