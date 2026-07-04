@@ -32,7 +32,8 @@ log = logging.getLogger("chipify.uikit.services.transient")
 
 # ── Generic helpers ──────────────────────────────────────────────────────────
 
-def resolve_analysis_dir(df: pd.DataFrame, out_dir: str, kind: str,
+def resolve_analysis_dir(df: pd.DataFrame, out_dir: str | os.PathLike[str],
+                         kind: str,
                          meta: dict[str, Any] | None = None) -> str:
     """
     Find the per-run CSV directory for ``kind`` (transient/dc/ac).

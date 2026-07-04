@@ -188,7 +188,8 @@ def load_csv(csv_path: str) -> pd.DataFrame:
     return df
 
 
-def list_history_runs(out_dir: str, yaml_name: str | None = None) -> list[str]:
+def list_history_runs(out_dir: str | os.PathLike[str],
+                      yaml_name: str | None = None) -> list[str]:
     """
     Return run labels for the history dropdown, newest first.
 

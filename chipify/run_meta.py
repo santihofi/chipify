@@ -86,7 +86,7 @@ def _meta_path(csv_path: str | os.PathLike[str]) -> Path:
 # ── public API ────────────────────────────────────────────────────────────────
 
 def write_meta(
-    csv_path: str,
+    csv_path: str | os.PathLike[str],
     *,
     yaml_name: str = "",
     duration_s: float | None = None,
@@ -138,7 +138,7 @@ def write_meta(
         return ""
 
 
-def update_meta(csv_path: str, **fields) -> dict:
+def update_meta(csv_path: str | os.PathLike[str], **fields) -> dict:
     """
     Merge *fields* (e.g. ``notes=...``, ``tags=[...]``) into the sidecar of
     *csv_path*, creating a minimal sidecar if none exists yet.
@@ -162,7 +162,7 @@ def update_meta(csv_path: str, **fields) -> dict:
         return {}
 
 
-def read_meta(csv_path: str) -> dict:
+def read_meta(csv_path: str | os.PathLike[str]) -> dict:
     """
     Load the sidecar .meta.json for *csv_path*.
 

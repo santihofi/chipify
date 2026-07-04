@@ -312,11 +312,13 @@ class PluginContext:
     @property
     def dirs(self) -> dict[str, str]:
         """Project folders: ``in_dir``, ``out_dir``, ``tb_dir``, ``work_dir``."""
+        # Plugin-facing API contract is dict[str, str] — stringify the Path
+        # constants at this boundary.
         return {
-            "in_dir": settings.IN_DIR,
-            "out_dir": settings.OUT_DIR,
-            "tb_dir": settings.TB_DIR,
-            "work_dir": settings.WORK_DIR,
+            "in_dir": str(settings.IN_DIR),
+            "out_dir": str(settings.OUT_DIR),
+            "tb_dir": str(settings.TB_DIR),
+            "work_dir": str(settings.WORK_DIR),
         }
 
     def theme(self) -> dict[str, str]:
