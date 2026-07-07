@@ -152,8 +152,15 @@ class NgspiceSimulator(BaseSimulator):
                     err_msg = "".join(f.readlines()[-5:]).strip()
             return None, f"CRASH: {err_msg}"
         finally:
-            if process is not None and process.poll() is None:
-                process.kill()
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                # Reap the (possibly just-killed) child — without wait() it
+                # lingers as a zombie until the worker process exits.
+                try:
+                    process.wait(timeout=5)
+                except Exception:
+                    pass
 
     def run_log_tail(self, n_lines: int = 25) -> str:
         """Tail of this worker's ngspice run log (best-effort, '' on failure).

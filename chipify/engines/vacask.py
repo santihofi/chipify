@@ -500,8 +500,17 @@ class VacaskSimulator(BaseSimulator):
             log.exception("VacaskSimulator.run unexpected error: %s", exc)
             return None, f"CRASH: {exc}"
         finally:
-            if process is not None and process.poll() is None:
-                process.kill()
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                # Reap the (possibly just-killed) child — without wait() it
+                # lingers as a zombie until the worker process exits, and on
+                # Windows it still holds the log file open, which would break
+                # the tail read and workdir cleanup below.
+                try:
+                    process.wait(timeout=5)
+                except Exception:
+                    pass
             # Keep the log tail on the instance for post-run diagnostics
             # (run_log_tail) — the workdir is deleted right below.
             try:
