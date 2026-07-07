@@ -197,10 +197,13 @@ def run_xschem(
 
         netlist_files = [p for p in recent_files
                          if p.suffix.lower() in _XSCHEM_NETLIST_EXTS]
+        # Only accept a netlist whose stem matches this schematic. The mtime
+        # scan's 1s slack can include the *previous* testbench's netlist when
+        # testbenches are generated back-to-back; adopting it here (when
+        # xschem exits 0 without writing anything) would silently simulate
+        # the wrong circuit. Non-matching files are only logged for diagnosis.
         preferred = [p for p in netlist_files if p.stem == stem]
-        chosen_path: Path | None = (
-            preferred[0] if preferred else (netlist_files[0] if netlist_files else None)
-        )
+        chosen_path: Path | None = preferred[0] if preferred else None
 
         log.info("xschem post-run scan: recent_files=%s netlist_files=%s chosen=%s",
                  [_safe_rel(p) for p in recent_files],
@@ -211,7 +214,8 @@ def run_xschem(
             tail = _read_log_tail(log_path)
             after = _snapshot_dir(fast_tmp)
             raise RuntimeError(
-                f"Xschem ran (rc={process.returncode}) but wrote no netlist file. "
+                f"Xschem ran (rc={process.returncode}) but wrote no netlist "
+                f"named {stem!r}. "
                 f"recent_files={[str(p) for p in recent_files]}. "
                 f"FAST_TMP contents: {sorted(after)}. "
                 f"See {log_path}. log_tail={tail}"
