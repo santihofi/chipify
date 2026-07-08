@@ -1,16 +1,22 @@
 parameters:
-  temp: [27]
-  vdd: [1.5]
+  temp: [-40, 27, 100]
+  vdd: [1.5, 1.45, 1.55]
   vincm: [0.75]
-  corner_mos: ['tt']
+  corner_mos: ['tt', 'ss', 'ff']
+  sigma: [1]
+  seed: [1]
 tests:
   tb_sf_op_vacask:
     engine: vacask
     measure:
       vd: outp - outn
       ve: (outp + outn) / 2
-    net1:
-      unit: 'V'
-    net2:
-      unit: 'V'
+    outn: {}
     outp: {}
+  tb_sf_gain:
+    engine: ngspice
+    bandwidth: {}
+    gain: {}
+equations:
+  vd: outp-outn
+  ve: (outp+outn)/2
