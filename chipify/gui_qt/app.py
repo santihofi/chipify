@@ -113,9 +113,7 @@ def main() -> int:
     _set_windows_app_id()
     if _prefer_xwayland():
         log.info("Wayland session detected; preferring XWayland (xcb) with a "
-                 "native-Wayland fallback. If dropdowns still misbehave, install "
-                 "libxcb-cursor0 so the xcb plugin can load. "
-                 "Set CHIPIFY_QT_WAYLAND=1 to force native Wayland.")
+                 "native-Wayland fallback.")
     _select_mpl_backend()
 
     from PySide6.QtWidgets import QApplication
