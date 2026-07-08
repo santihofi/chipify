@@ -79,19 +79,8 @@ It is highly recommended to install and run Chipify inside the [IIC-OSIC-TOOLS](
 ## Installation
 
 ```bash
-git clone https://github.com/santihofi/chipify.git
-bash install.sh
+python3 -m pip install chipify
 ```
-
-Optional extras:
-
-```bash
-pip install ".[fast]"     # numexpr — vectorized transient-equation evaluation
-pip install ".[vacask]"   # PyOPUS — VACASK simulation backend
-```
-
-For development, install in editable mode: `pip install -e .`
-(On Linux/macOS, `install.sh` is a one-line convenience wrapper for the venv + install steps above.)
 
 ## Quick start
 
@@ -152,9 +141,9 @@ absolute or relative path, e.g.:
 Any key that is missing or blank falls back to its default. Paths are resolved
 when Chipify starts, so changes take effect on the next launch.
 
-## Running the example project
+## Running the examples
 
-A source follower example is included. to run the example, navigate to ``/chipify/examples/source_follower`` and run ``chipify`` in this directory. You can select between two datasheets describing a corner case and a mismatch simulation.
+The examples for chipify can be found [here](https://github.com/santihofi/chipify-examples)
 
 ## Project layout
 
