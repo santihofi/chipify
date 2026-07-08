@@ -176,6 +176,19 @@ def test_evaluate_vector_with_helper(ev: SafeEvaluator) -> None:
     np.testing.assert_array_almost_equal(result, [20.0, 40.0])
 
 
+def test_evaluate_vector_cannot_reach_module_globals(
+    ev: SafeEvaluator, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # numexpr's default global_dict is the calling frame's globals — an
+    # expression must never resolve names from chipify.expression itself
+    # (that would bypass the sandbox's name isolation).
+    import chipify.expression as expr_mod
+    monkeypatch.setattr(expr_mod, "SECRET", np.array([1.0, 2.0]), raising=False)
+    cols = {"x": np.array([1.0, 2.0])}
+    with pytest.raises(ExpressionError):
+        ev.evaluate_vector("SECRET + x", cols)
+
+
 # ── nan propagation ───────────────────────────────────────────────────────────
 
 def test_df_column_nan_propagation(ev: SafeEvaluator) -> None:

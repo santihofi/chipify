@@ -45,8 +45,11 @@ setup(
     extras_require={
         # pip install chipify[vacask]  → pulls in PyOPUS for VACASK engine support
         "vacask": ["PyOPUS>=0.11"],
-        # pip install chipify[fast]  → numexpr accelerates transient equation eval
-        "fast": ["numexpr"],
+        # pip install chipify[fast]  → numexpr accelerates transient equation eval.
+        # >=2.8.4: first release that validates expressions before evaluating
+        # them — required because SafeEvaluator feeds user-supplied equations
+        # to numexpr.evaluate().
+        "fast": ["numexpr>=2.8.4"],
     },
     entry_points={
         "console_scripts": [

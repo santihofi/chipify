@@ -172,14 +172,21 @@ class SafeEvaluator:
         Fast path: numexpr (plain arithmetic, no custom helpers).
         Fallback: asteval (supports db(), last(), first(), …).
 
-        Used by the transient-overlay hot path in plot_manager.py.
+        Public API for plugins / embedding code; no built-in call-sites
+        currently.
         """
         col_dict = dict(columns)
 
-        # numexpr fast path (only handles plain arithmetic / comparisons)
+        # numexpr fast path (only handles plain arithmetic / comparisons).
+        # global_dict must be explicitly empty: numexpr's default is the
+        # calling frame's globals, which would let an expression resolve
+        # names from this module instead of failing into the sandboxed
+        # asteval fallback below.
         try:
             import numexpr as ne
-            result: npt.NDArray[Any] = ne.evaluate(expr, local_dict=col_dict)
+            result: npt.NDArray[Any] = ne.evaluate(
+                expr, local_dict=col_dict, global_dict={},
+            )
             return result
         except Exception:
             pass  # expression uses helpers or has unsupported syntax → fall through
