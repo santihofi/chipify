@@ -99,3 +99,7 @@ Preparation for the initial public release.
 
 - Post-refactor baseline: multiprocessing simulation engine, CustomTkinter GUI,
   sandboxed expression evaluation, plugin system, and PDF/Markdown/LaTeX reports.
+
+## [0.2.1]
+
+- improve stability, fix bugs
