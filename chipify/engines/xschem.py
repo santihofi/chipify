@@ -42,12 +42,12 @@ def safe_tb_path(tb_name: str) -> Path:
 
 
 def safe_tb_file(name: str) -> Path:
-    """Resolve an imported-netlist path (under TB_DIR) to an existing file.
+    """Resolve a netlist filename (under TB_DIR) to an existing file.
 
     Like :func:`safe_tb_path` but uses *name* verbatim (no forced ``.sch``), so a
-    testbench's ``netlist:`` key can point at e.g. ``amp.spice``/``amp.sim``.
-    Guards against path traversal out of TB_DIR and raises FileNotFoundError if
-    the file is missing.
+    testbench with ``source: netlist`` can load its deck at e.g.
+    ``tb/<tb_path>.spice`` / ``tb/<tb_path>.sim``. Guards against path traversal
+    out of TB_DIR and raises FileNotFoundError if the file is missing.
     """
     base = os.path.normpath(settings.TB_DIR)
     full = os.path.normpath(os.path.join(settings.TB_DIR, name))

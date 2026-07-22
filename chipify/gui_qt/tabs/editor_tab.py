@@ -45,7 +45,7 @@ from chipify.gui_qt.widgets.helpers import autoclose_combo, deferred
 
 log = logging.getLogger("chipify.gui_qt.tabs.editor")
 
-_SKIP_KEYS = ("values", "measure", "engine", "netlist",
+_SKIP_KEYS = ("values", "measure", "engine", "source",
               "transient_signals", "dc_signals", "ac_signals")
 _ANALYSIS_ROWS = (
     ("transient_signals", "Transient", "e.g.  v(out), v(in), i(vdd)"),
@@ -310,25 +310,24 @@ class DatasheetEditorTab(QWidget):
         )
         autoclose_combo(engine_combo)
         hdr.addWidget(engine_combo)
+        src_lbl = QLabel("Source")
+        src_lbl.setObjectName("Muted")
+        hdr.addWidget(src_lbl)
+        source_combo = QComboBox()
+        source_combo.addItems(["xschem", "netlist"])
+        source_combo.setToolTip(
+            "Where this testbench's netlist comes from. 'xschem' netlists the "
+            "schematic tb/<name>.sch; 'netlist' loads an existing deck at "
+            "tb/<name>.spice (ngspice) or tb/<name>.sim (vacask) directly."
+        )
+        cur_source = str(tb_data.get("source", "") or "").strip().lower()
+        source_combo.setCurrentText(cur_source if cur_source == "netlist" else "xschem")
+        autoclose_combo(source_combo)
+        hdr.addWidget(source_combo)
         del_t = QPushButton("✕ Delete")
         del_t.clicked.connect(lambda _=False, i=t_idx: self._action_del_test(i))
         hdr.addWidget(del_t)
         v.addLayout(hdr)
-
-        nl_row = QHBoxLayout()
-        nl_lbl = QLabel("Netlist")
-        nl_lbl.setObjectName("Muted")
-        nl_lbl.setFixedWidth(70)
-        nl_row.addWidget(nl_lbl)
-        netlist_e = QLineEdit(str(tb_data.get("netlist", "") or ""))
-        netlist_e.setPlaceholderText("optional: tb/*.spice|*.sim to skip xschem")
-        netlist_e.setToolTip(
-            "Import an existing SPICE netlist for this testbench instead of "
-            "netlisting a schematic via xschem. Path is relative to the tb/ "
-            "folder. Leave empty to netlist tb/<name>.sch."
-        )
-        nl_row.addWidget(netlist_e, stretch=1)
-        v.addLayout(nl_row)
 
         grid = QGridLayout()
         for col, txt in enumerate(("Measurement", "Min", "Typ", "Max", "Unit")):
@@ -399,7 +398,7 @@ class DatasheetEditorTab(QWidget):
         self.test_vars.append({
             "tb_name": _Var(name_e),
             "engine": _ComboVar(engine_combo),
-            "netlist": _Var(netlist_e),
+            "source": _ComboVar(source_combo),
             "values": test_val_vars,
             "tran_signals": analysis_vars["transient_signals"],
             "analysis_signals": analysis_vars,

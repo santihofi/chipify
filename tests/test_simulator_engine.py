@@ -190,7 +190,7 @@ def test_generate_templates_missing_file_isolates_failure(tmp_path) -> None:
     assert "netlist generation failed" in (miss.template_error or "")
 
 
-# ── Direct netlist import (per-testbench `netlist:` key) ─────────────────────
+# ── Direct netlist import (per-testbench `source: netlist`) ──────────────────
 
 def _use_tb_dir(monkeypatch, tmp_path) -> None:
     from chipify import settings
@@ -210,11 +210,12 @@ def test_ngspice_import_netlist_skips_xschem_and_injects_capture(
     _use_tb_dir(monkeypatch, tmp_path)
     _no_xschem(monkeypatch, ng_mod)
 
+    # source="netlist" loads tb/<tb_path>.spice by convention.
     (tmp_path / "amp.spice").write_text(
         "V1 vdd 0 {{ vdd }}\n.control\ntran 1n 100n\n.endc\n", encoding="utf-8",
     )
     test = _make_test("amp", ["gain", "bw"])
-    test.netlist_file = "amp.spice"
+    test.netlist_source = "netlist"
 
     out = ng_mod.NgspiceSimulator().generate_test_template(test)
     # Managed capture is injected exactly as for xschem output …
@@ -232,7 +233,7 @@ def test_vacask_import_netlist_read_verbatim(monkeypatch, tmp_path) -> None:
     content = "* vacask deck\nsave all\ntran 1n 100n\n"
     (tmp_path / "amp.sim").write_text(content, encoding="utf-8")
     test = _make_test("amp", ["gain"])
-    test.netlist_file = "amp.sim"
+    test.netlist_source = "netlist"
 
     out = vc_mod.VacaskSimulator().generate_test_template(test)
     assert out == content
@@ -246,13 +247,13 @@ def test_generate_templates_missing_import_isolates_failure(
     _use_tb_dir(monkeypatch, tmp_path)
     _no_xschem(monkeypatch, ng_mod)
 
-    (tmp_path / "ok.spice").write_text(
+    (tmp_path / "tb_ok.spice").write_text(
         "* ok\n.control\ntran 1n 1u\n.endc\n", encoding="utf-8",
     )
     ok = _make_test("tb_ok", ["a"]); ok.engine = "ngspice"
-    ok.netlist_file = "ok.spice"
+    ok.netlist_source = "netlist"
     miss = _make_test("tb_miss", ["b"]); miss.engine = "ngspice"
-    miss.netlist_file = "nope.spice"
+    miss.netlist_source = "netlist"   # tb_miss.spice is absent
     stim = Stimuli()
     stim.tests = [ok, miss]
 

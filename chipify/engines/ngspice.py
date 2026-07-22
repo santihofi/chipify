@@ -51,11 +51,12 @@ class NgspiceSimulator(BaseSimulator):
     netlist_ext = ".spice"
 
     def generate_test_template(self, test) -> str:
-        # Source the raw netlist: an imported deck (test.netlist_file, under
-        # TB_DIR) bypasses xschem; otherwise netlist the .sch via xschem.
-        netlist_file = getattr(test, "netlist_file", None)
-        if netlist_file:
-            netlist = safe_tb_file(netlist_file).read_text(encoding="utf-8")
+        # Source the raw netlist: source="netlist" loads an existing deck at
+        # tb/<tb_path>.spice directly; otherwise netlist the .sch via xschem.
+        if getattr(test, "netlist_source", "xschem") == "netlist":
+            netlist = safe_tb_file(
+                test.tb_path + self.netlist_ext
+            ).read_text(encoding="utf-8")
         else:
             tb_path = safe_tb_path(test.tb_path)
             run_xschem(tb_path)

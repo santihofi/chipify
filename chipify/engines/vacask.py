@@ -351,13 +351,14 @@ class VacaskSimulator(BaseSimulator):
                  staged, osdi_dir, fast_tmp)
 
     def generate_test_template(self, test) -> str:
-        # An imported deck (test.netlist_file, under TB_DIR) bypasses xschem
-        # entirely. VACASK captures results in run() from the .raw file /
-        # measure expressions, so the imported .sim is used verbatim — it must
-        # emit a .raw just like an xschem-produced spectre netlist would.
-        netlist_file = getattr(test, "netlist_file", None)
-        if netlist_file:
-            return safe_tb_file(netlist_file).read_text(encoding="utf-8")
+        # source="netlist" loads an existing deck at tb/<tb_path>.sim directly,
+        # bypassing xschem entirely. VACASK captures results in run() from the
+        # .raw file / measure expressions, so the imported .sim is used verbatim
+        # — it must emit a .raw just like an xschem-produced spectre netlist would.
+        if getattr(test, "netlist_source", "xschem") == "netlist":
+            return safe_tb_file(
+                test.tb_path + self.netlist_ext
+            ).read_text(encoding="utf-8")
 
         cfg = app_config.load_config()
         source = cfg.get("vacask_netlist_source", "xschem")

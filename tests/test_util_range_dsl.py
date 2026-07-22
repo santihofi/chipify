@@ -195,29 +195,29 @@ def test_validate_datasheet_rejects_unknown_engine() -> None:
         validate_datasheet(data)
 
 
-def test_validate_datasheet_parses_per_testbench_netlist() -> None:
+def test_validate_datasheet_parses_per_testbench_source() -> None:
     from chipify.schema import validate_datasheet
     data = {
         "parameters": {"temp": [27]},
         "tests": {
-            "tb_i": {"gain": {"min": 1}, "netlist": "amp.spice"},   # imported deck
-            "tb_s": {"ve": {"max": 1}},                             # default → None
+            "tb_i": {"gain": {"min": 1}, "source": "netlist"},   # imported deck
+            "tb_s": {"ve": {"max": 1}},                          # default → xschem
         },
     }
     stim = validate_datasheet(data)
-    by = {t.tb_path: t.netlist_file for t in stim.tests}
-    assert by["tb_i"] == "amp.spice"
-    assert by["tb_s"] is None
-    # The netlist: key must not be mistaken for a measurement.
+    by = {t.tb_path: t.netlist_source for t in stim.tests}
+    assert by["tb_i"] == "netlist"
+    assert by["tb_s"] == "xschem"
+    # The source: key must not be mistaken for a measurement.
     tb_i = next(t for t in stim.tests if t.tb_path == "tb_i")
     assert [v.name for v in tb_i.value_lst] == ["gain"]
 
 
-def test_validate_datasheet_rejects_non_string_netlist() -> None:
+def test_validate_datasheet_rejects_unknown_source() -> None:
     from chipify.schema import validate_datasheet
     data = {
         "parameters": {"temp": [27]},
-        "tests": {"tb_x": {"netlist": ["a.spice"], "gain": {"min": 1}}},
+        "tests": {"tb_x": {"source": "magic", "gain": {"min": 1}}},
     }
-    with pytest.raises(SchemaError, match="netlist"):
+    with pytest.raises(SchemaError, match="source"):
         validate_datasheet(data)

@@ -143,25 +143,26 @@ when Chipify starts, so changes take effect on the next launch.
 
 ### Importing SPICE netlists (skip schematic entry)
 
-By default each testbench key names an Xschem schematic (`tb/<name>.sch`) that
-Chipify netlists for you. If you don't use schematic entry, point a testbench at
-an existing SPICE deck with the optional per-testbench `netlist:` key — Chipify
-uses that file directly and skips Xschem for that testbench:
+By default each testbench netlists an Xschem schematic (`tb/<name>.sch`) for you.
+If you don't use schematic entry, set the optional per-testbench `source: netlist`
+key — Chipify then loads an existing SPICE deck for that testbench directly and
+skips Xschem. The deck is located by convention, next to where the schematic
+would live: `tb/<name>.spice` for ngspice, `tb/<name>.sim` for vacask.
 
 ```yaml
 tests:
-  gain_tb:
-    engine: ngspice          # still selects the simulator
-    netlist: gain_tb.spice   # path under tb/, used instead of tb/gain_tb.sch
+  gain_tb:                # loads tb/gain_tb.spice instead of tb/gain_tb.sch
+    engine: ngspice       # selects the simulator (and the .spice/.sim extension)
+    source: netlist       # default is "xschem"
     gain:
       min: 40
       unit: dB
 ```
 
-The netlist path is resolved under the testbench folder (`tb/` by default). The
-`engine:` key still chooses the simulator (`.spice` for ngspice, `.sim` for
-vacask). Downstream everything is unchanged — parameter sweeps, measurement
-capture, pass/fail specs, and reports all work exactly as with a schematic.
+In the desktop GUI this is the per-testbench **Source** dropdown (`xschem` /
+`netlist`). The `engine:` key still chooses the simulator. Downstream everything
+is unchanged — parameter sweeps, measurement capture, pass/fail specs, and
+reports all work exactly as with a schematic.
 
 Authoring an imported netlist:
 
@@ -184,7 +185,7 @@ Authoring an imported netlist:
   automatically) and reference them by bare filename.
 
 Re-running against pre-generated templates (the `--templates-dir` flag) still
-takes precedence over a per-testbench `netlist:` key.
+takes precedence over a per-testbench `source: netlist`.
 
 ## Running the examples
 

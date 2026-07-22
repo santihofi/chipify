@@ -291,15 +291,15 @@ def sync_form_to_yaml(
             else:
                 tb_content.pop("engine", None)
 
-        # Per-testbench imported netlist (path under tb/). An empty value means
-        # "netlist the schematic via xschem" — remove the key to keep it clean.
-        netlist_var = t_dict.get("netlist")
-        if netlist_var is not None:
-            netlist = netlist_var.get().strip()
-            if netlist:
-                tb_content["netlist"] = QuotedString(netlist)
+        # Per-testbench netlist source ("xschem"|"netlist"). "xschem" is the
+        # default — omit the key to keep the datasheet clean.
+        source_var = t_dict.get("source")
+        if source_var is not None:
+            source = source_var.get().strip().lower()
+            if source and source != "xschem":
+                tb_content["source"] = source
             else:
-                tb_content.pop("netlist", None)
+                tb_content.pop("source", None)
 
         for v_dict in t_dict["values"]:
             name = v_dict["name"].get().strip()
