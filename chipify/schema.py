@@ -284,6 +284,7 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
         analyses: list[Analysis] = []
         measure: dict[str, str] = {}
         engine: str | None = None
+        netlist_file: str | None = None
         value_lst: list[Value] = []
 
         for val_name, bounds in measurements.items():
@@ -310,6 +311,16 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
                     engine = eng or None
                 continue
 
+            if val_name == "netlist":
+                if bounds is not None:
+                    if not isinstance(bounds, str):
+                        raise SchemaError(
+                            f"tests.{tb_path}.netlist: expected a filename string, "
+                            f"got {type(bounds).__name__}"
+                        )
+                    netlist_file = bounds.strip() or None
+                continue
+
             # Measurement boundary spec
             if not isinstance(bounds, dict):
                 bounds = {}
@@ -331,6 +342,7 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
         t.analyses = analyses
         t.measure = measure
         t.engine = engine
+        t.netlist_file = netlist_file
         stim.addTest(t)
 
     return stim

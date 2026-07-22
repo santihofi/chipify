@@ -25,7 +25,7 @@ from chipify.engines.base import BaseSimulator
 from chipify.engines.rawfile import read_raw_file as _read_raw_file
 from chipify.engines.rawfile import sanitise_key as _sanitise_key
 from chipify.engines.staging import staged_copy_is_stale
-from chipify.engines.xschem import run_xschem, safe_tb_path
+from chipify.engines.xschem import run_xschem, safe_tb_file, safe_tb_path
 
 log = logging.getLogger("chipify.engines.vacask")
 
@@ -351,6 +351,14 @@ class VacaskSimulator(BaseSimulator):
                  staged, osdi_dir, fast_tmp)
 
     def generate_test_template(self, test) -> str:
+        # An imported deck (test.netlist_file, under TB_DIR) bypasses xschem
+        # entirely. VACASK captures results in run() from the .raw file /
+        # measure expressions, so the imported .sim is used verbatim — it must
+        # emit a .raw just like an xschem-produced spectre netlist would.
+        netlist_file = getattr(test, "netlist_file", None)
+        if netlist_file:
+            return safe_tb_file(netlist_file).read_text(encoding="utf-8")
+
         cfg = app_config.load_config()
         source = cfg.get("vacask_netlist_source", "xschem")
         tb_path = safe_tb_path(test.tb_path)

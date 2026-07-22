@@ -190,6 +190,78 @@ def test_generate_templates_missing_file_isolates_failure(tmp_path) -> None:
     assert "netlist generation failed" in (miss.template_error or "")
 
 
+# ── Direct netlist import (per-testbench `netlist:` key) ─────────────────────
+
+def _use_tb_dir(monkeypatch, tmp_path) -> None:
+    from chipify import settings
+    monkeypatch.setattr(settings, "TB_DIR", str(tmp_path))
+
+
+def _no_xschem(monkeypatch, module) -> None:
+    def _boom(*_a, **_k):
+        raise AssertionError("run_xschem must not run for an imported netlist")
+    monkeypatch.setattr(module, "run_xschem", _boom)
+
+
+def test_ngspice_import_netlist_skips_xschem_and_injects_capture(
+    monkeypatch, tmp_path,
+) -> None:
+    from chipify.engines import ngspice as ng_mod
+    _use_tb_dir(monkeypatch, tmp_path)
+    _no_xschem(monkeypatch, ng_mod)
+
+    (tmp_path / "amp.spice").write_text(
+        "V1 vdd 0 {{ vdd }}\n.control\ntran 1n 100n\n.endc\n", encoding="utf-8",
+    )
+    test = _make_test("amp", ["gain", "bw"])
+    test.netlist_file = "amp.spice"
+
+    out = ng_mod.NgspiceSimulator().generate_test_template(test)
+    # Managed capture is injected exactly as for xschem output …
+    assert "echo MY_DATA:$&gain $&bw" in out
+    assert "set num_threads=1" in out
+    # … while the imported deck's Jinja placeholder survives for the sweep.
+    assert "{{ vdd }}" in out
+
+
+def test_vacask_import_netlist_read_verbatim(monkeypatch, tmp_path) -> None:
+    vc_mod = pytest.importorskip("chipify.engines.vacask")
+    _use_tb_dir(monkeypatch, tmp_path)
+    _no_xschem(monkeypatch, vc_mod)
+
+    content = "* vacask deck\nsave all\ntran 1n 100n\n"
+    (tmp_path / "amp.sim").write_text(content, encoding="utf-8")
+    test = _make_test("amp", ["gain"])
+    test.netlist_file = "amp.sim"
+
+    out = vc_mod.VacaskSimulator().generate_test_template(test)
+    assert out == content
+
+
+def test_generate_templates_missing_import_isolates_failure(
+    monkeypatch, tmp_path,
+) -> None:
+    from chipify.util import Stimuli
+    from chipify.engines import ngspice as ng_mod
+    _use_tb_dir(monkeypatch, tmp_path)
+    _no_xschem(monkeypatch, ng_mod)
+
+    (tmp_path / "ok.spice").write_text(
+        "* ok\n.control\ntran 1n 1u\n.endc\n", encoding="utf-8",
+    )
+    ok = _make_test("tb_ok", ["a"]); ok.engine = "ngspice"
+    ok.netlist_file = "ok.spice"
+    miss = _make_test("tb_miss", ["b"]); miss.engine = "ngspice"
+    miss.netlist_file = "nope.spice"
+    stim = Stimuli()
+    stim.tests = [ok, miss]
+
+    simulator.generate_templates(stim)
+    assert "echo MY_DATA:$&a" in ok.template_str and ok.template_error is None
+    assert miss.template_str == ""
+    assert "netlist generation failed" in (miss.template_error or "")
+
+
 def test_template_render_error_fails_only_that_testbench() -> None:
     """A StrictUndefined render error (e.g. param-name typo in the testbench)
     must fail that testbench's row — not blow up the whole worker batch."""

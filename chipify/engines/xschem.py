@@ -41,6 +41,29 @@ def safe_tb_path(tb_name: str) -> Path:
     return Path(full)
 
 
+def safe_tb_file(name: str) -> Path:
+    """Resolve an imported-netlist path (under TB_DIR) to an existing file.
+
+    Like :func:`safe_tb_path` but uses *name* verbatim (no forced ``.sch``), so a
+    testbench's ``netlist:`` key can point at e.g. ``amp.spice``/``amp.sim``.
+    Guards against path traversal out of TB_DIR and raises FileNotFoundError if
+    the file is missing.
+    """
+    base = os.path.normpath(settings.TB_DIR)
+    full = os.path.normpath(os.path.join(settings.TB_DIR, name))
+    if not full.startswith(base + os.sep) and full != base:
+        raise ValueError(
+            f"Netlist path {name!r} escapes TB_DIR ({settings.TB_DIR!r})."
+        )
+    path = Path(full)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Imported netlist {name!r} not found at {full} "
+            f"(expected under TB_DIR {settings.TB_DIR!r})."
+        )
+    return path
+
+
 def _read_log_tail(log_path: Path, n_lines: int = 60) -> str:
     try:
         with open(log_path, "r") as lf:

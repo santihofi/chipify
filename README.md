@@ -141,6 +141,51 @@ absolute or relative path, e.g.:
 Any key that is missing or blank falls back to its default. Paths are resolved
 when Chipify starts, so changes take effect on the next launch.
 
+### Importing SPICE netlists (skip schematic entry)
+
+By default each testbench key names an Xschem schematic (`tb/<name>.sch`) that
+Chipify netlists for you. If you don't use schematic entry, point a testbench at
+an existing SPICE deck with the optional per-testbench `netlist:` key — Chipify
+uses that file directly and skips Xschem for that testbench:
+
+```yaml
+tests:
+  gain_tb:
+    engine: ngspice          # still selects the simulator
+    netlist: gain_tb.spice   # path under tb/, used instead of tb/gain_tb.sch
+    gain:
+      min: 40
+      unit: dB
+```
+
+The netlist path is resolved under the testbench folder (`tb/` by default). The
+`engine:` key still chooses the simulator (`.spice` for ngspice, `.sim` for
+vacask). Downstream everything is unchanged — parameter sweeps, measurement
+capture, pass/fail specs, and reports all work exactly as with a schematic.
+
+Authoring an imported netlist:
+
+- **Swept parameters** are substituted via Jinja2 `{{ param }}` placeholders in
+  the deck (e.g. `V1 vdd 0 {{ vdd }}`). A value that isn't a placeholder is the
+  same for every sweep point.
+- The whole deck is rendered as a Jinja2 template, so **avoid stray literal
+  `{...}` braces** (inline expressions like `{R*2}`) — they raise a template
+  error. Precompute such values in a `.control`/`.param` form that doesn't use
+  bare braces.
+- **ngspice (managed capture):** name your `let`/`meas` vectors after the
+  datasheet measurement keys and add your analysis (`tran`/`dc`/`ac`) in a
+  `.control` block. Do **not** hand-write `echo MY_DATA:`/`wrdata` lines —
+  Chipify injects those from the datasheet, just as it does for Xschem output.
+- **vacask:** provide a `.sim` deck that writes a `.raw` consistent with the
+  Spectre path; Chipify extracts scalars/waveforms from the `.raw` file (and any
+  `measure:` expressions) in the datasheet.
+- **Model files** referenced via `.include`/`.lib` must resolve from the staged
+  scratch dir — put them in `work/` (`*.lib`/`*.mod`/`*.inc` are staged
+  automatically) and reference them by bare filename.
+
+Re-running against pre-generated templates (the `--templates-dir` flag) still
+takes precedence over a per-testbench `netlist:` key.
+
 ## Running the examples
 
 The examples for chipify can be found [here](https://github.com/santihofi/chipify-examples)

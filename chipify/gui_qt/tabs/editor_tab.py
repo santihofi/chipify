@@ -45,7 +45,7 @@ from chipify.gui_qt.widgets.helpers import autoclose_combo, deferred
 
 log = logging.getLogger("chipify.gui_qt.tabs.editor")
 
-_SKIP_KEYS = ("values", "measure", "engine",
+_SKIP_KEYS = ("values", "measure", "engine", "netlist",
               "transient_signals", "dc_signals", "ac_signals")
 _ANALYSIS_ROWS = (
     ("transient_signals", "Transient", "e.g.  v(out), v(in), i(vdd)"),
@@ -315,6 +315,21 @@ class DatasheetEditorTab(QWidget):
         hdr.addWidget(del_t)
         v.addLayout(hdr)
 
+        nl_row = QHBoxLayout()
+        nl_lbl = QLabel("Netlist")
+        nl_lbl.setObjectName("Muted")
+        nl_lbl.setFixedWidth(70)
+        nl_row.addWidget(nl_lbl)
+        netlist_e = QLineEdit(str(tb_data.get("netlist", "") or ""))
+        netlist_e.setPlaceholderText("optional: tb/*.spice|*.sim to skip xschem")
+        netlist_e.setToolTip(
+            "Import an existing SPICE netlist for this testbench instead of "
+            "netlisting a schematic via xschem. Path is relative to the tb/ "
+            "folder. Leave empty to netlist tb/<name>.sch."
+        )
+        nl_row.addWidget(netlist_e, stretch=1)
+        v.addLayout(nl_row)
+
         grid = QGridLayout()
         for col, txt in enumerate(("Measurement", "Min", "Typ", "Max", "Unit")):
             lbl = QLabel(txt)
@@ -384,6 +399,7 @@ class DatasheetEditorTab(QWidget):
         self.test_vars.append({
             "tb_name": _Var(name_e),
             "engine": _ComboVar(engine_combo),
+            "netlist": _Var(netlist_e),
             "values": test_val_vars,
             "tran_signals": analysis_vars["transient_signals"],
             "analysis_signals": analysis_vars,

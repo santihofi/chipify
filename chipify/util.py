@@ -79,6 +79,12 @@ class Test:
         # optional ``engine:`` key, and simulator.run_sim() resolves None to a
         # concrete name before dispatch.
         self.engine: str | None = None
+        # Optional imported netlist: a path (relative to TB_DIR) of an existing
+        # SPICE deck to use instead of netlisting the ``.sch`` via xschem. None
+        # means "generate the netlist from the schematic". Set by
+        # schema.validate_datasheet() from the optional per-test ``netlist:`` key;
+        # consumed by each engine's generate_test_template().
+        self.netlist_file: str | None = None
         # Set by simulator.generate_templates() if this testbench's netlist could
         # not be produced (e.g. its engine is unavailable). The worker then fails
         # only this testbench's runs with this message, leaving others to run.

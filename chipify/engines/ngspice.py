@@ -19,7 +19,7 @@ from pathlib import Path
 from chipify import settings
 from chipify.engines.abort import is_aborted
 from chipify.engines.base import BaseSimulator
-from chipify.engines.xschem import run_xschem, safe_tb_path
+from chipify.engines.xschem import run_xschem, safe_tb_file, safe_tb_path
 
 log = logging.getLogger("chipify.engines.ngspice")
 
@@ -51,52 +51,68 @@ class NgspiceSimulator(BaseSimulator):
     netlist_ext = ".spice"
 
     def generate_test_template(self, test) -> str:
-        tb_path = safe_tb_path(test.tb_path)
-        run_xschem(tb_path)
+        # Source the raw netlist: an imported deck (test.netlist_file, under
+        # TB_DIR) bypasses xschem; otherwise netlist the .sch via xschem.
+        netlist_file = getattr(test, "netlist_file", None)
+        if netlist_file:
+            netlist = safe_tb_file(netlist_file).read_text(encoding="utf-8")
+        else:
+            tb_path = safe_tb_path(test.tb_path)
+            run_xschem(tb_path)
+            # run_xschem names its output after the schematic's basename, so a
+            # nested tb_path like "sub/tb_x" still yields FAST_TMP/tb_x.spice.
+            spice_file = Path(settings.FAST_TMP) / (tb_path.stem + ".spice")
+            netlist = spice_file.read_text()
 
-        # run_xschem names its output after the schematic's basename, so a
-        # nested tb_path like "sub/tb_x" still yields FAST_TMP/tb_x.spice.
-        spice_file = Path(settings.FAST_TMP) / (tb_path.stem + ".spice")
-        with open(spice_file, "r") as f:
-            netlist = f.read()
-            if ".control" in netlist:
-                netlist = netlist.replace(".control", ".control\nset num_threads=1\n")
-            else:
-                netlist += "\n.control\nset num_threads=1\n.endc\n"
+        return self._finalize_netlist(netlist, test)
 
-            # Chipify owns the MY_DATA: line now — strip any the testbench still
-            # carries so we never emit two (the parser takes the first match,
-            # which would silently win over ours). The testbench supplies the
-            # let/meas vectors; chipify emits the echo from the datasheet.
-            netlist = re.sub(r"(?im)^.*\bMY_DATA\b.*$\n?", "", netlist)
+    def _finalize_netlist(self, netlist: str, test) -> str:
+        """Splice Chipify's managed capture into a raw ngspice netlist.
 
-            # Build the .control injection: the scalar MY_DATA echo first (so
-            # $&<name> resolves in the plot the testbench's own meas left
-            # current), then the per-analysis wrdata/setplot capture (which
-            # switches plots). _inject_capture splices this before the first
-            # quit/exit (or .endc). The Jinja2 placeholders (tran_out_path /
-            # dc_out_path / ac_out_path) are filled per worker call.
-            inject_parts: list[str] = []
+        Applied identically whether *netlist* came from xschem or was imported
+        directly, so an imported plain deck reuses the datasheet's measurement
+        contract. The testbench supplies the let/meas vectors named after the
+        datasheet measurements; chipify owns the ``set num_threads``, the
+        ``MY_DATA:`` echo, and the per-analysis wrdata/setplot lines.
+        """
+        if ".control" in netlist:
+            netlist = netlist.replace(".control", ".control\nset num_threads=1\n")
+        else:
+            netlist += "\n.control\nset num_threads=1\n.endc\n"
 
-            # Scalar capture: echo MY_DATA:$&<name0> $&<name1> ... in value_lst
-            # order. Each datasheet scalar key must name a vector the testbench
-            # defines (via let/meas); the run() side parses these positionally,
-            # so chipify now controls both ends and the order can't drift.
-            value_lst = getattr(test, "value_lst", []) or []
-            if value_lst:
-                echoed = " ".join(f"$&{v.name}" for v in value_lst)
-                inject_parts.append(f"echo MY_DATA:{echoed}")
+        # Chipify owns the MY_DATA: line now — strip any the testbench still
+        # carries so we never emit two (the parser takes the first match,
+        # which would silently win over ours). The testbench supplies the
+        # let/meas vectors; chipify emits the echo from the datasheet.
+        netlist = re.sub(r"(?im)^.*\bMY_DATA\b.*$\n?", "", netlist)
 
-            # setplot ensures wrdata pulls from the right vector store when
-            # multiple analyses run in the same .control.
-            analyses = getattr(test, "analyses", []) or []
-            if analyses:
-                inject_parts.append("\n".join(a.ngspice_inject() for a in analyses))
+        # Build the .control injection: the scalar MY_DATA echo first (so
+        # $&<name> resolves in the plot the testbench's own meas left
+        # current), then the per-analysis wrdata/setplot capture (which
+        # switches plots). _inject_capture splices this before the first
+        # quit/exit (or .endc). The Jinja2 placeholders (tran_out_path /
+        # dc_out_path / ac_out_path) are filled per worker call.
+        inject_parts: list[str] = []
 
-            if inject_parts:
-                netlist = _inject_capture(netlist, "\n".join(inject_parts))
+        # Scalar capture: echo MY_DATA:$&<name0> $&<name1> ... in value_lst
+        # order. Each datasheet scalar key must name a vector the testbench
+        # defines (via let/meas); the run() side parses these positionally,
+        # so chipify now controls both ends and the order can't drift.
+        value_lst = getattr(test, "value_lst", []) or []
+        if value_lst:
+            echoed = " ".join(f"$&{v.name}" for v in value_lst)
+            inject_parts.append(f"echo MY_DATA:{echoed}")
 
-            return netlist
+        # setplot ensures wrdata pulls from the right vector store when
+        # multiple analyses run in the same .control.
+        analyses = getattr(test, "analyses", []) or []
+        if analyses:
+            inject_parts.append("\n".join(a.ngspice_inject() for a in analyses))
+
+        if inject_parts:
+            netlist = _inject_capture(netlist, "\n".join(inject_parts))
+
+        return netlist
 
     def run(self, netlist: str, timeout_sec: float = 10, test=None,
             analysis_tab_paths: dict | None = None):
