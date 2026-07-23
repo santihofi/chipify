@@ -13,6 +13,10 @@ import pandas as pd
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Pin matplotlib's Qt binding to PySide6 so it never probes PyQt — chipify ships
+# only PySide6 (Essentials), and this keeps the import deterministic when no PyQt
+# binding is installed.
+os.environ.setdefault("QT_API", "pyside6")
 
 # Importing QtWidgets dlopens Qt's runtime libraries (libEGL.so.1, libGL.so.1,
 # …) even under the offscreen platform. When those *system* libs are absent

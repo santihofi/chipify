@@ -2,7 +2,8 @@
 # This file only carries developer-tooling configuration (mypy + pytest).
 #
 # System dependencies (cannot be declared here — pip only installs Python wheels).
-# PySide6 needs two kinds of system libraries:
+# The Qt GUI is built on PySide6-Essentials (the pip dependency; see setup.py),
+# which needs two kinds of system libraries:
 #   * Base Qt runtime: libegl1 / libgl1 (libEGL.so.1 / libGL.so.1). dlopened when
 #     QtWidgets is imported — required even for the headless offscreen test suite,
 #     so without them `pytest` fails to import PySide6 (ImportError: libEGL.so.1).

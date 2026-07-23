@@ -103,3 +103,7 @@ Preparation for the initial public release.
 ## [0.2.1]
 
 - improve stability, fix bugs
+
+## [9.2.2]
+
+- switch to PySide6-Essentials

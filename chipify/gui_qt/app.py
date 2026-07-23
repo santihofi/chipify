@@ -17,6 +17,10 @@ from pathlib import Path
 
 def _select_mpl_backend() -> None:
     """Force matplotlib onto the Qt backend before any pyplot import."""
+    # Pin matplotlib's Qt binding to PySide6 so its qt_compat never probes/imports
+    # PyQt6/PyQt5 first. Chipify ships only PySide6 (Essentials); this keeps the
+    # backend selection deterministic and avoids needing any PyQt binding present.
+    os.environ.setdefault("QT_API", "pyside6")
     import matplotlib
     matplotlib.use("QtAgg")
 

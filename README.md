@@ -60,7 +60,9 @@ available on your `PATH`:
 - **[Ngspice](https://ngspice.sourceforge.io/)** — the SPICE simulator
 - **[Xschem](https://xschem.sourceforge.io/)** — schematic capture / netlist generation
 - *(optional)* **[VACASK](https://vacask.fke.uni-lj.si/)** + PyOPUS — alternative simulation backend
-- *(Linux)* **PySide6 system libraries** — Qt needs a few shared libraries that
+- *(Linux)* **PySide6 system libraries** — the Qt GUI runs on `PySide6-Essentials`
+  (installed automatically by pip; only QtCore/QtGui/QtWidgets are used, so the
+  larger PySide6 Addons aren't needed). Qt still needs a few shared libraries that
   pip can't install:
   - **`libegl1` / `libgl1`** (`libEGL.so.1` / `libGL.so.1`) are dlopened when Qt
     is imported — required even for the headless test suite. Without them you get

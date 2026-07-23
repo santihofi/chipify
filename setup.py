@@ -34,10 +34,15 @@ setup(
         "tqdm",
         "jinja2",
         "pyyaml",
-        # Qt GUI. >=6.7 has improved Wayland popup handling; the xcb platform
-        # plugin additionally needs the libxcb-cursor0 *system* library (see
-        # install.sh / README — system libs can't be declared here).
-        "PySide6>=6.7",
+        # Qt GUI. Only the Essentials modules are used (QtCore/QtGui/QtWidgets),
+        # so we depend on the smaller PySide6-Essentials meta-package rather than
+        # the full PySide6 (which also drags in PySide6-Addons: QtWebEngine,
+        # QtCharts, QtMultimedia, …, none of which chipify imports). It provides
+        # the identical `PySide6.*` import namespace. >=6.7 has improved Wayland
+        # popup handling; the xcb platform plugin additionally needs the
+        # libxcb-cursor0 *system* library (see install.sh / README — system libs
+        # can't be declared here).
+        "PySide6-Essentials>=6.7",
         "matplotlib",
         "scipy",
         "asteval",
