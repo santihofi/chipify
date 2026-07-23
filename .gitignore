@@ -10,6 +10,7 @@ venv/
 
 # ── Build / packaging artifacts ──
 build/
+dist/
 *.egg-info/
 
 # ── Caches ──

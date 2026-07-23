@@ -21,6 +21,9 @@ jobs:
       - name: Build sdist and wheel
         run: |
           python -m pip install --upgrade build
+          # Build into a clean dist/ so a stray or accidentally committed artifact
+          # from another version can never be published alongside this release.
+          rm -rf dist
           python -m build
 
       - uses: actions/upload-artifact@v4
