@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Santiago Hofwimmer
+# Copyright (c) 2026 Santiago Hofwimmer
 import copy
 import logging
 from pathlib import Path
@@ -48,10 +48,33 @@ def _resolve_theme(theme: dict | None, bg_color: str | None = None) -> dict:
     return base
 
 
+#: Which measurement columns each advanced mode actually plots. Modes absent
+#: from this map plot no single measurement (a yield matrix, a correlation
+#: heatmap, a fail breakdown, an all-measurements plugin grid) and so must keep
+#: every run: scoping them to one measurement would throw away the very rows
+#: they exist to summarise.
+def _adv_plot_columns(mode, x_col, y_col, target, plugin_param):
+    """Measurement columns whose usability constrains the rows for *mode*."""
+    if mode == "Scatter Plot":
+        return [x_col, y_col]
+    if mode == "Sensitivity (Tornado)":
+        return [target]
+    if plugin_param:          # a plot plugin showing one selected measurement
+        return [plugin_param]
+    return []
+
+
 class PlotManager:
     @staticmethod
-    def draw_histogram(fig, ax, canvas, valid_df, current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run, theme=None):
+    def draw_histogram(fig, ax, canvas, df, current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run, theme=None):
         import scipy.stats as stats  # lazy: keeps scipy off the GUI launch path
+        from chipify import data_loader as _dl
+
+        # Takes the FULL results frame and scopes it here, to the runs where
+        # this measurement's own testbench produced data. Callers used to
+        # pre-filter with valid_rows, which empties the frame as soon as any
+        # *other* testbench fails and blanked every chart in the app.
+        valid_df = _dl.plot_rows(df, current_stim, [param])
         th = _resolve_theme(theme)
         ax.clear()
         ax.set_facecolor(th["bg"])
@@ -218,7 +241,15 @@ class PlotManager:
         canvas.draw()
 
     @staticmethod
-    def draw_adv_plot(fig, ax_dummy, canvas, valid_df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b", theme=None, plugin_param=None):
+    def draw_adv_plot(fig, ax_dummy, canvas, df, current_stim, mode, x_col, y_col, target, bg_color="#2b2b2b", theme=None, plugin_param=None):
+        from chipify import data_loader as _dl
+
+        # Full frame in, scoped here per mode (see _adv_plot_columns) so one
+        # broken testbench costs only its own curves.
+        valid_df = _dl.plot_rows(
+            df, current_stim,
+            _adv_plot_columns(mode, x_col, y_col, target, plugin_param),
+        )
         th = _resolve_theme(theme, bg_color=bg_color)
         fg = th["fg"]
         if ax_dummy is None or ax_dummy not in fig.axes:
@@ -243,7 +274,9 @@ class PlotManager:
 
         if mode == "Scatter Plot":
             if x_col not in valid_df.columns or y_col not in valid_df.columns: return None, None
-            pass_mask = valid_df['global_pass'] == True
+            # effective_pass, not global_pass: global_pass ANDs every
+            # testbench, so an unrelated broken one would paint every point red.
+            pass_mask = _dl.effective_pass(valid_df).fillna(0.0) > 0.5
             colors = np.where(pass_mask, '#2ecc71', '#e74c3c')
 
             sc_plot = ax.scatter(valid_df[x_col], valid_df[y_col], c=colors, alpha=0.7, edgecolors=fg, linewidths=0.5, picker=5)
@@ -269,8 +302,13 @@ class PlotManager:
                 canvas.draw()
                 return None, None
 
-            # Berechne den prozentualen Anteil von 'True' (Pass) pro Block
-            pivot = valid_df.pivot_table(index=y_col, columns=x_col, values='global_pass', aggfunc='mean')
+            # Percentage of passing runs per block, computed over the
+            # testbenches that actually ran: global_pass ANDs all of them, so a
+            # permanently broken testbench would flatten the whole matrix to 0 %
+            # and hide the corner behaviour of the ones that worked.
+            yield_df = valid_df.assign(_eff_pass=_dl.effective_pass(valid_df))
+            pivot = yield_df.pivot_table(index=y_col, columns=x_col,
+                                         values='_eff_pass', aggfunc='mean')
 
             cax = ax.matshow(pivot, cmap='RdYlGn', vmin=0, vmax=1)
             cbar = fig.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
@@ -292,7 +330,11 @@ class PlotManager:
             ax.xaxis.set_ticks_position('bottom')
             ax.set_xlabel(x_col, color=fg)
             ax.set_ylabel(y_col, color=fg)
-            ax.set_title(f"Corner Yield Matrix: {y_col} vs {x_col}", color=fg, pad=20)
+            errored = _dl.errored_testbenches(valid_df)
+            excluded = (f"  ({', '.join(errored)} errored - excluded)"
+                        if errored else "")
+            ax.set_title(f"Corner Yield Matrix: {y_col} vs {x_col}{excluded}",
+                         color=fg, pad=20)
 
         elif mode == "Correlation Heatmap":
             numeric_cols = valid_df.select_dtypes(include=[np.number]).columns.tolist()
@@ -351,7 +393,16 @@ class PlotManager:
 
         elif mode == "Fail Breakdown (Pie Chart)":
             pass_cols = [c for c in valid_df.columns if c.endswith('_pass') and not c.endswith('_overall_pass') and c != 'global_pass']
-            fail_counts = {c.replace('_pass', ''): (valid_df[c] == False).sum() for c in pass_cols if (valid_df[c] == False).sum() > 0}
+            # Count a fail only where the measurement actually produced a value.
+            # A crashed testbench sets every one of its *_pass flags False, and
+            # counting those would report a broken schematic as a spec failure.
+            fail_counts = {}
+            for col in pass_cols:
+                name = col[: -len('_pass')]
+                usable = _dl.plot_rows(valid_df, current_stim, [name])
+                n_fail = int((usable[col] == False).sum())
+                if n_fail:
+                    fail_counts[name] = n_fail
 
             if not fail_counts:
                 ax.text(0.5, 0.5, "100% Yield! No failures to analyze.", color='#2ecc71', ha='center', va='center', fontsize=14, weight='bold')

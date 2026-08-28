@@ -276,3 +276,90 @@ def test_lost_batch_rows_accounts_for_every_case():
     assert {e.kind for e in errors} == {"WORKER_LOST"}
     assert all(r.status == meas.STATUS_ERROR
                for r in meas.measurement_rows(df, stim))
+
+
+# ── Plot row scoping ──────────────────────────────────────────────────────────
+
+def test_plot_rows_keeps_the_healthy_testbenchs_runs():
+    """The plotting regression: charts went blank when any testbench failed."""
+    df, stim = _two_tb_df(), _two_tb_stim()
+    assert len(_dl.valid_rows(df)) == 0          # what used to reach the plots
+
+    assert len(_dl.plot_rows(df, stim, ["gain"])) == 2
+    assert _dl.plot_rows(df, stim, ["bw"]).empty
+
+
+def test_plot_rows_without_columns_keeps_everything():
+    """Yield matrices and correlation heatmaps must still see every run."""
+    df, stim = _two_tb_df(), _two_tb_stim()
+    assert len(_dl.plot_rows(df, stim, [])) == 2
+    assert len(_dl.plot_rows(df, stim, None)) == 2
+    # A sweep parameter is not a measurement and constrains nothing.
+    assert len(_dl.plot_rows(df, stim, ["corner"])) == 2
+
+
+def test_plot_rows_intersects_multiple_measurements():
+    """A scatter needs both axes usable in the same run."""
+    df, stim = _two_tb_df(), _two_tb_stim()
+    df["tb_amp__error"] = ["None", "tb_amp: TIMEOUT"]
+    df["gain"] = [44.0, float("nan")]
+    df["bw"] = [1.5e6, 1.6e6]
+    df["tb_ac__error"] = "None"
+
+    assert len(_dl.plot_rows(df, stim, ["bw"])) == 2
+    assert len(_dl.plot_rows(df, stim, ["gain"])) == 1
+    assert len(_dl.plot_rows(df, stim, ["gain", "bw"])) == 1
+
+
+def test_measurement_owners_covers_measure_expressions():
+    stim = _two_tb_stim()
+    stim.tests[0].measure = {"gbw": "gain * bw"}
+    owners = _dl.measurement_owners(stim)
+    assert owners["gain"] == "tb_amp"
+    assert owners["bw"] == "tb_ac"
+    assert owners["gbw"] == "tb_amp"      # measure: results are measurements too
+
+
+# ── effective_pass ────────────────────────────────────────────────────────────
+
+def _pass_df(**overrides):
+    df = _two_tb_df()
+    df["tb_amp_overall_pass"] = [True, True]
+    df["tb_ac_overall_pass"] = [False, False]
+    for k, v in overrides.items():
+        df[k] = v
+    return df
+
+
+def test_effective_pass_ignores_errored_testbenches():
+    """global_pass would read 0 everywhere and flatten the yield matrix."""
+    df = _dl.prepare_results(_pass_df())
+    assert list(df["global_pass"].astype(float)) == [0.0, 0.0]
+    assert list(_dl.effective_pass(df)) == [1.0, 1.0]
+
+
+def test_effective_pass_still_reports_a_genuine_failure():
+    df = _dl.prepare_results(_pass_df(tb_amp_overall_pass=[True, False]))
+    assert list(_dl.effective_pass(df)) == [1.0, 0.0]
+
+
+def test_effective_pass_is_nan_when_no_testbench_ran():
+    """A row where everything crashed must not count as a fail in a mean."""
+    df = _pass_df()
+    df["tb_amp__error"] = "tb_amp: CRASH"
+    df = _dl.prepare_results(df)
+    assert _dl.effective_pass(df).isna().all()
+
+
+def test_errored_testbenches_names_the_broken_one():
+    assert _dl.errored_testbenches(_two_tb_df()) == ["tb_ac"]
+    clean = _two_tb_df(tb_ac_error="None")
+    clean["sim_error"] = "None"
+    assert _dl.errored_testbenches(clean) == []
+
+
+def test_effective_pass_falls_back_on_legacy_frames():
+    """Frames with no per-testbench verdict columns keep global_pass."""
+    df = _dl.prepare_results(_two_tb_df().drop(
+        columns=["tb_amp__error", "tb_ac__error"]))
+    assert list(_dl.effective_pass(df)) == list(df["global_pass"].astype(float))

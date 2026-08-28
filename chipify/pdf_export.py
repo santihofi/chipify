@@ -537,9 +537,17 @@ def _draw_hist_ax(ax, data, param, lo, hi, cpk, passed):
     ax.set_xlim(data_min - (pad or 0.1), data_max + (pad or 0.1))
 
 
-def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list):
+def _add_histograms(pdf: PdfPages, df: pd.DataFrame, stim, rows_meta: list):
+    """Distribution pages, one measurement per slot.
+
+    Takes the full prepared frame: each measurement is scoped to the runs where
+    its own testbench produced data, so one crashed testbench costs only its own
+    histograms instead of blanking every page.
+    """
+    from chipify import data_loader as _dl
+
     meta = {r.name: r for r in rows_meta}
-    params = [r.name for r in rows_meta if r.name in valid_df.columns]
+    params = [r.name for r in rows_meta if r.name in df.columns]
     if not params:
         return
 
@@ -556,7 +564,7 @@ def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list
             m = meta.get(p)
             if m is None:
                 continue
-            data = valid_df[p].dropna()
+            data = _dl.plot_rows(df, stim, [p])[p].dropna()
             if data.empty:
                 continue
             # Two balanced slots that avoid clipping and keep labels/legend readable.
@@ -571,19 +579,19 @@ def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list
 
 # ── Section 4: Correlation heatmap ────────────────────────────────────────────
 
-def _add_correlation(pdf: PdfPages, valid_df: pd.DataFrame):
+def _add_correlation(pdf: PdfPages, df: pd.DataFrame):
     import copy as _copy
-    numeric = valid_df.select_dtypes(include=[np.number]).columns.tolist()
+    numeric = df.select_dtypes(include=[np.number]).columns.tolist()
     # run_id / duration are bookkeeping, not data (matches the GUI heatmap).
     non_data = {"run_id", "simulation_duration_s_total"}
     cols = [c for c in numeric
             if not c.endswith("_pass") and c != "global_pass"
             and c not in non_data
-            and valid_df[c].nunique() > 1]
+            and df[c].nunique() > 1]
     if len(cols) < 2:
         return
 
-    corr = valid_df[cols].corr()
+    corr = df[cols].corr()
     n = len(cols)
 
     fig = plt.figure(figsize=A4, facecolor="white")
@@ -669,8 +677,10 @@ def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
         _add_cover(pdf, prepared, yaml_path, rows, stim, sim_duration_sec=sim_duration_sec)
         _add_table(pdf, rows, valid_df, stim)
         _add_errors(pdf, errors)
-        _add_histograms(pdf, valid_df, stim, rows)
-        _add_correlation(pdf, valid_df)
+        _add_histograms(pdf, prepared, stim, rows)
+        # corr() is pairwise and the nunique() > 1 filter already drops all-NaN
+        # columns, so the full frame is safe and keeps the healthy measurements.
+        _add_correlation(pdf, prepared)
         _add_plugin_pages(pdf, valid_df, stim)
 
     return str(pdf_path)

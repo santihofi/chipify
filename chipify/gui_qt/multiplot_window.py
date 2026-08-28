@@ -228,18 +228,18 @@ class PlotCell(QFrame):
 
     # ── Option population ─────────────────────────────────────────────────────
 
-    def _populate(self, valid_df, stim, sweep_params, derived_cols) -> None:
-        if valid_df is None or stim is None:
+    def _populate(self, df, stim, sweep_params, derived_cols) -> None:
+        if df is None or stim is None:
             return
-        cols = _dl.compute_plot_cols(valid_df, stim)
+        cols = _dl.compute_plot_cols(df, stim)
         meas = []
         for test in stim.tests:
             for v in test.value_lst:
-                if v.name in valid_df.columns and v.name not in meas:
+                if v.name in df.columns and v.name not in meas:
                     meas.append(v.name)
             # measure: expression results are measurements too (limitless).
             for name in (getattr(test, "measure", None) or {}):
-                if name in valid_df.columns and name not in meas:
+                if name in df.columns and name not in meas:
                     meas.append(name)
         # Histogram params: outputs only — input parameters make no sense as a
         # distribution (they're the sweep grid); they stay in "Group by" and
@@ -280,8 +280,8 @@ class PlotCell(QFrame):
 
     # ── Rendering ─────────────────────────────────────────────────────────────
 
-    def redraw(self, valid_df, stim, sweep_params, derived_cols, tran_dir="") -> None:
-        self._populate(valid_df, stim, sweep_params, derived_cols)
+    def redraw(self, df, stim, sweep_params, derived_cols, tran_dir="") -> None:
+        self._populate(df, stim, sweep_params, derived_cols)
         # Re-apply remembered selections now that the option lists exist —
         # a dashboard opened before the first data load would otherwise draw
         # (and later persist) defaults instead of its saved configuration.
@@ -298,9 +298,9 @@ class PlotCell(QFrame):
                 param = self.param_combo.currentText()
                 fig.clf()
                 ax = fig.add_subplot(111)
-                if param in valid_df.columns:
+                if param in df.columns:
                     PlotManager.draw_histogram(
-                        fig, ax, canvas, valid_df, stim, param,
+                        fig, ax, canvas, df, stim, param,
                         self.dist_combo.currentText(), self.group_combo.currentText(),
                         self.bins_combo.currentText(), self.zoom_check.isChecked(),
                         self.compare_combo.currentText(), theme=theme,
@@ -308,14 +308,14 @@ class PlotCell(QFrame):
                 else:
                     canvas.draw_idle()
             elif mode == "Transient":
-                self._draw_transient(valid_df, stim, tran_dir, theme)
+                self._draw_transient(df, stim, tran_dir, theme)
             else:
                 target = self.target_combo.currentText()
                 plugin_param = None
                 if mode in _param_plugin_modes() and not self.all_check.isChecked():
                     plugin_param = target if target and target != "-" else None
                 self._sc_plot, self._scatter_df = PlotManager.draw_adv_plot(
-                    fig, None, canvas, valid_df, stim, mode,
+                    fig, None, canvas, df, stim, mode,
                     self.x_combo.currentText(), self.y_combo.currentText(),
                     target, bg_color=theme["bg"], theme=theme,
                     plugin_param=plugin_param,
@@ -328,7 +328,7 @@ class PlotCell(QFrame):
                     color="#e74c3c", fontsize=8, wrap=True, transform=ax.transAxes)
             canvas.draw_idle()
 
-    def _draw_transient(self, valid_df, stim, tran_dir, theme) -> None:
+    def _draw_transient(self, df, stim, tran_dir, theme) -> None:
         sig = self.tran_signal_combo.currentText().strip()
         if sig in ("", "All Signals"):
             signals = []
@@ -499,15 +499,17 @@ class MultiPlotWindow(QWidget):
     # ── Cell management ───────────────────────────────────────────────────────
 
     def data_snapshot(self):
-        """``(valid_df, stim, sweep_params, derived_cols, tran_dir)`` or None."""
+        """``(df, stim, sweep_params, derived_cols, tran_dir)`` or None."""
         df = self._state.active_df
         stim = self._state.current_stim
         if df is None or stim is None:
             return None
-        valid_df = _dl.valid_rows(df)
-        cols = _dl.compute_plot_cols(valid_df, stim)
+        # The full frame, not valid_rows: every cell forwards this to the plot
+        # layer, which scopes rows per plotted measurement. Pre-filtering here
+        # blanked every cell as soon as one testbench failed.
+        cols = _dl.compute_plot_cols(df, stim)
         tran_dir = _tl.resolve_analysis_dir(df, settings.OUT_DIR, "transient")
-        return valid_df, stim, cols.sweep_params, self._state.derived_cols, tran_dir
+        return df, stim, cols.sweep_params, self._state.derived_cols, tran_dir
 
     def _add_cell(self, config: dict | None = None) -> PlotCell:
         cell = PlotCell(self._state, self._plot_theme, self._remove_cell)

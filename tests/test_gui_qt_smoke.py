@@ -208,6 +208,79 @@ def test_histogram_and_analytics_redraw(window):
     assert at._sc_plot is not None          # scatter artist created for hover
 
 
+def _two_tb_error_df():
+    """One healthy testbench and one that failed in every run.
+
+    ``valid_rows`` returns nothing for this frame, which is what used to blank
+    every chart in the application.
+    """
+    err = "tb_ac: NETLIST_ERROR: xschem wrote no netlist"
+    return pd.DataFrame({
+        "corner": ["tt", "ss", "tt", "ss"],
+        "sim_error": [err] * 4,
+        "tb_amp__error": ["None"] * 4,
+        "tb_ac__error": [err] * 4,
+        "gain": [10.0, 10.2, 9.8, 10.1],
+        "gain_pass": [True, True, True, True],
+        "tb_amp_overall_pass": [True] * 4,
+        "bw": [float("nan")] * 4,
+        "bw_pass": [False] * 4,
+        "tb_ac_overall_pass": [False] * 4,
+    })
+
+
+class _TwoTbStim:
+    def __init__(self):
+        self.tests = [
+            _FakeTest([_FakeVal("gain", 9.0, 11.0, unit="dB")], tb_path="tb_amp"),
+            _FakeTest([_FakeVal("bw", 1e6, None, unit="Hz")], tb_path="tb_ac"),
+        ]
+        self.params = {"corner": ["tt", "ss"]}
+
+
+def test_plots_survive_a_failing_testbench(window):
+    """A broken testbench must cost only its own curves, not every chart."""
+    from chipify import data_loader as _dl
+
+    df, stim = _two_tb_error_df(), _TwoTbStim()
+    assert _dl.valid_rows(df).empty          # what the plots used to receive
+    window.show_results(df, stim, switch_tab=False)
+
+    # Histogram of the healthy testbench's measurement actually draws bars.
+    ht = window.histogram_tab
+    ht.param_combo.setCurrentText("gain")
+    ht._redraw()
+    assert ht.ax.patches or ht.ax.lines, "healthy measurement was not plotted"
+
+    # The broken testbench's measurement draws nothing, but does not raise
+    # and does not take the rest of the tab down with it.
+    ht.param_combo.setCurrentText("bw")
+    ht._redraw()
+    assert not ht.ax.patches
+
+    # Analytics still renders a scatter of the healthy measurement.
+    at = window.analytics_tab
+    at.mode_combo.blockSignals(True)
+    at.mode_combo.setCurrentText("Scatter Plot")
+    at.mode_combo.blockSignals(False)
+    at._apply_mode_visibility()
+    at._repopulate_options(df, stim)
+    at.x_combo.setCurrentText("corner")
+    at.y_combo.setCurrentText("gain")
+    at._redraw()
+    assert at._sc_plot is not None, "scatter blanked by the failing testbench"
+    assert len(at._scatter_df) == 4
+
+    # Corner Yield Matrix reports the healthy testbench rather than a flat 0 %.
+    at.mode_combo.blockSignals(True)
+    at.mode_combo.setCurrentText("Corner Yield Matrix")
+    at.mode_combo.blockSignals(False)
+    at._apply_mode_visibility()
+    at._redraw()
+    title = at.canvas.figure.axes[0].get_title()
+    assert "tb_ac" in title and "excluded" in title
+
+
 def _select_datasheet(window, monkeypatch, path) -> None:
     """Point the window's read-only current_yaml_path property at *path*."""
     monkeypatch.setattr(type(window), "current_yaml_path",

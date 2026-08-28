@@ -149,8 +149,7 @@ class HistogramTab(QWidget):
     def _repopulate_options(self, df, stim) -> None:
         if df is None or stim is None:
             return
-        valid_df = _dl.valid_rows(df)
-        cols = _dl.compute_plot_cols(valid_df, stim)
+        cols = _dl.compute_plot_cols(df, stim)
 
         meas_names: list[str] = []
         for test in stim.tests:
@@ -187,15 +186,17 @@ class HistogramTab(QWidget):
         param = self.param_combo.currentText()
         if df is None or stim is None or not param or param == "-":
             return
-        valid_df = _dl.valid_rows(df)
-        if param not in valid_df.columns:
+        if param not in df.columns:
             return
 
-        self._update_kpis(df, valid_df, stim, param)
+        self._update_kpis(df, stim, param)
         theme = self._plot_theme()
         self.canvas.set_background(theme["bg"])
+        # Full frame: draw_histogram scopes to the runs where this
+        # measurement's own testbench produced data, so a different testbench
+        # crashing no longer blanks this chart.
         PlotManager.draw_histogram(
-            self.canvas.figure, self.ax, self.canvas.canvas, valid_df, stim,
+            self.canvas.figure, self.ax, self.canvas.canvas, df, stim,
             param,
             self.fit_combo.currentText(),
             self.group_combo.currentText(),
@@ -219,15 +220,16 @@ class HistogramTab(QWidget):
         param = self.param_combo.currentText()
         data = None
         if df is not None and param and param != "-":
-            valid_df = _dl.valid_rows(df)
-            if param in valid_df.columns:
-                data = valid_df[param].dropna()
+            stim = self._state.current_stim
+            plot_df = _dl.plot_rows(df, stim, [param])
+            if param in plot_df.columns:
+                data = plot_df[param].dropna()
         bins_text = self.bins_combo.currentText()
         bins = "auto" if bins_text == "Auto" else int(bins_text)
         export_histogram_latex(self, param, data, self.fit_combo.currentText(), bins)
 
-    def _update_kpis(self, df, valid_df, stim, param: str) -> None:
-        data = valid_df[param].dropna()
+    def _update_kpis(self, df, stim, param: str) -> None:
+        data = _dl.plot_rows(df, stim, [param])[param].dropna()
         if data.empty:
             self.kpi_label.setText("")
             return

@@ -116,6 +116,10 @@ Which filter to use:
 
 A measurement's status is `PASS` / `FAIL` / `ERROR` (`measurements.STATUS_*`). `ERROR` means at least one run produced no trustworthy value at all — a different problem from an out-of-spec `FAIL`, and never reported as `PASS`.
 
+**Plots follow the same rule.** `data_loader.plot_rows(df, stim, columns)` returns the rows usable for the measurements being plotted; an empty `columns` means no constraint. `plot_manager.draw_histogram` / `draw_adv_plot` take the **full** frame and scope it themselves (`_adv_plot_columns` maps each mode to the measurements it plots), so tabs must not pre-filter — passing a `valid_rows` frame blanked every chart as soon as any testbench failed.
+
+Yield *visualisations* use `data_loader.effective_pass(df)`, not `global_pass`: `global_pass` ANDs every testbench, so one permanently broken testbench drives it false everywhere and flattens the Corner Yield Matrix to 0 %. `effective_pass` ignores the testbenches that errored in a row (NaN when none ran, so those rows drop out of a `mean`), and the matrix names the excluded testbenches in its title. `global_pass` remains correct for run-level yield counts.
+
 `run_sim` returns `None` **only** on user abort; every other failure raises, so callers must report it rather than mistake it for a cancellation.
 
 ---

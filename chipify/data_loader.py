@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Santiago Hofwimmer
+# Copyright (c) 2026 Santiago Hofwimmer
 """
 data_loader.py – Load simulation result CSVs and compute plot-column metadata.
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,109 @@ def measurement_ok_mask(df: pd.DataFrame, tb_path: str, name: str) -> pd.Series:
     if name not in df.columns:
         return pd.Series(False, index=df.index)
     return ok & df[name].notna()
+
+
+#: Suffix of the per-testbench verdict column (``"<tb_path>_overall_pass"``).
+TB_PASS_SUFFIX = "_overall_pass"
+
+
+def testbench_names(df: pd.DataFrame) -> list[str]:
+    """Testbench paths present in *df*, in column order.
+
+    Read from both the verdict and the error columns: a frame can carry one
+    family without the other (an older CSV, or a hand-built test frame), and
+    either one names the testbench.
+    """
+    names: list[str] = []
+    for col in df.columns:
+        if col.endswith(TB_PASS_SUFFIX) and col != "global" + TB_PASS_SUFFIX:
+            name = col[: -len(TB_PASS_SUFFIX)]
+        elif col.endswith(TB_ERROR_SUFFIX):
+            name = col[: -len(TB_ERROR_SUFFIX)]
+        else:
+            continue
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def errored_testbenches(df: pd.DataFrame) -> list[str]:
+    """Testbenches that failed in at least one row of *df*."""
+    return [tb for tb in testbench_names(df)
+            if tb_error_col(tb) in df.columns and not tb_ok_mask(df, tb).all()]
+
+
+def measurement_owners(stim: Any) -> dict[str, str]:
+    """Map every measurement name in *stim* to the testbench that produces it.
+
+    Covers both the spec'd values and the ``measure:`` expression results — the
+    Analytics tab offers the latter as plottable measurements too, so they need
+    an owner or they would silently escape error scoping.
+    """
+    owners: dict[str, str] = {}
+    for test in getattr(stim, "tests", None) or []:
+        tb = str(getattr(test, "tb_path", "") or "")
+        for val_obj in getattr(test, "value_lst", None) or []:
+            owners.setdefault(str(val_obj.name), tb)
+        for name in (getattr(test, "measure", None) or {}):
+            owners.setdefault(str(name), tb)
+    return owners
+
+
+def plot_rows(df: pd.DataFrame, stim: Any,
+              columns: Sequence[str] | None = None) -> pd.DataFrame:
+    """Rows holding usable data for every measurement in *columns*.
+
+    The filter plots must use. ``valid_rows`` is row-level, so one testbench
+    failing in every corner empties it and blanks every chart in the app —
+    including the charts of the testbenches that worked perfectly.
+
+    Only names that are actually measurements constrain the result; sweep
+    parameters, equation-derived columns and bookkeeping impose nothing, and an
+    empty *columns* means "no constraint" (the whole frame). That is what lets a
+    single-measurement histogram be scoped while a correlation heatmap or a
+    yield matrix still sees every run.
+    """
+    if not columns:
+        return df
+    owners = measurement_owners(stim)
+    mask: pd.Series | None = None
+    for name in columns:
+        tb = owners.get(name)
+        if tb is None:          # not a measurement — no constraint
+            continue
+        col_mask = measurement_ok_mask(df, tb, name)
+        mask = col_mask if mask is None else (mask & col_mask)
+    return df if mask is None else df[mask]
+
+
+def effective_pass(df: pd.DataFrame) -> pd.Series:
+    """Per-row verdict over the testbenches that actually ran.
+
+    ``global_pass`` ANDs *every* testbench, so one permanently broken testbench
+    drives it false everywhere — a yield plot then reads a uniform 0 % and says
+    nothing about the corners of the testbenches that worked. This ignores the
+    testbenches that errored in that row instead.
+
+    Returns floats (``1.0`` / ``0.0`` / ``NaN``), so a row where nothing ran
+    drops out of ``pivot_table(aggfunc="mean")`` rather than counting as a fail.
+    """
+    names = [tb for tb in testbench_names(df)
+             if tb + TB_PASS_SUFFIX in df.columns]
+    if not names:
+        if "global_pass" in df.columns:
+            return df["global_pass"].astype(float)
+        return pd.Series(1.0, index=df.index)
+
+    ran = pd.Series(False, index=df.index)
+    passed = pd.Series(True, index=df.index)
+    for tb in names:
+        ok = tb_ok_mask(df, tb)
+        verdict = df[tb + TB_PASS_SUFFIX].fillna(False).astype(bool)
+        ran = ran | ok
+        # A testbench that did not run neither passes nor fails this row.
+        passed = passed & (~ok | verdict)
+    return passed.astype(float).where(ran, other=float("nan"))
 
 
 def normalise_sim_error(df: pd.DataFrame) -> pd.DataFrame:

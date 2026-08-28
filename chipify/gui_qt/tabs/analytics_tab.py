@@ -175,8 +175,7 @@ class AnalyticsTab(QWidget):
     def _repopulate_options(self, df, stim) -> None:
         if df is None or stim is None:
             return
-        valid_df = _dl.valid_rows(df)
-        cols = _dl.compute_plot_cols(valid_df, stim)
+        cols = _dl.compute_plot_cols(df, stim)
         meas_names: list[str] = []
         for test in stim.tests:
             for v in test.value_lst:
@@ -217,8 +216,7 @@ class AnalyticsTab(QWidget):
         stim = self._state.current_stim
         if df is None or stim is None:
             return
-        valid_df = _dl.valid_rows(df)
-        if valid_df.empty:
+        if df.empty:
             return
 
         theme = self._plot_theme()
@@ -230,8 +228,12 @@ class AnalyticsTab(QWidget):
         plugin_param = None
         if mode in _param_plugin_modes() and not self.all_params_check.isChecked():
             plugin_param = target if target and target != "-" else None
+        # Full frame: draw_adv_plot scopes rows per mode, so a crashed
+        # testbench costs only its own curves. Filtering here with valid_rows
+        # emptied the frame whenever any testbench failed, and this method then
+        # returned without drawing anything at all.
         self._sc_plot, self._scatter_df = PlotManager.draw_adv_plot(
-            self.canvas.figure, None, self.canvas.canvas, valid_df, stim,
+            self.canvas.figure, None, self.canvas.canvas, df, stim,
             mode,
             self.x_combo.currentText(),
             self.y_combo.currentText(),

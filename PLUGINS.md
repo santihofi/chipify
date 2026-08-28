@@ -74,7 +74,7 @@ def draw(self, fig, ax, valid_df, stim) -> None:
 |-----------|------|-------------|
 | `fig` | `matplotlib.figure.Figure` | Blank figure. Use when you need figure-level operations (colorbars, `fig.clf()`). |
 | `ax` | `matplotlib.axes.Axes` | The axes to draw onto. |
-| `valid_df` | `pd.DataFrame` | Simulation results filtered to successful runs only (`sim_error == 'None'`). |
+| `valid_df` | `pd.DataFrame` | Simulation rows usable for what is being plotted. Errors are scoped per testbench, so one testbench crashing no longer removes the runs of the others: with `supports_param` and a measurement selected, the rows are those where *that* measurement's testbench produced a value; otherwise every run is passed and the plugin should `.dropna()` per column it uses. |
 | `stim` | `chipify.util.Stimuli` | Parsed YAML test specification (see [Data reference](#data-reference)). |
 
 The method must not return a value. Any exception raised inside `draw()` is caught, logged, and displayed as red text on the plot — it will never crash the application.
