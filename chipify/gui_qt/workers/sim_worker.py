@@ -85,7 +85,10 @@ class SimWorker(QObject):
                 chunk_callback=self._chunk_cb if self._live else None,
             )
             if df is None:
-                log.info("run_sim returned None (aborted or error).")
+                # None now means "aborted" and nothing else — run_sim raises on
+                # unexpected failures, so they reach the `failed` signal below
+                # instead of vanishing into this branch.
+                log.info("run_sim returned None (aborted).")
                 return
 
             elapsed = max(0.0, time.perf_counter() - t0)

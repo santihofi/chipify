@@ -33,6 +33,7 @@ from jinja2 import Template, StrictUndefined
 from chipify import settings
 from chipify import util
 from chipify import app_config
+from chipify import data_loader as _dl
 
 # ── Engine API (re-exported for backward compatibility) ──────────────────────
 from chipify.engines import (  # noqa: F401
@@ -224,9 +225,29 @@ def _eval_scalar_measures(test, sample: dict, params: dict) -> None:
             sample[f"{test.tb_path}__measure_error"] = " ".join(str(note).split())[:200]
 
 
+def _record_error(sample: dict, test, message: str) -> None:
+    """Record *message* against *test* in *sample*, scoped to that testbench.
+
+    Writes the per-testbench ``<tb_path>__error`` column so a failure stays
+    attributable to the testbench that caused it — a single ``sim_error`` slot
+    would hide the other testbenches' perfectly good measurements behind the
+    row-level filter. ``sim_error`` is still maintained as the row-level
+    roll-up, but *accumulated* rather than overwritten: with several failing
+    testbenches per case, the old assignment kept only the last message.
+    """
+    col = _dl.tb_error_col(test.tb_path)
+    previous = sample.get(col, _dl.NO_ERROR)
+    sample[col] = message if previous == _dl.NO_ERROR else f"{previous} | {message}"
+
+    row_previous = sample.get('sim_error', _dl.NO_ERROR)
+    sample['sim_error'] = (
+        message if row_previous == _dl.NO_ERROR else f"{row_previous} | {message}"
+    )
+
+
 def _fail_test(sample: dict, test, message: str) -> None:
     """Mark every measurement of *test* failed with *message* in *sample*."""
-    sample['sim_error'] = message
+    _record_error(sample, test, message)
     sample[f"{test.tb_path}_overall_pass"] = False
     for val_obj in test.value_lst:
         sample[val_obj.name] = float('nan')
@@ -246,8 +267,13 @@ def _simulate_single_case(params, tests, engine_for,
     """
     analysis_dirs = analysis_dirs or {}
     sample = params.copy()
-    sample['sim_error'] = "None"
+    sample['sim_error'] = _dl.NO_ERROR
     sample['run_id'] = run_id
+    # Seed every testbench's error column so it exists on *every* row, not only
+    # the ones that failed — a column that appears halfway through the sweep
+    # would read as NaN for the successful runs.
+    for test in tests:
+        sample[_dl.tb_error_col(test.tb_path)] = _dl.NO_ERROR
 
     timeout_sec = _resolve_sim_timeout(app_config.load_config())
 
@@ -347,7 +373,10 @@ def _simulate_single_case(params, tests, engine_for,
                 except ValueError:
                     # Unparsable token → that value is failed data, not a
                     # silently absent column.
-                    sample['sim_error'] = f"{test.tb_path}: INVALID_OUTPUT({val_str})"
+                    _record_error(
+                        sample, test,
+                        f"{test.tb_path}: INVALID_OUTPUT({val_str})",
+                    )
                     sample[val_obj.name] = float('nan')
                     sample[f"{val_obj.name}_pass"] = False
                     all_passed = False
@@ -357,9 +386,10 @@ def _simulate_single_case(params, tests, engine_for,
             # masquerade as a clean run with absent columns.
             n_expected = len(test.value_lst)
             if len(values) < n_expected:
-                sample['sim_error'] = (
+                _record_error(
+                    sample, test,
                     f"{test.tb_path}: INVALID_OUTPUT("
-                    f"expected {n_expected} values, got {len(values)})"
+                    f"expected {n_expected} values, got {len(values)})",
                 )
                 all_passed = False
                 for val_obj in test.value_lst[len(values):]:
@@ -369,10 +399,35 @@ def _simulate_single_case(params, tests, engine_for,
             sample[f"{test.tb_path}_overall_pass"] = all_passed
             _eval_scalar_measures(test, sample, params)
         else:
-            sample['sim_error'] = f"{test.tb_path}: NO_MY_DATA_FOUND"
+            _record_error(sample, test, f"{test.tb_path}: NO_MY_DATA_FOUND")
             sample[f"{test.tb_path}_overall_pass"] = False
 
     return sample
+
+
+def _lost_batch_rows(batch, tests, exc) -> list:
+    """Synthesize one error row per case of a worker batch that never returned.
+
+    A crashed worker (or a lost pool process) used to take its whole batch with
+    it: the rows simply never reached the results list, so the CSV came back
+    shorter while progress still ran to 100 % — a silently truncated sweep that
+    looked like a complete one. Recording the cases as explicit errors keeps the
+    row count equal to the number of parameter cases and makes the loss visible.
+    """
+    message = f"WORKER_LOST: {exc}"
+    rows: list = []
+    for params, run_id in batch:
+        sample = dict(params)
+        sample['run_id'] = run_id
+        sample['sim_error'] = _dl.NO_ERROR
+        # _fail_test writes each testbench's error column, so every column the
+        # successful rows carry is present here too.
+        for test in tests:
+            _fail_test(sample, test, f"{test.tb_path}: {message}")
+        if not tests:  # nothing to attribute it to — keep the row-level slot
+            sample['sim_error'] = message
+        rows.append(sample)
+    return rows
 
 
 def _simulate_single_case_with_engine(params, tests, engine: BaseSimulator,
@@ -481,11 +536,7 @@ def _assemble_result_df(rows: list, analysis_dirs: dict) -> pd.DataFrame:
     is also set for backward compatibility with consumers that only know about
     transient.
     """
-    from chipify import data_loader as _dl
-
-    df = pd.DataFrame(rows)
-    df = _dl.normalise_sim_error(df)
-    df = _dl.compute_global_pass(df)
+    df = _dl.prepare_results(pd.DataFrame(rows))
     if analysis_dirs:
         df.attrs["analysis_dirs"] = dict(analysis_dirs)
         if analysis_dirs.get("transient"):
@@ -536,6 +587,13 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
     templates_dir:
         When set, skip xschem and load pre-rendered Jinja2 templates from
         this directory (see ``--templates-dir``) instead of regenerating them.
+
+    Returns
+    -------
+    pandas.DataFrame | None
+        The results frame, or ``None`` **only** when the run was aborted (abort
+        flag or a cancelling ``progress_callback``). Every other failure raises:
+        callers must report it rather than mistake it for a cancellation.
     """
     pool = None
     log.info("run_sim() started. Testbenches: %d", len(stim.tests))
@@ -617,10 +675,15 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
         chunk_size = _resolve_chunk_size(cfg, total_tasks, num_cores)
         param_id_pairs = list(zip(param_sets, run_ids))
         param_id_batches = list(_chunk_args(param_id_pairs, chunk_size))
+        # Each entry keeps its own batch alongside the AsyncResult so a worker
+        # that dies can still be accounted for case by case (_lost_batch_rows).
         pending = [
-            pool.apply_async(
-                simulate_case_batch,
-                ((batch, stim.tests, analysis_dirs),),
+            (
+                pool.apply_async(
+                    simulate_case_batch,
+                    ((batch, stim.tests, analysis_dirs),),
+                ),
+                batch,
             )
             for batch in param_id_batches
         ]
@@ -637,39 +700,45 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
                     raise InterruptedError("Abort flag detected during run.")
 
                 still_pending = []
-                for ar in pending:
-                    if ar.ready():
-                        try:
-                            batch_results = ar.get(timeout=0)
-                            results.extend(batch_results)
-                            completed += len(batch_results)
-                            if chunk_callback and batch_results:
-                                chunk_row_buffer.extend(batch_results)
-                                chunk_batch_counter += 1
-                                sweep_complete = len(results) >= total_tasks
-                                emit_now = sweep_complete or (
-                                    chunk_batch_counter % chunk_emit_stride == 0
+                for ar, batch in pending:
+                    if not ar.ready():
+                        still_pending.append((ar, batch))
+                        continue
+
+                    try:
+                        batch_results = ar.get(timeout=0)
+                    except InterruptedError:
+                        raise
+                    except Exception as exc:  # incl. WorkerLostError
+                        log.error(
+                            "Worker error (%d case(s) recorded as errors): %s",
+                            len(batch), exc,
+                        )
+                        batch_results = _lost_batch_rows(batch, stim.tests, exc)
+
+                    results.extend(batch_results)
+                    completed += len(batch_results)
+                    if chunk_callback and batch_results:
+                        chunk_row_buffer.extend(batch_results)
+                        chunk_batch_counter += 1
+                        sweep_complete = len(results) >= total_tasks
+                        emit_now = sweep_complete or (
+                            chunk_batch_counter % chunk_emit_stride == 0
+                        )
+                        if emit_now and chunk_row_buffer:
+                            try:
+                                chunk_df = _assemble_result_df(
+                                    chunk_row_buffer, analysis_dirs
                                 )
-                                if emit_now and chunk_row_buffer:
-                                    try:
-                                        chunk_df = _assemble_result_df(
-                                            chunk_row_buffer, analysis_dirs
-                                        )
-                                        chunk_callback(chunk_df)
-                                    except Exception:
-                                        log.debug("chunk_callback failed.", exc_info=True)
-                                    chunk_row_buffer = []
-                        except InterruptedError:
-                            raise
-                        except Exception as exc:  # incl. WorkerLostError
-                            log.error("Worker error (result skipped): %s", exc)
-                            completed += chunk_size
-                        completed = min(total_tasks, completed)
-                        pbar.update(min(total_tasks - pbar.n, max(0, completed - pbar.n)))
-                        if progress_callback:
-                            progress_callback(completed, total_tasks)
-                    else:
-                        still_pending.append(ar)
+                                chunk_callback(chunk_df)
+                            except Exception:
+                                log.debug("chunk_callback failed.", exc_info=True)
+                            chunk_row_buffer = []
+
+                    completed = min(total_tasks, completed)
+                    pbar.update(min(total_tasks - pbar.n, max(0, completed - pbar.n)))
+                    if progress_callback:
+                        progress_callback(completed, total_tasks)
 
                 pending = still_pending
                 if pending:
@@ -704,12 +773,17 @@ def run_sim(stim, progress_callback=None, simulator=None, chunk_callback=None,
         return None
 
     except Exception as exc:
+        # Re-raise rather than returning None. Returning None made an
+        # unexpected failure indistinguishable from a user abort, and the GUI
+        # worker treats None as "aborted" — so the run died in total silence,
+        # with the reason reaching nothing but chipify.log. ``None`` now means
+        # "aborted" and nothing else; callers report the exception.
         log.exception("Unexpected error during simulation: %s", exc)
         if pool is not None:
             pool.terminate()
             pool.join()
             log.info("Pool terminated after error.")
-        return None
+        raise
 
     finally:
         clear_abort_flag()

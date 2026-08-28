@@ -110,6 +110,15 @@ def _start_import_warmup(log: logging.Logger) -> None:
 
 def main() -> int:
     """Launch the Chipify Qt desktop GUI. Returns the Qt exit code."""
+    import chipify
+
+    # Answered before anything else: no log file is created, no Qt is imported,
+    # so `chipify --version` still answers on a box where PySide6 is missing or
+    # no display is available.
+    if any(a in ("--version", "-V") for a in sys.argv[1:]):
+        print(chipify.version_info())
+        return 0
+
     from chipify import app_config
 
     app_config.setup_logging()

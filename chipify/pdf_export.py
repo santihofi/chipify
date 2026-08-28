@@ -26,6 +26,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import scipy.stats as stats
 
 from chipify import app_config
+from chipify.uikit.services import measurements as _meas
 from chipify.plot_manager import PlotManager
 
 # ── Style constants ────────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ LGREEN = "#d6f0de"
 RED    = "#b71c1c"
 LRED   = "#fde8e8"
 AMBER  = "#c67c00"
+LAMBER = "#fff3cd"
 LGRAY  = "#f0f0f0"
 MGRAY  = "#c8c8c8"
 DGRAY  = "#555555"
@@ -93,6 +95,20 @@ def _compute_cpk(data: pd.Series, lo, hi) -> float:
     return min(cpks) if cpks else float("nan")
 
 
+#: Status cell colours. ERROR is amber, deliberately not a shade of red: an
+#: un-takeable measurement is a different problem from an out-of-spec one.
+_STATUS_BG = {
+    _meas.STATUS_PASS: LGREEN,
+    _meas.STATUS_FAIL: LRED,
+    _meas.STATUS_ERROR: LAMBER,
+}
+_STATUS_FG = {
+    _meas.STATUS_PASS: GREEN,
+    _meas.STATUS_FAIL: RED,
+    _meas.STATUS_ERROR: AMBER,
+}
+
+
 def _cpk_cell_bg(cpk):
     if math.isnan(cpk):
         return LGRAY
@@ -101,31 +117,6 @@ def _cpk_cell_bg(cpk):
     if cpk >= 1.0:
         return "#fff3cd"
     return LRED
-
-
-def _measurement_rows(valid_df: pd.DataFrame, stim) -> list:
-    rows = []
-    for test in stim.tests:
-        for val_obj in test.value_lst:
-            p = val_obj.name
-            if p not in valid_df.columns:
-                continue
-            data = valid_df[p].dropna()
-            lo, hi = _get_spec(val_obj)
-            cpk = _compute_cpk(data, lo, hi)
-            pass_col = f"{p}_pass"
-            passed = pass_col in valid_df.columns and bool(valid_df[pass_col].all())
-            rows.append({
-                "name":    p,
-                "sim_min": data.min()  if not data.empty else float("nan"),
-                "sim_typ": data.mean() if not data.empty else float("nan"),
-                "sim_max": data.max()  if not data.empty else float("nan"),
-                "spec_lo": lo,
-                "spec_hi": hi,
-                "cpk":     cpk,
-                "passed":  passed,
-            })
-    return rows
 
 
 # ── Metadata helpers (for cover page) ─────────────────────────────────────────
@@ -268,8 +259,9 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim, sim_durat
     ax.axhline(0.606, xmin=0.0, xmax=1.0, color=MGRAY, linewidth=0.7)
 
     # ── Measurement summary text ──────────────────────────────────────────────
-    n_pass = sum(1 for r in rows if r["passed"])
-    n_fail = len(rows) - n_pass
+    n_pass = sum(1 for r in rows if r.status == _meas.STATUS_PASS)
+    n_err  = sum(1 for r in rows if r.status == _meas.STATUS_ERROR)
+    n_fail = len(rows) - n_pass - n_err
 
     ax.text(0.0, 0.588, "Measurement Results Summary",
             ha="left", va="top", fontsize=13, weight="bold", color=BLUE)
@@ -280,12 +272,25 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim, sim_durat
     ax.text(0.145, 0.517, f"FAIL: {n_fail}",
             ha="left", va="top", fontsize=9.5, weight="bold",
             color=RED if n_fail > 0 else DGRAY)
+    ax.text(0.290, 0.517, f"ERROR: {n_err}",
+            ha="left", va="top", fontsize=9.5, weight="bold",
+            color=AMBER if n_err > 0 else DGRAY)
 
+    y_note = 0.488
     if n_fail > 0:
-        failing  = [r["name"] for r in rows if not r["passed"]]
-        wrapped  = textwrap.fill("Failing: " + ", ".join(failing), width=78)
-        ax.text(0.0, 0.488, wrapped,
+        failing = [r.name for r in rows if r.status == _meas.STATUS_FAIL]
+        wrapped = textwrap.fill("Failing: " + ", ".join(failing), width=78)
+        ax.text(0.0, y_note, wrapped,
                 ha="left", va="top", fontsize=8.5, color=RED)
+        y_note -= 0.028 * (wrapped.count(chr(10)) + 1)
+
+    # A measurement that could never be taken must not be summarised away: the
+    # cover used to count it as a pass and say nothing at all about it.
+    if n_err > 0:
+        errored = [r.name for r in rows if r.status == _meas.STATUS_ERROR]
+        wrapped = textwrap.fill("Errored: " + ", ".join(errored), width=78)
+        ax.text(0.0, y_note, wrapped,
+                ha="left", va="top", fontsize=8.5, color=AMBER)
 
     pdf.savefig(fig)
     plt.close(fig)
@@ -341,20 +346,20 @@ def _add_table(pdf: PdfPages, rows: list, valid_df: pd.DataFrame, stim):
             even  = ri % 2 == 0
 
             cells = [
-                row["name"],
-                _fmt(row["sim_min"]), _fmt(row["sim_typ"]), _fmt(row["sim_max"]),
-                _fmt(row["spec_lo"]), _fmt(row["spec_hi"]),
-                _fmt(row["cpk"]),
-                "PASS" if row["passed"] else "FAIL",
+                row.name,
+                _fmt(row.sim_min), _fmt(row.sim_typ), _fmt(row.sim_max),
+                _fmt(row.spec_min), _fmt(row.spec_max),
+                _fmt(row.cpk),
+                row.status,
             ]
             row_bg = LGRAY if even else "white"
 
             x = X0
             for ci, (txt, w) in enumerate(zip(cells, COL_W)):
                 if ci == 6:
-                    fc = _cpk_cell_bg(row["cpk"])
+                    fc = _cpk_cell_bg(row.cpk)
                 elif ci == 7:
-                    fc = LGREEN if row["passed"] else LRED
+                    fc = _STATUS_BG.get(row.status, LRED)
                 else:
                     fc = row_bg
 
@@ -375,7 +380,7 @@ def _add_table(pdf: PdfPages, rows: list, valid_df: pd.DataFrame, stim):
                     tx     = x + 0.006
                     weight = "bold"
                 elif ci == 7:
-                    tc     = GREEN if row["passed"] else RED
+                    tc     = _STATUS_FG.get(row.status, RED)
                     weight = "bold"
 
                 ax.text(tx, y, txt, ha=ha_txt, va="center",
@@ -422,6 +427,56 @@ def _add_table(pdf: PdfPages, rows: list, valid_df: pd.DataFrame, stim):
             else:
                 fig.text(0.5, 0.12, "All runs passed specifications.",
                          ha="center", va="center", fontsize=12, color=GREEN, weight="bold")
+
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
+# ── Section 2b: Simulation errors ─────────────────────────────────────────────
+
+def _add_errors(pdf: PdfPages, errors: list):
+    """One page listing every distinct simulator failure.
+
+    Without it a broken testbench left no trace in the report at all: its runs
+    were filtered out before the tables were built.
+    """
+    if not errors:
+        return
+
+    # Each entry costs at most ~0.142 of the axis (title + count + 3 wrapped
+    # message lines + conditions + spacer), so 6 is what fits under y=0.95.
+    PER_PAGE = 6
+    pages = math.ceil(len(errors) / PER_PAGE)
+    for pg in range(pages):
+        chunk = errors[pg * PER_PAGE: (pg + 1) * PER_PAGE]
+        fig = plt.figure(figsize=A4, facecolor="white")
+        _page_header(fig, f"Simulation Errors  ({pg + 1} / {pages})")
+
+        ax = fig.add_axes([ML, MB, 1 - 2 * ML, 0.885])
+        ax.axis("off")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        fig.text(0.5, 0.922, "Measurements that could not be taken",
+                 ha="center", va="center", fontsize=13, weight="bold", color=DGRAY)
+
+        y = 0.95
+        for e in chunk:
+            ax.text(0.0, y, f"{e.tb_path}  [{e.kind}]",
+                    ha="left", va="top", fontsize=10, weight="bold", color=AMBER)
+            y -= 0.026
+            ax.text(0.02, y, f"{e.run_n} of {e.total_n} run(s) affected",
+                    ha="left", va="top", fontsize=8.5, color=DGRAY)
+            y -= 0.022
+            for line in textwrap.wrap(e.message, width=95)[:3]:
+                ax.text(0.02, y, line, ha="left", va="top", fontsize=8,
+                        color=DGRAY, family="monospace")
+                y -= 0.020
+            if e.conditions:
+                conds = ", ".join(f"{k}={v}" for k, v in e.conditions.items())
+                ax.text(0.02, y, "first seen at: " + textwrap.shorten(conds, 90),
+                        ha="left", va="top", fontsize=8, color=DGRAY)
+                y -= 0.020
+            y -= 0.014
 
         pdf.savefig(fig)
         plt.close(fig)
@@ -483,8 +538,8 @@ def _draw_hist_ax(ax, data, param, lo, hi, cpk, passed):
 
 
 def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list):
-    meta = {r["name"]: r for r in rows_meta}
-    params = [r["name"] for r in rows_meta if r["name"] in valid_df.columns]
+    meta = {r.name: r for r in rows_meta}
+    params = [r.name for r in rows_meta if r.name in valid_df.columns]
     if not params:
         return
 
@@ -507,8 +562,8 @@ def _add_histograms(pdf: PdfPages, valid_df: pd.DataFrame, stim, rows_meta: list
             # Two balanced slots that avoid clipping and keep labels/legend readable.
             bottom = 0.56 - si * 0.43
             ax = fig.add_axes([ML + 0.015, bottom, 1 - 2 * (ML + 0.015), 0.29])
-            _draw_hist_ax(ax, data, p,
-                          m["spec_lo"], m["spec_hi"], m["cpk"], m["passed"])
+            _draw_hist_ax(ax, data, p, m.spec_min, m.spec_max, m.cpk,
+                          m.status == _meas.STATUS_PASS)
 
         pdf.savefig(fig)
         plt.close(fig)
@@ -604,11 +659,16 @@ def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
 
     prepared = _build_global_pass(df)
     valid_df = prepared[prepared["sim_error"] == "None"]
-    rows     = _measurement_rows(valid_df, stim)
+    # The service scopes errors per testbench, so it takes the full frame: a
+    # row-filtered one drops every run in which any testbench crashed, which is
+    # what made a wholly failed sweep render as a clean PASS.
+    rows     = _meas.measurement_rows(prepared, stim)
+    errors   = _meas.error_rows(prepared, stim)
 
     with mpl.rc_context(_PDF_RCPARAMS), PdfPages(pdf_path) as pdf:
         _add_cover(pdf, prepared, yaml_path, rows, stim, sim_duration_sec=sim_duration_sec)
         _add_table(pdf, rows, valid_df, stim)
+        _add_errors(pdf, errors)
         _add_histograms(pdf, valid_df, stim, rows)
         _add_correlation(pdf, valid_df)
         _add_plugin_pages(pdf, valid_df, stim)

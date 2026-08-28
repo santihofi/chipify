@@ -107,3 +107,20 @@ Preparation for the initial public release.
 ## [0.2.2]
 
 - switch to PySide6-Essentials
+
+## [0.2.3]
+
+- Errors are now scoped per testbench (`<tb_path>__error`) instead of a single
+  per-row `sim_error`. A testbench that fails no longer hides the results of the
+  testbenches that succeeded, and a measurement with no usable run reports
+  ERROR rather than a vacuously-true PASS.
+- Measurements tab: Errors column, amber ERROR status, and a SIMULATION ERRORS
+  section naming the testbench, failing corner and simulator message, plus a
+  scrollable log panel and an "Open Log" button.
+- The CLI analyzer and the Markdown/PDF reports read the shared measurements
+  service, so all four surfaces agree on a verdict and report errors.
+- Crashed worker batches are recorded as WORKER_LOST rows instead of silently
+  vanishing from the results; `run_sim` raises on unexpected failure and returns
+  None only on user abort, so a failed run can no longer end in silence.
+- Logging is enabled for CLI runs and the log banner records the running
+  chipify version and install path.

@@ -191,7 +191,7 @@ class HistogramTab(QWidget):
         if param not in valid_df.columns:
             return
 
-        self._update_kpis(valid_df, stim, param)
+        self._update_kpis(df, valid_df, stim, param)
         theme = self._plot_theme()
         self.canvas.set_background(theme["bg"])
         PlotManager.draw_histogram(
@@ -226,12 +226,14 @@ class HistogramTab(QWidget):
         bins = "auto" if bins_text == "Auto" else int(bins_text)
         export_histogram_latex(self, param, data, self.fit_combo.currentText(), bins)
 
-    def _update_kpis(self, valid_df, stim, param: str) -> None:
+    def _update_kpis(self, df, valid_df, stim, param: str) -> None:
         data = valid_df[param].dropna()
         if data.empty:
             self.kpi_label.setText("")
             return
-        rows = {r.name: r for r in _meas.measurement_rows(valid_df, stim)}
+        # measurement_rows scopes errors per testbench and so takes the full
+        # frame; the histogram itself still plots only valid rows.
+        rows = {r.name: r for r in _meas.measurement_rows(df, stim)}
         r = rows.get(param)
         cpk = r.cpk_str if r else "—"
         sigma = r.sigma_str if r else "—"

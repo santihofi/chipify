@@ -57,16 +57,23 @@ def _run_single(yaml_path: str | os.PathLike[str], *, json_out: bool = False,
     stim = util.Stimuli(yaml_path)
     t0 = time.perf_counter()
     progress_cb = _make_progress_stream_cb() if progress_stream else None
-    df = simulator.run_sim(
-        stim,
-        simulator=simulator_override,
-        templates_dir=templates_dir or "",
-        progress_callback=progress_cb,
-    )
+    try:
+        df = simulator.run_sim(
+            stim,
+            simulator=simulator_override,
+            templates_dir=templates_dir or "",
+            progress_callback=progress_cb,
+        )
+    except Exception as exc:
+        # run_sim raises on unexpected failures and returns None only on abort,
+        # so print the actual reason instead of a generic "no data".
+        print(f"[-] Simulation failed for {yaml_path}: {exc}")
+        print(f"    See {Path(settings.OUT_DIR) / 'chipify.log'} for the traceback.")
+        return None
     duration_s = time.perf_counter() - t0
 
     if df is None:
-        print(f"[-] Simulation returned no data for {yaml_path}")
+        print(f"[-] Simulation aborted for {yaml_path}")
         return None
 
     csv_out = out_dir / "simulation_results.csv"
@@ -104,9 +111,18 @@ def _run_single(yaml_path: str | os.PathLike[str], *, json_out: bool = False,
 
 
 def main():
+    import chipify
+
     parser = argparse.ArgumentParser(
         description="Chipify: High-Performance Mismatch Simulation Wrapper for Xschem and Ngspice.",
         formatter_class=argparse.RawTextHelpFormatter
+    )
+
+    parser.add_argument(
+        "-V", "--version",
+        action="version",
+        version=chipify.version_info(),
+        help="Print the chipify version and the install path it resolves to.",
     )
 
     parser.add_argument(
@@ -186,6 +202,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Initialised after parse_args so --help / --version don't open a log
+    # file. Full DEBUG detail goes to out/chipify.log; the terminal keeps
+    # the CLI's own [*] progress output and summary table, with only
+    # warnings breaking in.
+    import logging
+    from chipify import app_config
+    app_config.setup_logging(console_level=logging.WARNING)
 
     # ── Batch mode ────────────────────────────────────────────────────────────
     if args.batch:

@@ -41,37 +41,118 @@ class PlotColumns:
 
 # ── DataFrame helpers ─────────────────────────────────────────────────────────
 
+#: Suffix of the per-testbench error column (``"<tb_path>__error"``).
+#:
+#: ``sim_error`` is a single per-row slot, so one failing testbench poisons the
+#: whole row — including the measurements of every *other* testbench in the same
+#: run. The per-testbench columns keep a failure scoped to the testbench that
+#: caused it; ``sim_error`` remains the row-level roll-up used for yield.
+TB_ERROR_SUFFIX = "__error"
+
+#: Value meaning "no error" in every error column.
+NO_ERROR = "None"
+
+
+def tb_error_col(tb_path: str) -> str:
+    """Name of the per-testbench error column for *tb_path*."""
+    return f"{tb_path}{TB_ERROR_SUFFIX}"
+
+
+def tb_error_cols(df: pd.DataFrame) -> list[str]:
+    """Every per-testbench error column present in *df*."""
+    return [c for c in df.columns if c.endswith(TB_ERROR_SUFFIX)]
+
+
+def _clean_error_series(ser: pd.Series) -> pd.Series:
+    """Coerce an error column to plain strings with ``'None'`` for 'no error'."""
+    out = ser.fillna(NO_ERROR).astype(str)
+    out[out.str.lower() == "nan"] = NO_ERROR
+    return out
+
+
+def _is_clean_error_series(ser: pd.Series) -> bool:
+    """True when *ser* already satisfies the error-column invariants.
+
+    The dtype guard matters — a CSV whose error column is all-NaN loads as
+    float, where ``.str`` would raise.
+    """
+    return bool(
+        ser.dtype == object
+        and not ser.isna().any()
+        and ser.map(lambda v: isinstance(v, str)).all()
+        and not (ser.str.lower() == "nan").any()
+    )
+
+
 def valid_rows(df: pd.DataFrame) -> pd.DataFrame:
     """
     Return only the rows where ``sim_error == 'None'``.
 
-    This is the single authoritative filter that all tabs must use; never
-    filter ``sim_error`` inline in tab code.
+    Row-level filter for plotting and yield statistics: a row is kept only when
+    *every* testbench in it succeeded. Never filter ``sim_error`` inline in tab
+    code.
+
+    This is deliberately **not** the filter for per-measurement statistics — a
+    row dropped here may still hold perfectly good data for the testbenches that
+    did succeed. Use :func:`measurement_ok_mask` for those.
     """
     if "sim_error" not in df.columns:
         return df
-    return df[df["sim_error"] == "None"]
+    return df[df["sim_error"] == NO_ERROR]
+
+
+def tb_ok_mask(df: pd.DataFrame, tb_path: str) -> pd.Series:
+    """Boolean mask of the rows where testbench *tb_path* itself completed.
+
+    Falls back to the row-level ``sim_error`` when the per-testbench column is
+    absent, so result CSVs written before per-testbench errors existed keep
+    loading with their original semantics.
+    """
+    col = tb_error_col(tb_path)
+    if col in df.columns:
+        return _clean_error_series(df[col]) == NO_ERROR
+    if "sim_error" in df.columns:
+        return _clean_error_series(df["sim_error"]) == NO_ERROR
+    return pd.Series(True, index=df.index)
+
+
+def measurement_ok_mask(df: pd.DataFrame, tb_path: str, name: str) -> pd.Series:
+    """Boolean mask of the rows holding usable data for measurement *name*.
+
+    A measurement is usable when its testbench completed **and** the value is
+    not NaN. The NaN term matters on its own: an engine that cannot resolve a
+    signal records ``nan`` while leaving the error columns clean (see
+    ``engines/vacask.py``), which would otherwise be indistinguishable from a
+    genuine out-of-spec result.
+    """
+    ok = tb_ok_mask(df, tb_path)
+    if name not in df.columns:
+        return pd.Series(False, index=df.index)
+    return ok & df[name].notna()
 
 
 def normalise_sim_error(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure ``sim_error`` column exists, is string-typed, and has no NaNs."""
     if "sim_error" not in df.columns:
         df = df.copy()
-        df["sim_error"] = "None"
+        df["sim_error"] = NO_ERROR
         return df
     ser = df["sim_error"]
-    # Fast path: already clean string data. The dtype guard matters — a CSV
-    # whose sim_error column is all-NaN loads as float, where .str would raise.
-    if (
-        ser.dtype == object
-        and not ser.isna().any()
-        and ser.map(lambda v: isinstance(v, str)).all()
-        and not (ser.str.lower() == "nan").any()
-    ):
+    if _is_clean_error_series(ser):
         return df
     df = df.copy()
-    df["sim_error"] = ser.fillna("None").astype(str)
-    df.loc[df["sim_error"].str.lower() == "nan", "sim_error"] = "None"
+    df["sim_error"] = _clean_error_series(ser)
+    return df
+
+
+def normalise_tb_errors(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply the error-column invariants to every ``<tb_path>__error`` column."""
+    dirty = [c for c in tb_error_cols(df) if not _is_clean_error_series(df[c])]
+    if not dirty:
+        return df
+    df = df.copy()
+    for col in dirty:
+        df[col] = _clean_error_series(df[col])
     return df
 
 
@@ -92,7 +173,7 @@ def prepare_results(df: pd.DataFrame) -> pd.DataFrame:
     yield computation — CLI, analyzer, and report exporters all delegate
     here rather than carrying their own copies of the logic. Idempotent.
     """
-    return compute_global_pass(normalise_sim_error(df))
+    return compute_global_pass(normalise_tb_errors(normalise_sim_error(df)))
 
 
 @dataclass(frozen=True)
@@ -181,11 +262,8 @@ def resolve_csv_path(selection: str, out_dir: str | os.PathLike[str]) -> str | N
 
 
 def load_csv(csv_path: str) -> pd.DataFrame:
-    """Read a simulation result CSV and apply sim_error normalisation."""
-    df = pd.read_csv(csv_path)
-    df = normalise_sim_error(df)
-    df = compute_global_pass(df)
-    return df
+    """Read a simulation result CSV and apply error-column normalisation."""
+    return prepare_results(pd.read_csv(csv_path))
 
 
 def list_history_runs(out_dir: str | os.PathLike[str],

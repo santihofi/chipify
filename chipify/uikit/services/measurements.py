@@ -3,20 +3,36 @@
 measurements.py – Framework-agnostic per-parameter measurement statistics.
 
 Computes the rows shown in the Measurements table (sim min/typ/max, spec
-limits, Cpk, sigma level, pass/fail) from a *valid-rows-only* result
-DataFrame and a ``util.Stimuli``. This is the authoritative version of the
-logic that used to live inline in the CustomTkinter ``_measurement_snapshot``;
-both GUIs (and, in time, the reports) can share it.
+limits, Cpk, sigma level, PASS/FAIL/ERROR) from a **full** result DataFrame
+and a ``util.Stimuli``. The single authoritative implementation: the Qt
+Measurements tab, the CLI analyzer, and the Markdown and PDF exporters all
+read these helpers, so the four surfaces cannot disagree about a verdict.
+
+Pass the *complete* frame, never one filtered through
+``data_loader.valid_rows``. Validity is scoped per testbench here (see
+``data_loader.measurement_ok_mask``): one testbench crashing must not hide the
+measurements of the testbenches that succeeded, and a measurement with no
+usable run at all reports ERROR rather than an empty, vacuously-true PASS.
 
 No GUI-toolkit imports — usable headlessly and unit-testable.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from chipify import data_loader as _dl
+
+#: Status of a measurement row. ``ERROR`` outranks both: it means at least one
+#: run could not produce a trustworthy value at all (the testbench failed, or
+#: the value came back NaN), which is a different problem from a value that was
+#: measured correctly and landed out of spec.
+STATUS_PASS = "PASS"
+STATUS_FAIL = "FAIL"
+STATUS_ERROR = "ERROR"
 
 
 @dataclass
@@ -25,7 +41,9 @@ class MeasurementRow:
 
     Numeric fields are raw values (format with :func:`fmt_value`); ``cpk_str``
     and ``sigma_str`` are pre-rendered because they carry the special
-    ``INF`` / ``0.00`` / ``-`` cases that are not plain numbers.
+    ``INF`` / ``0.00`` / ``-`` cases that are not plain numbers. ``cpk`` and
+    ``sigma`` carry the same quantities as plain floats so report exporters can
+    apply their own formatting.
     """
     name: str
     sim_min: float
@@ -35,9 +53,22 @@ class MeasurementRow:
     spec_max: float | None
     cpk_str: str
     sigma_str: str
-    status: str        # "PASS" | "FAIL"
+    status: str        # "PASS" | "FAIL" | "ERROR"
     fail_n: int
     unit: str = ""     # optional engineering unit ("" when unspecified)
+    cpk: float = float("nan")
+    sigma: float = float("nan")
+    #: Runs where this measurement produced no trustworthy value.
+    error_n: int = 0
+    #: Runs attempted (the full sweep, errored runs included).
+    total_n: int = 0
+    #: Representative error for this measurement ("" when there were none).
+    error_msg: str = ""
+
+    @property
+    def errored(self) -> bool:
+        """True when at least one run failed to produce a value."""
+        return self.error_n > 0
 
 
 def fmt_value(val: Any) -> str:
@@ -47,28 +78,75 @@ def fmt_value(val: Any) -> str:
     return f"{val:.4g}"
 
 
-def measurement_rows(valid_df: pd.DataFrame, stim: Any) -> list[MeasurementRow]:
+def _tb_path(test: Any) -> str:
+    """Testbench identity, tolerating stand-in stim objects without one.
+
+    An empty path resolves to no per-testbench column, so the error masks fall
+    back to the row-level ``sim_error`` — the pre-existing behaviour.
+    """
+    return str(getattr(test, "tb_path", "") or "")
+
+
+def _spec_bounds(val_obj: Any) -> tuple[float | None, float | None]:
+    """The declared ``(min, max)`` of a datasheet value, either attribute name."""
+    return (
+        getattr(val_obj, "vmin", getattr(val_obj, "min", None)),
+        getattr(val_obj, "vmax", getattr(val_obj, "max", None)),
+    )
+
+
+def _representative_error(df: pd.DataFrame, tb_path: str) -> str:
+    """The most frequent error recorded against *tb_path* ("" when none)."""
+    col = _dl.tb_error_col(tb_path)
+    if col not in df.columns:
+        col = "sim_error"
+        if col not in df.columns:
+            return ""
+    errors = df[col].astype(str)
+    errors = errors[errors != _dl.NO_ERROR]
+    if errors.empty:
+        return ""
+    return str(errors.value_counts().idxmax())
+
+
+def measurement_rows(df: pd.DataFrame, stim: Any) -> list[MeasurementRow]:
     """Per-parameter statistics for every spec'd value in *stim*.
 
-    Mirrors the legacy ``_measurement_snapshot`` row computation exactly,
-    including the ``Cpk = min(lower, upper)`` convention and the zero-variance
-    INF / 0.00 handling. Parameters not present in *valid_df* are skipped.
+    Keeps the ``Cpk = min(lower, upper)`` convention and the zero-variance
+    INF / 0.00 handling. Parameters not present in *df* are skipped.
+
+    *df* must be the **full** results frame, not one pre-filtered through
+    :func:`data_loader.valid_rows`. Errors are scoped per testbench here, so a
+    testbench that crashed must not remove the rows of the testbenches that
+    succeeded — pre-filtering would discard exactly the data this function
+    exists to report. Two consequences of doing it this way:
+
+    * a measurement whose runs all errored reports ``ERROR``, where the old
+      row-filtered code computed ``all()`` over an *empty* selection and got
+      ``True`` back — reporting a clean ``PASS`` for a run that never produced
+      a single value;
+    * ``PASS`` now requires at least one usable run, never vacuous truth.
     """
     rows: list[MeasurementRow] = []
+    total_n = len(df)
     for test in stim.tests:
+        tb_error = None  # resolved lazily, once per testbench that needs it
         for val_obj in test.value_lst:
             name = val_obj.name
-            if name not in valid_df.columns:
+            if name not in df.columns:
                 continue
 
-            data = valid_df[name].dropna()
+            ok = _dl.measurement_ok_mask(df, _tb_path(test), name)
+            usable = df[ok]
+            error_n = int((~ok).sum())
+
+            data = usable[name].dropna()
             sim_min = float(data.min()) if not data.empty else np.nan
             sim_max = float(data.max()) if not data.empty else np.nan
             sim_typ = float(data.mean()) if not data.empty else np.nan
             sim_std = float(data.std()) if len(data) > 1 else 0.0
 
-            v_min = getattr(val_obj, "vmin", getattr(val_obj, "min", None))
-            v_max = getattr(val_obj, "vmax", getattr(val_obj, "max", None))
+            v_min, v_max = _spec_bounds(val_obj)
 
             cpk_vals: list[float] = []
             z_vals: list[float] = []
@@ -80,10 +158,14 @@ def measurement_rows(valid_df: pd.DataFrame, stim: Any) -> list[MeasurementRow]:
                     cpk_vals.append(((v_max - sim_typ) / sim_std) / 3.0)
                     z_vals.append((v_max - sim_typ) / sim_std)
 
+            cpk = sigma = float("nan")
             if cpk_vals:
-                cpk_str = f"{min(cpk_vals):.2f}"
-                sigma_str = f"{min(z_vals):.2f}σ"
-            elif sim_std == 0.0 and (v_min is not None or v_max is not None):
+                cpk, sigma = min(cpk_vals), min(z_vals)
+                cpk_str = f"{cpk:.2f}"
+                sigma_str = f"{sigma:.2f}σ"
+            elif sim_std == 0.0 and not data.empty and (
+                v_min is not None or v_max is not None
+            ):
                 within = (v_min is None or sim_typ >= v_min) and (
                     v_max is None or sim_typ <= v_max
                 )
@@ -91,22 +173,40 @@ def measurement_rows(valid_df: pd.DataFrame, stim: Any) -> list[MeasurementRow]:
             else:
                 cpk_str = sigma_str = "-"
 
+            # Verdict over the usable runs only. An empty selection is never a
+            # pass: `Series([]).all()` is True, which is what let a run where
+            # everything crashed report PASS.
             pass_col = f"{name}_pass"
-            if pass_col in valid_df.columns:
-                passed = bool(valid_df[pass_col].all())
-                fail_n = int((valid_df[pass_col] == False).sum())  # noqa: E712
+            if pass_col in df.columns:
+                verdicts = df.loc[ok, pass_col]
+                passed = bool(verdicts.all()) if len(verdicts) else False
+                fail_n = int((verdicts == False).sum())  # noqa: E712
             else:
                 passed, fail_n = True, 0
 
-            unit = getattr(val_obj, "unit", None) or ""
+            # No usable value is an ERROR, never a verdict: reporting PASS or
+            # FAIL would claim a measurement that was never actually taken.
+            if error_n or data.empty:
+                status = STATUS_ERROR
+                if tb_error is None:
+                    tb_error = _representative_error(df, _tb_path(test))
+                error_msg = tb_error or (
+                    f"{name}: no value in {error_n} run(s)" if error_n
+                    else f"{name}: no runs"
+                )
+            else:
+                status = STATUS_PASS if passed else STATUS_FAIL
+                error_msg = ""
 
             rows.append(MeasurementRow(
                 name=name,
                 sim_min=sim_min, sim_typ=sim_typ, sim_max=sim_max,
                 spec_min=v_min, spec_max=v_max,
                 cpk_str=cpk_str, sigma_str=sigma_str,
-                status="PASS" if passed else "FAIL", fail_n=fail_n,
-                unit=str(unit),
+                status=status, fail_n=fail_n,
+                unit=str(getattr(val_obj, "unit", None) or ""),
+                cpk=cpk, sigma=sigma,
+                error_n=error_n, total_n=total_n, error_msg=error_msg,
             ))
     return rows
 
@@ -166,14 +266,19 @@ class WorstCase:
 
 
 def worst_cases(
-    valid_df: pd.DataFrame, stim: Any, total: int,
+    df: pd.DataFrame, stim: Any, total: int,
 ) -> list[WorstCase]:
     """For each failing parameter, the single worst run and what triggered it.
 
-    Mirrors the legacy Tk "Outliers & Fails" worst-case cards: a parameter is
-    reported only if some valid run both fails its ``*_pass`` flag *and* lands
-    outside a declared bound. When both bounds are violated (across different
-    runs) the side with the larger absolute excess is reported.
+    A parameter is reported only if some usable run both fails its ``*_pass``
+    flag *and* lands outside a declared bound. When both bounds are violated
+    (across different runs) the side with the larger absolute excess is
+    reported.
+
+    Takes the **full** results frame (see :func:`measurement_rows`) and scopes
+    validity per measurement. A parameter whose status is ``ERROR`` is still
+    reported here when its usable runs violate a bound, so partial-data
+    information is not lost behind the error badge.
     """
     out: list[WorstCase] = []
     param_cols = list(getattr(stim, "params", {}) or {})
@@ -181,17 +286,17 @@ def worst_cases(
         for val_obj in test.value_lst:
             name = val_obj.name
             pass_col = f"{name}_pass"
-            if name not in valid_df.columns or pass_col not in valid_df.columns:
+            if name not in df.columns or pass_col not in df.columns:
                 continue
-            failed = valid_df[valid_df[pass_col] == False]  # noqa: E712
+            ok = _dl.measurement_ok_mask(df, _tb_path(test), name)
+            failed = df[ok & (df[pass_col] == False)]  # noqa: E712
             if failed.empty:
                 continue
 
             series = failed[name].dropna()
             if series.empty:
                 continue
-            v_min = getattr(val_obj, "vmin", getattr(val_obj, "min", None))
-            v_max = getattr(val_obj, "vmax", getattr(val_obj, "max", None))
+            v_min, v_max = _spec_bounds(val_obj)
 
             candidates: list[tuple[float, float, Any, str]] = []
             if v_min is not None and float(series.min()) < v_min:
@@ -209,5 +314,103 @@ def worst_cases(
             out.append(WorstCase(
                 name=name, worst_val=float(worst_val), violation=violation,
                 fail_n=int(len(failed)), total=int(total), conditions=conditions,
+            ))
+    return out
+
+
+@dataclass
+class ErrorRow:
+    """One distinct simulation failure, with the runs it affected.
+
+    Errors are grouped per *(testbench, message)* rather than listed per run: a
+    broken schematic fails identically in every corner, and a hundred copies of
+    the same line teaches nothing that the count does not.
+    """
+    tb_path: str
+    kind: str                  #: leading token, e.g. "CRASH", "ENGINE_ERROR"
+    message: str               #: the full recorded message
+    run_n: int                 #: runs affected by this error
+    total_n: int               #: runs attempted
+    measurements: list[str] = field(default_factory=list)
+    #: Sweep point of the first affected run — which corner broke.
+    conditions: dict[str, Any] = field(default_factory=dict)
+
+
+#: Uppercase tokens the engines put in their messages, most specific first.
+_ERROR_KINDS = (
+    "TEMPLATE_RENDER_ERROR", "NO_MATCHING_SIGNALS", "NO_MY_DATA_FOUND",
+    "RAW_PARSE_ERROR", "INVALID_OUTPUT", "MEASURE_ERROR", "ENGINE_ERROR",
+    "NO_RAW_FILE", "WORKER_LOST", "TIMEOUT", "ABORTED", "CRASH",
+)
+
+#: Failures phrased as prose rather than a token (simulator.generate_templates
+#: and the per-testbench guards in _simulate_single_case). Without these the
+#: whole netlist-generation family collapses into a bare "ERROR", which is the
+#: least useful thing the column could say.
+_ERROR_PHRASES = (
+    ("netlist generation failed", "NETLIST_ERROR"),
+    ("no netlist template", "NO_TEMPLATE"),
+    ("engine unavailable", "ENGINE_UNAVAILABLE"),
+)
+
+
+def error_kind(message: str) -> str:
+    """Classify a recorded error message into a short kind token."""
+    for kind in _ERROR_KINDS:
+        if kind in message:
+            return kind
+    lowered = message.lower()
+    for phrase, kind in _ERROR_PHRASES:
+        if phrase in lowered:
+            return kind
+    return "ERROR"
+
+
+def error_rows(df: pd.DataFrame, stim: Any) -> list[ErrorRow]:
+    """Every distinct simulation error in *df*, grouped by testbench + message.
+
+    Reads the per-testbench ``<tb_path>__error`` columns, falling back to the
+    row-level ``sim_error`` for result frames written before those existed.
+    Takes the **full** results frame.
+    """
+    out: list[ErrorRow] = []
+    total_n = len(df)
+    if not total_n:
+        return out
+    param_cols = list(getattr(stim, "params", {}) or {})
+
+    for test in stim.tests:
+        tb = _tb_path(test)
+        col = _dl.tb_error_col(tb)
+        if col not in df.columns:
+            # Pre-per-testbench CSV: sim_error is all we have, and it is not
+            # attributable to a single testbench. Report it once, under the
+            # testbench named in the message.
+            if "sim_error" not in df.columns:
+                continue
+            col = "sim_error"
+
+        errors = df[col].astype(str)
+        affected = df[errors != _dl.NO_ERROR]
+        if affected.empty:
+            continue
+        if col == "sim_error":
+            affected = affected[
+                affected[col].astype(str).str.startswith(f"{tb}:")
+            ]
+            if affected.empty:
+                continue
+
+        names = [v.name for v in test.value_lst]
+        for message, group in affected.groupby(affected[col].astype(str), sort=False):
+            first = group.iloc[0]
+            out.append(ErrorRow(
+                tb_path=tb,
+                kind=error_kind(str(message)),
+                message=str(message),
+                run_n=int(len(group)),
+                total_n=total_n,
+                measurements=names,
+                conditions={k: first[k] for k in param_cols if k in first},
             ))
     return out

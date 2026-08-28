@@ -40,8 +40,9 @@ class _FakeVal:
 
 
 class _FakeTest:
-    def __init__(self, values):
+    def __init__(self, values, tb_path="tb_fake"):
         self.value_lst = values
+        self.tb_path = tb_path
 
 
 class _FakeStim:
@@ -96,8 +97,15 @@ def test_show_results_populates_measurements(window):
     item = tree.topLevelItem(0)
     assert item.text(0) == "gain"
     assert item.text(1) == "dB"              # optional unit column
-    assert item.text(9) == "FAIL"           # one failing run
+    assert item.text(9) == "-"              # Errors column: none errored
+    assert item.text(10) == "FAIL"          # one failing run (Status is last)
     assert "gain" in window.measurements_tab.status_label.text()
+
+    # A clean run leaves the errors section empty and its log panel hidden.
+    errors = window.measurements_tab.error_tree
+    assert errors.topLevelItemCount() == 1
+    assert errors.topLevelItem(0).text(0) == "No simulation errors."
+    assert not window.measurements_tab.log_view.isVisible()
 
     # The out-of-spec failing run shows up under Worst Cases.
     worst = window.measurements_tab.worst_tree

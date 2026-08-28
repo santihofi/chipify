@@ -47,10 +47,16 @@ _config_cache: dict[str, Any] | None = None
 _config_mtime: float | None = None
 
 
-def setup_logging(level: int = logging.DEBUG) -> None:
+def setup_logging(level: int = logging.DEBUG,
+                  console_level: int = logging.INFO) -> None:
     """
     Initialise the root 'chipify' logger once.
     Safe to call multiple times – subsequent calls are no-ops.
+
+    *console_level* controls only the terminal handler; the rotating file
+    always keeps full DEBUG detail. The CLI raises it to WARNING so the
+    per-phase INFO stream doesn't bury its own progress output and summary
+    table, while still writing the complete log to disk.
     """
     global _logging_ready
     if _logging_ready:
@@ -70,9 +76,9 @@ def setup_logging(level: int = logging.DEBUG) -> None:
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
 
-    # Console handler – INFO and above
+    # Console handler – INFO and above by default (see console_level)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
+    ch.setLevel(console_level)
     ch.setFormatter(fmt)
 
     root = logging.getLogger("chipify")
@@ -81,8 +87,15 @@ def setup_logging(level: int = logging.DEBUG) -> None:
     root.addHandler(ch)
     root.propagate = False
 
+    # Record which install produced this log. An environment can hold both a
+    # packaged chipify and a working tree (the IIC-OSIC-TOOLS container ships
+    # one preinstalled), and a report from the wrong one is indistinguishable
+    # from a report from the right one unless the log says so.
+    import chipify
+
     root.info("=" * 60)
-    root.info("Chipify logging initialised  →  %s", LOG_PATH)
+    root.info("Chipify %s  →  %s", chipify.__version__, Path(chipify.__file__).parent)
+    root.info("Logging initialised  →  %s", LOG_PATH)
     root.info("=" * 60)
 
     _logging_ready = True

@@ -45,6 +45,14 @@ ACCENT_HOVER: str = "#2b6fd0"
 DANGER: str = "#e74c3c"
 DANGER_HOVER: str = "#c0392b"
 
+#: Measurement verdict colours. ERROR is deliberately amber rather than a shade
+#: of red: "this measurement could not be taken" is a different problem from
+#: "this measurement is out of spec", and the two must not look alike.
+STATUS_PASS: str = "#2ecc71"
+STATUS_FAIL: str = DANGER
+STATUS_ERROR: str = "#f39c12"
+MUTED: str = "#888888"
+
 DEFAULT_THEME: str = "night"
 
 

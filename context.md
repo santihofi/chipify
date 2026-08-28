@@ -30,7 +30,7 @@ uikit/                      – NO GUI-toolkit imports; unit-testable headlessly
 ├── state.py                – AppState (single source of truth) + Signal pub/sub
 ├── services/
 │   ├── equation_service.py – apply_scalar_equations, apply_transient_equations (via SafeEvaluator)
-│   ├── measurements.py     – measurement_rows / equation_rows / worst_cases (stats for the table)
+│   ├── measurements.py     – measurement_rows / equation_rows / worst_cases / error_rows (PASS/FAIL/ERROR stats; shared by GUI + analyzer + md/pdf exports)
 │   ├── transient_loader.py – resolve_analysis_dir, list_analysis_signals, load_analysis_df
 │   ├── scatter_hover.py    – matplotlib scatter hover/click manager
 │   ├── netlist_export.py   – per-sample SPICE netlist rendering (pure)
@@ -68,6 +68,7 @@ Plugins: the Qt GUI loads `QtTabPlugin`s; legacy Tk `TabPlugin`s are detected an
 | `test_netlist_export.py` | per-sample netlist rendering (pure logic) |
 | `test_plugin_context.py` | `PluginContext` facade, JSON-serialization |
 | `test_gui_qt_smoke.py` | Qt GUI smoke tests (offscreen): window, tabs, themes, worker, plugins |
+| `test_measurements_errors.py` | Per-testbench error scoping, ERROR status, `error_rows`, lost-batch rows |
 
 ---
 
@@ -100,8 +101,22 @@ Plugins: the Qt GUI loads `QtTabPlugin`s; legacy Tk `TabPlugin`s are detected an
 *   **The Fix:** `data_loader.compute_plot_cols()` returns a typed `PlotColumns` dataclass separating `sweep_params` from numeric output columns. `data_loader.valid_rows(df)` is the single filter for `sim_error == 'None'`.
 
 ### Error Handling in DataFrames
-*   Failed Ngspice runs write their error into the `sim_error` column; successful runs have `sim_error = 'None'`.
-*   Always filter before plotting or metric computation: use `data_loader.valid_rows(df)` — never inline the filter.
+Errors are recorded at **two scopes**, because a datasheet can hold several testbenches and one of them failing must not invalidate the others.
+
+*   **Per testbench** — `<tb_path>__error` (`data_loader.TB_ERROR_SUFFIX`), written by `simulator._record_error`. `'None'` when that testbench succeeded. This is the authoritative scope for anything measurement-related.
+*   **Per row** — `sim_error` is the roll-up of every testbench failure in that run (accumulated, `' | '`-joined), used for run-level yield and plotting.
+
+Which filter to use:
+
+*   `data_loader.valid_rows(df)` — row-level. Only for plotting and yield: it keeps a row only when *every* testbench in it succeeded.
+*   `data_loader.measurement_ok_mask(df, tb_path, name)` — per measurement. Required for measurement statistics. Also excludes NaN values, so an engine that silently fails to resolve a signal is caught.
+*   Both fall back to `sim_error` when the per-testbench column is absent, so pre-existing history CSVs keep loading.
+
+**Never compute measurement statistics from a `valid_rows`-filtered frame.** A testbench that fails in every corner sets `sim_error` on every row, `valid_rows` then returns *nothing*, and `Series([]).all()` is vacuously `True` — which is exactly how a completely failed run used to report `PASS` with blank statistics. `uikit/services/measurements.py` takes the **full** frame and scopes validity itself; `measurement_rows`, `worst_cases` and `error_rows` are the single implementation shared by the Qt tab, `analyzer.py`, `md_export.py` and `pdf_export.py`.
+
+A measurement's status is `PASS` / `FAIL` / `ERROR` (`measurements.STATUS_*`). `ERROR` means at least one run produced no trustworthy value at all — a different problem from an out-of-spec `FAIL`, and never reported as `PASS`.
+
+`run_sim` returns `None` **only** on user abort; every other failure raises, so callers must report it rather than mistake it for a cancellation.
 
 ---
 

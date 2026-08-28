@@ -5,7 +5,7 @@ Prints a human-readable run summary (total iterations, failed runs, and
 per-testbench / global yield) for a completed results DataFrame. Used by the
 CLI after a sweep.
 """
-import pandas as pd
+from chipify.uikit.services import measurements as _meas
 
 
 def print_summary(df, stim):
@@ -52,82 +52,55 @@ def print_summary(df, stim):
     print(" MEASUREMENT ANALYSIS (simulated values vs. specification)")
     print("-" * 85)
 
-    header = f" {'Parameter':<12} | {'Sim Min':<10} | {'Sim Typ':<10} | {'Sim Max':<10} | {'Spec Min':<10} | {'Spec Max':<10} | {'Status'}"
+    header = (f" {'Parameter':<12} | {'Sim Min':<10} | {'Sim Typ':<10} | "
+              f"{'Sim Max':<10} | {'Spec Min':<10} | {'Spec Max':<10} | {'Status'}")
     print(header)
     print("-" * 85)
 
-    valid_df = df[df['sim_error'] == 'None']
-
     def fmt(val):
-        if pd.isna(val) or val is None: return "-"
-        return f"{val:.4g}"
+        return _meas.fmt_value(val)
 
-    failed_params = []
+    # One shared implementation of the row statistics (the GUI, the Markdown
+    # and the PDF reports read the same helper), so the four surfaces can no
+    # longer disagree about whether a run passed.
+    rows = _meas.measurement_rows(df, stim)
 
-    for test in stim.tests:
-        for val_obj in test.value_lst:
-            p_name = val_obj.name
-
-            if p_name in valid_df.columns:
-                sim_min = valid_df[p_name].min()
-                sim_max = valid_df[p_name].max()
-                sim_typ = valid_df[p_name].mean()
-
-                spec_min = fmt(val_obj.vmin)
-                spec_max = fmt(val_obj.vmax)
-
-                pass_col = f"{p_name}_pass"
-                if pass_col in valid_df.columns and valid_df[pass_col].all():
-                    status = "[PASS]"
-                else:
-                    status = "[FAIL]"
-                    failed_params.append((test, val_obj))
-
-                row = f" {p_name:<12} | {fmt(sim_min):<10} | {fmt(sim_typ):<10} | {fmt(sim_max):<10} | {spec_min:<10} | {spec_max:<10} | {status}"
-                print(row)
+    for r in rows:
+        status = f"[{r.status}]"
+        print(f" {r.name:<12} | {fmt(r.sim_min):<10} | {fmt(r.sim_typ):<10} | "
+              f"{fmt(r.sim_max):<10} | {fmt(r.spec_min):<10} | "
+              f"{fmt(r.spec_max):<10} | {status}")
 
     # --- Worst-case analysis ---
-    if failed_params:
+    worst = _meas.worst_cases(df, stim, total)
+    if worst:
         print("\n" + "-"*85)
         print(" WORST-CASE ANALYSIS (most extreme outliers of the failing parameters)")
         print("-" * 85)
+        for w in worst:
+            print(f" [FAIL] {w.name}: {fmt(w.worst_val)} "
+                  f"(specification: {w.violation})")
+            print("        Triggering parameters:")
+            for key, val in w.conditions.items():
+                print(f"          |- {key:<15} : {val}")
+            print("")
 
-        param_cols = list(stim.params.keys())
-
-        for test, val_obj in failed_params:
-            p_name = val_obj.name
-            pass_col = f"{p_name}_pass"
-
-            failed_rows = valid_df[valid_df[pass_col] == False]
-            if failed_rows.empty:
-                continue
-
-            min_fail = failed_rows[p_name].min()
-            max_fail = failed_rows[p_name].max()
-
-            # A parameter can violate both bounds across different runs —
-            # report the side with the larger absolute excess.
-            candidates = []
-            if val_obj.vmin is not None and min_fail < val_obj.vmin:
-                candidates.append((
-                    val_obj.vmin - min_fail, min_fail,
-                    failed_rows[p_name].idxmin(), f"< {fmt(val_obj.vmin)}",
-                ))
-            if val_obj.vmax is not None and max_fail > val_obj.vmax:
-                candidates.append((
-                    max_fail - val_obj.vmax, max_fail,
-                    failed_rows[p_name].idxmax(), f"> {fmt(val_obj.vmax)}",
-                ))
-
-            for _excess, worst_val, worst_idx, violation in sorted(
-                    candidates, key=lambda c: c[0], reverse=True):
-                worst_row = failed_rows.loc[worst_idx]
-
-                print(f" [FAIL] {p_name}: {fmt(worst_val)} (specification: {violation})")
-                print("        Triggering parameters:")
-                for k in param_cols:
-                    if k in worst_row:
-                        print(f"          ├─ {k:<15} : {worst_row[k]}")
-                print("")  # blank line between worst cases
+    # --- Simulation errors ---
+    # Without this block a broken testbench was invisible here: its rows were
+    # filtered out before the table was built, so it contributed nothing at all.
+    errors = _meas.error_rows(df, stim)
+    if errors:
+        print("\n" + "-"*85)
+        print(" SIMULATION ERRORS (measurements that could not be taken)")
+        print("-" * 85)
+        for e in errors:
+            print(f" [{e.kind}] {e.tb_path}: {e.run_n}/{e.total_n} run(s)")
+            print(f"        {e.message}")
+            if e.conditions:
+                conds = ", ".join(f"{k}={v}" for k, v in e.conditions.items())
+                print(f"        first seen at: {conds}")
+            if e.measurements:
+                print(f"        affects: {', '.join(e.measurements)}")
+            print("")
 
     print("="*85 + "\n")
