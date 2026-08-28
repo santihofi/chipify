@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Santiago Hofwimmer
+# Copyright (c) 2026 Santiago Hofwimmer
 """
 transient_loader.py – Helpers for loading analysis-result CSV files.
 
@@ -28,6 +28,88 @@ import pandas as pd
 from chipify.uikit.services.equation_service import apply_transient_equations
 
 log = logging.getLogger("chipify.uikit.services.transient")
+
+
+#: UI label -> ``Analysis.kind`` as written on disk and in
+#: ``df.attrs["analysis_dirs"]``. One definition, shared by the Plots tab and
+#: the Multi-plot dashboard cell so their kind selectors cannot drift apart.
+KIND_LABELS: dict[str, str] = {"Transient": "transient", "DC Sweep": "dc",
+                               "Bode": "ac"}
+
+
+def kind_for_label(label: str) -> str:
+    """Analysis kind for a UI label, defaulting to transient."""
+    return KIND_LABELS.get(label, "transient")
+
+
+def pad_run_id(value: Any) -> str:
+    """Zero-pad a run id to the six digits used in ``run_<id>__<tb>.csv``.
+
+    Necessary because a results frame read back from CSV parses ``run_id`` as
+    an integer, so a plain ``astype(str)`` yields ``"4"`` where the waveform
+    file is ``run_000004__tb.csv`` — and the overlay then silently matches no
+    files at all for every loaded run.
+    """
+    return str(value).strip().zfill(6)
+
+
+def padded_run_ids(df: pd.DataFrame) -> list[str]:
+    """Every run id in *df*, zero-padded (empty when the column is absent)."""
+    if df is None or "run_id" not in df.columns:
+        return []
+    return [pad_run_id(v) for v in df["run_id"]]
+
+
+def run_pass_map(df: pd.DataFrame) -> dict[str, bool]:
+    """``run_id -> passed`` for every run in *df*.
+
+    Keys are zero-padded to six digits to match the ``run_<id>__<tb>.csv``
+    filenames the overlay plotters parse.
+    """
+    if df is None or "run_id" not in df.columns or "global_pass" not in df.columns:
+        return {}
+    pairs = df[["run_id", "global_pass"]].dropna(subset=["run_id"])
+    return {pad_run_id(rid): bool(ok)
+            for rid, ok in zip(pairs["run_id"], pairs["global_pass"])}
+
+
+def run_group_map(df: pd.DataFrame, group_col: str) -> dict[str, Any]:
+    """``run_id -> value of *group_col*`` for every run in *df*.
+
+    Lets a waveform overlay colour its curves by a swept input parameter
+    (``temp``, ``corner``, …) instead of by bare run index. Same zero-padded
+    keys as :func:`run_pass_map`. An unknown or unset column yields ``{}``,
+    which the plotters read as "no grouping".
+    """
+    if (df is None or not group_col or group_col == "None"
+            or "run_id" not in df.columns or group_col not in df.columns):
+        return {}
+    pairs = df[["run_id", group_col]].dropna(subset=["run_id"])
+    return {pad_run_id(rid): val
+            for rid, val in zip(pairs["run_id"], pairs[group_col])}
+
+
+def list_kind_signals(stim: Any, kind: str) -> list[str]:
+    """Signals declared for one analysis *kind*, in declaration order.
+
+    Transient additionally offers the datasheet's ``transient_equations:``
+    results, which are computed per run when the waveform is drawn.
+    """
+    seen: list[str] = []
+    for test in getattr(stim, "tests", None) or []:
+        for an in getattr(test, "analyses", None) or []:
+            if an.kind != kind:
+                continue
+            for sig in an.signals:
+                if sig not in seen:
+                    seen.append(sig)
+    if kind == "transient":
+        from chipify.uikit.services import equation_service as _eq_svc
+        for eq in _eq_svc.transient_equations(stim):
+            name = (eq.get("name") or "").strip()
+            if name and name not in seen:
+                seen.append(name)
+    return seen
 
 
 # ── Generic helpers ──────────────────────────────────────────────────────────

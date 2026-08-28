@@ -298,7 +298,7 @@ After restarting Chipify both formats appear in the Export menu of every plot.
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `name` | `str` | **Yes** | Tab title shown in the main window. Must be unique and must not collide with a built-in tab name (`Datasheet Editor`, `Measurements`, `Histograms`, `Advanced Analytics`, `Custom Equations`, `Transient`). |
+| `name` | `str` | **Yes** | Tab title shown in the main window. Must be unique and must not collide with a built-in tab name (`Datasheet Editor`, `Measurements`, `Histograms`, `Advanced Analytics`, `Custom Equations`, `Plots`). |
 | `api_version` | `str` | No | Plugin API version. Default `"1"`. |
 
 ### Methods

@@ -31,7 +31,8 @@ uikit/                      – NO GUI-toolkit imports; unit-testable headlessly
 ├── services/
 │   ├── equation_service.py – apply_scalar_equations, apply_transient_equations (via SafeEvaluator)
 │   ├── measurements.py     – measurement_rows / equation_rows / worst_cases / error_rows (PASS/FAIL/ERROR stats; shared by GUI + analyzer + md/pdf exports)
-│   ├── transient_loader.py – resolve_analysis_dir, list_analysis_signals, load_analysis_df
+│   ├── transient_loader.py – resolve_analysis_dir, list_analysis_signals, load_analysis_df,
+│   │                         list_kind_signals, run_pass_map / run_group_map (waveform grouping)
 │   ├── scatter_hover.py    – matplotlib scatter hover/click manager
 │   ├── netlist_export.py   – per-sample SPICE netlist rendering (pure)
 │   ├── yaml_editor_service.py – get_params_dict, get_tests_dict, gui_repr_param, sync_form_to_yaml
@@ -50,7 +51,7 @@ gui_qt/
 ├── controllers/            – simulation_controller, history_controller (Qt signals, no after())
 ├── workers/sim_worker.py   – QThread worker emitting queued progress/chunk/finished signals
 ├── services/               – throttle, canvas_menu (QMenu), figure_export, latex_export
-├── tabs/                   – editor / measurements / histogram / analytics / transient / equations
+├── tabs/                   – editor / measurements / histogram / analytics / plots / equations
 └── widgets/                – settings_dialog, run_annotation_dialog, mpl_canvas, helpers
 ```
 
@@ -121,6 +122,11 @@ A measurement's status is `PASS` / `FAIL` / `ERROR` (`measurements.STATUS_*`). `
 Yield *visualisations* use `data_loader.effective_pass(df)`, not `global_pass`: `global_pass` ANDs every testbench, so one permanently broken testbench drives it false everywhere and flattens the Corner Yield Matrix to 0 %. `effective_pass` ignores the testbenches that errored in a row (NaN when none ran, so those rows drop out of a `mean`), and the matrix names the excluded testbenches in its title. `global_pass` remains correct for run-level yield counts.
 
 `run_sim` returns `None` **only** on user abort; every other failure raises, so callers must report it rather than mistake it for a cancellation.
+
+### Waveform overlay grouping (`plot_manager._OverlayStyle`)
+*   The Transient / DC sweep / Bode overlays share one colour-and-legend policy. Ungrouped, colour encodes the signal (or the run index for a single signal) and failing runs are red — unchanged.
+*   Passing `group_map` (`run_id -> value`, from `transient_loader.run_group_map`) plus `group_label` switches colour to the **group value**, line style to the signal, and turns pass/fail highlighting **off** — red would pull failing curves out of the grouping. Legend labels use `temp=27`, matching `draw_histogram`'s convention.
+*   The Plots tab and the dashboard's `Plots` cell both drive this through the same helpers; the cell's legacy `"Transient"` mode name is migrated in `apply_config`.
 
 ---
 

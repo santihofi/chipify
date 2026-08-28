@@ -45,8 +45,11 @@ log = logging.getLogger("chipify.gui_qt.multiplot")
 
 _BASE_MODES = [
     "Histogram", "Scatter Plot", "Corner Yield Matrix", "Correlation Heatmap",
-    "Sensitivity (Tornado)", "Fail Breakdown (Pie Chart)", "Transient",
+    "Sensitivity (Tornado)", "Fail Breakdown (Pie Chart)", "Plots",
 ]
+
+#: Cell mode this used to be called, kept so saved dashboards still open.
+_LEGACY_MODES = {"Transient": "Plots"}
 _FIT_CURVES = ["Gauss (Normal)", "KDE (Smoothed)", "Uniform",
                "Log-Normal", "Exponential", "Chi-Squared", "None"]
 _BINS = ["Auto", "10", "20", "50", "100", "200"]
@@ -137,6 +140,7 @@ class PlotCell(QFrame):
         self.x_combo = QComboBox()
         self.y_combo = QComboBox()
         self.target_combo = QComboBox()
+        self.kind_combo = QComboBox(); self.kind_combo.addItems(list(_tl.KIND_LABELS))
         self.tran_signal_combo = QComboBox()
         self.tran_mode_combo = QComboBox(); self.tran_mode_combo.addItems(_TRAN_RUN_MODES)
         self.tran_n_edit = QLineEdit("10"); self.tran_n_edit.setFixedWidth(56)
@@ -145,6 +149,7 @@ class PlotCell(QFrame):
             (self.dist_combo, "Fit curve"), (self.compare_combo, "Compare run"),
             (self.bins_combo, "Bins"), (self.x_combo, "X axis"),
             (self.y_combo, "Y axis"), (self.target_combo, "Target"),
+            (self.kind_combo, "Analysis"),
             (self.tran_signal_combo, "Signal"), (self.tran_mode_combo, "Runs"),
         ):
             combo.setToolTip(tip)
@@ -153,7 +158,8 @@ class PlotCell(QFrame):
                                   "instead of the single selected one.")
         row_top = [
             self.param_combo, self.group_combo, self.dist_combo,
-            self.x_combo, self.y_combo, self.target_combo, self.tran_signal_combo,
+            self.x_combo, self.y_combo, self.target_combo,
+            self.kind_combo, self.tran_signal_combo,
         ]
         row_bottom = [
             self.compare_combo, self.bins_combo, self.zoom_check,
@@ -202,9 +208,11 @@ class PlotCell(QFrame):
             vis[self.x_combo] = vis[self.y_combo] = True
         elif mode == "Sensitivity (Tornado)":
             vis[self.target_combo] = True
-        elif mode == "Transient":
+        elif mode == "Plots":
+            vis[self.kind_combo] = True
             vis[self.tran_signal_combo] = vis[self.tran_mode_combo] = True
             vis[self.tran_n_edit] = True
+            vis[self.group_combo] = True
         elif mode in _param_plugin_modes():
             vis[self.target_combo] = vis[self.all_check] = True
         for w, on in vis.items():
@@ -280,7 +288,7 @@ class PlotCell(QFrame):
 
     # ── Rendering ─────────────────────────────────────────────────────────────
 
-    def redraw(self, df, stim, sweep_params, derived_cols, tran_dir="") -> None:
+    def redraw(self, df, stim, sweep_params, derived_cols) -> None:
         self._populate(df, stim, sweep_params, derived_cols)
         # Re-apply remembered selections now that the option lists exist —
         # a dashboard opened before the first data load would otherwise draw
@@ -307,8 +315,8 @@ class PlotCell(QFrame):
                     )
                 else:
                     canvas.draw_idle()
-            elif mode == "Transient":
-                self._draw_transient(df, stim, tran_dir, theme)
+            elif mode == "Plots":
+                self._draw_waveform(df, stim, theme)
             else:
                 target = self.target_combo.currentText()
                 plugin_param = None
@@ -328,46 +336,54 @@ class PlotCell(QFrame):
                     color="#e74c3c", fontsize=8, wrap=True, transform=ax.transAxes)
             canvas.draw_idle()
 
-    def _draw_transient(self, df, stim, tran_dir, theme) -> None:
+    def _draw_waveform(self, df, stim, theme) -> None:
+        """Overlay one analysis kind's waveforms, optionally grouped.
+
+        Mirrors the Plots tab: same kind labels, same signal discovery, same
+        grouping, all through the shared ``transient_loader`` helpers so the two
+        surfaces cannot drift apart.
+        """
+        kind = _tl.kind_for_label(self.kind_combo.currentText())
+        draw_fn = {
+            "transient": PlotManager.draw_transient_plot,
+            "dc": PlotManager.draw_dc_sweep,
+            "ac": PlotManager.draw_bode_plot,
+        }[kind]
+
         sig = self.tran_signal_combo.currentText().strip()
-        if sig in ("", "All Signals"):
-            signals = []
-            for test in stim.tests:
-                for an in getattr(test, "analyses", []) or []:
-                    if an.kind == "transient":
-                        signals.extend(s for s in an.signals if s not in signals)
-            for eq in _eq_svc.transient_equations(stim):
-                name = (eq.get("name") or "").strip()
-                if name and name not in signals:
-                    signals.append(name)
-        else:
-            signals = [sig]
+        signals = ([sig] if sig not in ("", "All Signals")
+                   else _tl.list_kind_signals(stim, kind))
 
         df = self._state.active_df
         run_ids: list[str] = []
         if df is not None and "run_id" in df.columns:
             run_mode = self.tran_mode_combo.currentText()
+            # Padded to match the run_<id>__<tb>.csv filenames — see
+            # transient_loader.pad_run_id.
             if run_mode == "Failing Only" and "global_pass" in df.columns:
-                run_ids = list(df[df["global_pass"] == False]["run_id"].astype(str))  # noqa: E712
+                run_ids = _tl.padded_run_ids(df[df["global_pass"] == False])  # noqa: E712
             elif run_mode == "All Valid":
-                run_ids = list(df[df.get("sim_error", "None") == "None"]["run_id"].astype(str))
+                run_ids = _tl.padded_run_ids(df[df.get("sim_error", "None") == "None"])
             else:
                 try:
                     n = int(self.tran_n_edit.text())
                 except ValueError:
                     n = 10
-                run_ids = list(df[df.get("sim_error", "None") == "None"]["run_id"].astype(str).head(n))
+                run_ids = _tl.padded_run_ids(
+                    df[df.get("sim_error", "None") == "None"].head(n))
         run_ids = run_ids[:500]
 
-        pass_map: dict[str, bool] = {}
-        if df is not None and "global_pass" in df.columns:
-            for _, r in df[["run_id", "global_pass"]].dropna(subset=["run_id"]).iterrows():
-                pass_map[str(r["run_id"]).zfill(6)] = bool(r["global_pass"])
+        adir = (_tl.resolve_analysis_dir(df, settings.OUT_DIR, kind)
+                if df is not None else "")
+        group_text = self.group_combo.currentText()
+        group_col = "" if group_text in ("", "None") else group_text
+        equations = _eq_svc.transient_equations(stim) if kind == "transient" else []
 
-        equations = _eq_svc.transient_equations(stim)
-        PlotManager.draw_transient_plot(
-            self.canvas.figure, self.canvas.canvas, tran_dir, run_ids, signals,
-            pass_map=pass_map, bg_color=theme["bg"], equations=equations, theme=theme,
+        draw_fn(
+            self.canvas.figure, self.canvas.canvas, adir, run_ids, signals,
+            pass_map=_tl.run_pass_map(df), bg_color=theme["bg"],
+            equations=equations, theme=theme,
+            group_map=_tl.run_group_map(df, group_col), group_label=group_col,
         )
 
     # ── Scatter hover ─────────────────────────────────────────────────────────
@@ -399,13 +415,16 @@ class PlotCell(QFrame):
             "y_col": self.y_combo.currentText(),
             "target": self.target_combo.currentText(),
             "all_params": self.all_check.isChecked(),
+            "kind": self.kind_combo.currentText(),
             "tran_signals": self.tran_signal_combo.currentText(),
             "tran_run_mode": self.tran_mode_combo.currentText(),
             "tran_n": self.tran_n_edit.text(),
         }
 
     def apply_config(self, cfg: dict) -> None:
-        self.mode_combo.setCurrentText(cfg.get("mode", "Histogram"))
+        mode = cfg.get("mode", "Histogram")
+        self.mode_combo.setCurrentText(_LEGACY_MODES.get(mode, mode))
+        self.kind_combo.setCurrentText(cfg.get("kind", "Transient"))
         self.dist_combo.setCurrentText(cfg.get("dist", "Gauss (Normal)"))
         self.bins_combo.setCurrentText(cfg.get("bins", "Auto"))
         self.zoom_check.setChecked(bool(cfg.get("zoom", False)))
@@ -499,7 +518,11 @@ class MultiPlotWindow(QWidget):
     # ── Cell management ───────────────────────────────────────────────────────
 
     def data_snapshot(self):
-        """``(df, stim, sweep_params, derived_cols, tran_dir)`` or None."""
+        """``(df, stim, sweep_params, derived_cols)`` or None.
+
+        No analysis directory here: a cell resolves its own, per the
+        analysis kind it is showing.
+        """
         df = self._state.active_df
         stim = self._state.current_stim
         if df is None or stim is None:
@@ -508,8 +531,7 @@ class MultiPlotWindow(QWidget):
         # layer, which scopes rows per plotted measurement. Pre-filtering here
         # blanked every cell as soon as one testbench failed.
         cols = _dl.compute_plot_cols(df, stim)
-        tran_dir = _tl.resolve_analysis_dir(df, settings.OUT_DIR, "transient")
-        return df, stim, cols.sweep_params, self._state.derived_cols, tran_dir
+        return df, stim, cols.sweep_params, self._state.derived_cols
 
     def _add_cell(self, config: dict | None = None) -> PlotCell:
         cell = PlotCell(self._state, self._plot_theme, self._remove_cell)

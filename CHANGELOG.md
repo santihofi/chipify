@@ -124,3 +124,14 @@ Preparation for the initial public release.
   None only on user abort, so a failed run can no longer end in silence.
 - Logging is enabled for CLI runs and the log banner records the running
   chipify version and install path.
+- Waveform overlays (Transient / DC sweep / Bode) can be grouped by a swept
+  input parameter: curves are coloured by the parameter's value (`temp=-40`,
+  `temp=27`, …) with the signal carried by line style. Available in the Plots
+  tab and in the Multi-plot dashboard.
+- Fixed: waveform overlays matched no files for any run loaded from a results
+  CSV. `run_id` parses back as an integer, so the lookup asked for `run_4`
+  while the file is `run_000004__<tb>.csv`; only a run still in memory from a
+  live simulation ever drew.
+- The `Transient` tab is now `Plots`, since it has long covered DC sweep and
+  Bode as well; the dashboard's waveform cell gained the same analysis-kind
+  selector. Dashboards saved with the old `Transient` cell still open.

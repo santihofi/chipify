@@ -43,7 +43,7 @@ from chipify.gui_qt.tabs.analytics_tab import AnalyticsTab
 from chipify.gui_qt.tabs.editor_tab import DatasheetEditorTab
 from chipify.gui_qt.tabs.histogram_tab import HistogramTab
 from chipify.gui_qt.tabs.measurements_tab import MeasurementsTab
-from chipify.gui_qt.tabs.transient_tab import TransientTab
+from chipify.gui_qt.tabs.plots_tab import PlotsTab
 from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 
 log = logging.getLogger("chipify.gui_qt.main_window")
@@ -121,12 +121,12 @@ class MainWindow(QMainWindow):
         self.measurements_tab = MeasurementsTab(self.app_state)
         self.histogram_tab = HistogramTab(self.app_state, self.plot_theme)
         self.analytics_tab = AnalyticsTab(self.app_state, self.plot_theme)
-        self.transient_tab = TransientTab(self.app_state, self.plot_theme)
+        self.plots_tab = PlotsTab(self.app_state, self.plot_theme)
         self.tabs.addTab(self.editor_tab, "Datasheet Editor")
         self.tabs.addTab(self.measurements_tab, "Measurements")
         self.tabs.addTab(self.histogram_tab, "Histogram")
         self.tabs.addTab(self.analytics_tab, "Analytics")
-        self.tabs.addTab(self.transient_tab, "Transient")
+        self.tabs.addTab(self.plots_tab, "Plots")
         self._setup_plugin_tabs()
         root.addWidget(self.tabs, stretch=1)
 

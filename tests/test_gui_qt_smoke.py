@@ -162,28 +162,85 @@ def test_transient_latex_export_no_data_is_graceful(window, monkeypatch):
     seen = {}
     monkeypatch.setattr(latex_export.QMessageBox, "information",
                         lambda *a, **k: seen.setdefault("info", a))
-    window.transient_tab._export_latex()
+    window.plots_tab._export_latex()
     assert "info" in seen
 
 
 def test_plot_tabs_present(window):
     titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
     assert titles == ["Datasheet Editor", "Measurements", "Histogram",
-                      "Analytics", "Transient"]
+                      "Analytics", "Plots"]
     # Equations editor is embedded as the editor's third column, not a tab.
     assert window.editor_tab.equations_panel is window.equations_tab
 
 
-def test_transient_tab_empty_state(window):
+def test_plots_tab_empty_state(window):
     """No waveform CSVs on disk → the tab must render its empty-state safely."""
     window.show_results(_sample_df(), _FakeStim(), switch_tab=False)
-    tt = window.transient_tab
+    tt = window.plots_tab
     tt._redraw()                              # transient kind, no data
     tt.kind_combo.setCurrentText("DC Sweep")  # exercises the dc plotter path
     tt._redraw()
     tt.kind_combo.setCurrentText("Bode")      # exercises the ac/bode path
     tt._redraw()
     assert tt.canvas.figure.axes               # an axes was drawn each time
+
+
+def test_plots_tab_group_by_offers_swept_parameters(window):
+    """The Group-by selector must list the genuinely swept inputs."""
+    import pandas as pd
+
+    class _Stim(_FakeStim):
+        def __init__(self):
+            super().__init__()
+            self.params = {"temp": [-40, 27, 100], "vdd": [1.8]}
+
+    df = pd.DataFrame({
+        "temp": [-40, 27, 100, -40],
+        "vdd": [1.8] * 4,                     # constant: not a sweep
+        "run_id": ["0", "1", "2", "3"],
+        "gain": [10.0, 10.2, 8.5, 10.1],
+        "gain_pass": [True, True, False, True],
+        "sim_error": ["None"] * 4,
+    })
+    window.show_results(df, _Stim(), switch_tab=False)
+
+    pt = window.plots_tab
+    items = [pt.group_combo.itemText(i) for i in range(pt.group_combo.count())]
+    assert items == ["None", "temp"]          # vdd is constant, so not offered
+
+    # Selecting a group must not break the empty-data render path.
+    pt.group_combo.setCurrentText("temp")
+    pt._redraw()
+    assert pt.canvas.figure.axes
+
+
+def test_dashboard_cell_has_kind_and_group_controls(window):
+    """The dashboard's waveform cell mirrors the Plots tab's controls."""
+    from chipify.gui_qt.multiplot_window import MultiPlotWindow
+
+    window.show_results(_sample_df(), _FakeStim(), switch_tab=False)
+    mp = MultiPlotWindow(window.app_state, window.plot_theme)
+    try:
+        cell = mp._cells[0]
+        cell.mode_combo.setCurrentText("Plots")
+        cell._apply_mode_visibility()
+        assert cell.kind_combo.isVisibleTo(cell)
+        assert cell.group_combo.isVisibleTo(cell)
+
+        # All three analysis kinds are selectable, not just transient.
+        kinds = [cell.kind_combo.itemText(i) for i in range(cell.kind_combo.count())]
+        assert kinds == ["Transient", "DC Sweep", "Bode"]
+
+        cell.kind_combo.setCurrentText("Bode")
+        cell.redraw(*mp.data_snapshot())
+        assert cell.canvas.figure.axes
+
+        # A dashboard saved before the rename must still open.
+        cell.apply_config({"mode": "Transient", "kind": "Bode"})
+        assert cell.mode_combo.currentText() == "Plots"
+    finally:
+        mp.close()
 
 
 def test_histogram_and_analytics_redraw(window):

@@ -64,6 +64,115 @@ def _adv_plot_columns(mode, x_col, y_col, target, plugin_param):
     return []
 
 
+_FAIL_COLOR = "#e74c3c"
+
+#: Line styles cycled per signal when colour is already spoken for by a group.
+_GROUP_LINESTYLES = ["-", "--", "-.", ":"]
+
+
+def _sort_group_values(values):
+    """Group values in a sensible order: numeric when they parse, else text.
+
+    Without this a temperature sweep legends as ``-40, 100, 27`` (string sort),
+    which reads as a bug to anyone looking at the plot.
+    """
+    vals = list(values)
+    try:
+        return sorted(vals, key=lambda v: float(v))
+    except (TypeError, ValueError):
+        return sorted(vals, key=str)
+
+
+class _OverlayStyle:
+    """Colour / line-style / legend policy for a per-run waveform overlay.
+
+    One implementation for both the XY overlays and the Bode plot, which
+    previously carried the same colour-and-legend logic in two copies.
+
+    Ungrouped, the behaviour is exactly what it has always been: colour encodes
+    the signal, or the run index when a single signal is selected, and a failing
+    run is drawn red. Grouped, colour encodes the *group value* so corners can
+    be told apart, line style encodes the signal, and pass/fail highlighting is
+    off — red would pull failing curves out of the very grouping that was asked
+    for.
+    """
+
+    def __init__(self, signals, run_ids, group_map=None, group_label="",
+                 pass_map=None):
+        self.signals = list(signals)
+        self.group_label = group_label or ""
+        self.group_map = dict(group_map or {})
+        self.grouped = bool(self.group_map and self.group_label)
+        # Ignored while grouping: see the class docstring.
+        self.pass_map = {} if self.grouped else dict(pass_map or {})
+        self.single_signal = len(self.signals) == 1
+
+        base = plt.cm.tab10(np.linspace(0, 1, max(10, len(self.signals))))
+        self.sig_color = {sig: base[i % 10] for i, sig in enumerate(self.signals)}
+
+        if self.grouped:
+            self.group_values = _sort_group_values(
+                {self.group_map[r] for r in run_ids if r in self.group_map}
+            )
+            palette = plt.cm.tab10(np.linspace(0, 1, max(10, len(self.group_values))))
+            self.group_color = {v: palette[i % 10]
+                                for i, v in enumerate(self.group_values)}
+            self.sig_style = {sig: _GROUP_LINESTYLES[i % len(_GROUP_LINESTYLES)]
+                              for i, sig in enumerate(self.signals)}
+            self.run_color = {}
+        else:
+            self.group_values = []
+            self.group_color = {}
+            self.sig_style = {sig: "-" for sig in self.signals}
+            if self.single_signal:
+                ordered = sorted(set(run_ids))
+                pal = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, len(ordered))))
+                self.run_color = {rid: pal[i] for i, rid in enumerate(ordered)}
+            else:
+                self.run_color = {}
+
+    def is_fail(self, run_id) -> bool:
+        return self.pass_map.get(run_id, True) is False if self.pass_map else False
+
+    def color(self, run_id, sig):
+        if self.grouped:
+            return self.group_color.get(
+                self.group_map.get(run_id), self.sig_color[sig])
+        if self.is_fail(run_id):
+            return _FAIL_COLOR
+        if self.single_signal:
+            return self.run_color.get(run_id, self.sig_color[self.signals[0]])
+        return self.sig_color[sig]
+
+    def linestyle(self, sig) -> str:
+        return self.sig_style.get(sig, "-")
+
+    def legend_handles(self) -> list:
+        handles = []
+        if self.grouped:
+            for val in self.group_values:
+                label = f"{self.group_label}={val}"
+                handles.append(Line2D([0], [0], color=self.group_color[val],
+                                      linewidth=1.5, label=label))
+            if len(self.signals) > 1:
+                for sig in self.signals:
+                    handles.append(Line2D([0], [0], color="gray", linewidth=1.5,
+                                          linestyle=self.sig_style[sig], label=sig))
+            return handles
+
+        if self.single_signal:
+            handles.append(Line2D([0], [0], color=plt.cm.viridis(0.1), linewidth=1.5,
+                                  label=f"{self.signals[0]}  (color = run index)"))
+        else:
+            for sig in self.signals:
+                handles.append(Line2D([0], [0], color=self.sig_color[sig],
+                                      linewidth=1.5, label=sig))
+        if self.pass_map and any(v is False for v in self.pass_map.values()):
+            handles.append(Line2D([0], [0], color=_FAIL_COLOR, linewidth=1.5,
+                                  label="Failing run"))
+        return handles
+
+
 class PlotManager:
     @staticmethod
     def draw_histogram(fig, ax, canvas, df, current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run, theme=None):
@@ -471,11 +580,16 @@ class PlotManager:
         bg_color: str = "#1a1a1a",
         equations: list | None = None,
         theme=None,
+        group_map: dict | None = None,
+        group_label: str = "",
     ) -> dict:
         """
         Overlay per-run curves from CSV files. Internal helper shared by
         ``draw_transient_plot`` and ``draw_dc_sweep``. The Bode plot uses its
         own implementation because it needs two stacked subplots.
+
+        *group_map* (``run_id -> value``) plus *group_label* colour the curves by
+        a swept input parameter instead of by run index — see _OverlayStyle.
         """
         th = _resolve_theme(theme, bg_color=bg_color)
         fg = th["fg"]
@@ -534,24 +648,16 @@ class PlotManager:
         n_curves = len(matched) * len(signals)
         alpha = 1.0 if n_curves <= 50 else max(0.05, 50.0 / n_curves)
 
-        # ── Color mode ────────────────────────────────────────────────────────
-        single_signal_mode = len(signals) == 1
-        fail_color = "#e74c3c"
-        base_colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(signals))))
-        sig_color = {sig: base_colors[i % 10] for i, sig in enumerate(signals)}
-
-        if single_signal_mode:
-            sorted_rids = sorted({rid for rid, _ in matched})
-            run_palette = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, len(sorted_rids))))
-            run_color_map = {rid: run_palette[i] for i, rid in enumerate(sorted_rids)}
-        else:
-            run_color_map = {}
+        # ── Color / line-style / legend policy ────────────────────────────────
+        style = _OverlayStyle(
+            signals, [rid for rid, _ in matched],
+            group_map=group_map, group_label=group_label, pass_map=pass_map,
+        )
 
         # ── Draw curves ───────────────────────────────────────────────────────
         first_error: str = ""
         drawn_any = False
         for run_id, fpath in matched:
-            is_fail = pass_map.get(run_id, True) is False if pass_map else False
             try:
                 df = pd.read_csv(fpath)
             except Exception as exc:
@@ -581,11 +687,8 @@ class PlotManager:
             for sig in signals:
                 if sig not in df.columns:
                     continue
-                if single_signal_mode:
-                    color = fail_color if is_fail else run_color_map.get(run_id, sig_color[signals[0]])
-                else:
-                    color = fail_color if is_fail else sig_color[sig]
-                lines = ax.plot(x, df[sig], color=color, alpha=alpha,
+                lines = ax.plot(x, df[sig], color=style.color(run_id, sig),
+                                linestyle=style.linestyle(sig), alpha=alpha,
                                 linewidth=0.8, rasterized=(n_curves > 200),
                                 picker=4)
                 if lines:
@@ -610,6 +713,7 @@ class PlotManager:
         n_runs_drawn = len({rid for rid, _ in matched})
         ax.set_title(
             f"{title_prefix} — {n_runs_drawn} run(s) × {len(signals)} signal(s)"
+            + (f"  grouped by {group_label}" if style.grouped else "")
             + (f"  [α={alpha:.2f}]" if n_curves > 50 else ""),
             color=fg, pad=10,
         )
@@ -619,22 +723,7 @@ class PlotManager:
         ax.grid(True, linestyle="--", alpha=0.2, color=th["grid"])
 
         # ── Legend ────────────────────────────────────────────────────────────
-        proxy_handles = []
-        if single_signal_mode:
-            proxy_handles.append(
-                Line2D([0], [0], color=plt.cm.viridis(0.1), linewidth=1.5,
-                       label=f"{signals[0]}  (color = run index)")
-            )
-        else:
-            for sig in signals:
-                proxy_handles.append(
-                    Line2D([0], [0], color=sig_color[sig], linewidth=1.5, label=sig)
-                )
-        if pass_map and any(v is False for v in pass_map.values()):
-            proxy_handles.append(
-                Line2D([0], [0], color=fail_color, linewidth=1.5, label="Failing run")
-            )
-        ax.legend(handles=proxy_handles, loc="best",
+        ax.legend(handles=style.legend_handles(), loc="best",
                   facecolor=th["legend_bg"], edgecolor=th["legend_edge"],
                   labelcolor=th["legend_text"], fontsize=9)
 
@@ -654,6 +743,8 @@ class PlotManager:
         bg_color: str = "#1a1a1a",
         equations: list | None = None,
         theme=None,
+        group_map: dict | None = None,
+        group_label: str = "",
     ) -> dict:
         """Overlay time-domain waveforms from per-run CSV files."""
         return PlotManager._draw_xy_overlay(
@@ -669,6 +760,7 @@ class PlotManager:
                           "or the files have been removed."),
             time_autoscale=True,
             pass_map=pass_map, bg_color=bg_color, equations=equations, theme=theme,
+            group_map=group_map, group_label=group_label,
         )
 
     @staticmethod
@@ -683,6 +775,8 @@ class PlotManager:
         bg_color: str = "#1a1a1a",
         equations: list | None = None,
         theme=None,
+        group_map: dict | None = None,
+        group_label: str = "",
     ) -> dict:
         """Overlay DC sweep curves from per-run CSV files.
 
@@ -702,6 +796,7 @@ class PlotManager:
                           "or the files have been removed."),
             time_autoscale=False,
             pass_map=pass_map, bg_color=bg_color, equations=equations, theme=theme,
+            group_map=group_map, group_label=group_label,
         )
 
     @staticmethod
@@ -716,6 +811,8 @@ class PlotManager:
         bg_color: str = "#1a1a1a",
         equations: list | None = None,
         theme=None,
+        group_map: dict | None = None,
+        group_label: str = "",
     ) -> dict:
         """Stacked Bode plot — magnitude (dB) above, phase (deg) below.
 
@@ -782,21 +879,13 @@ class PlotManager:
         n_curves = len(matched) * len(signals)
         alpha = 1.0 if n_curves <= 50 else max(0.05, 50.0 / n_curves)
 
-        single_signal_mode = len(signals) == 1
-        fail_color = "#e74c3c"
-        base_colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(signals))))
-        sig_color = {sig: base_colors[i % 10] for i, sig in enumerate(signals)}
-
-        if single_signal_mode:
-            sorted_rids = sorted({rid for rid, _ in matched})
-            run_palette = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, len(sorted_rids))))
-            run_color_map = {rid: run_palette[i] for i, rid in enumerate(sorted_rids)}
-        else:
-            run_color_map = {}
+        style = _OverlayStyle(
+            signals, [rid for rid, _ in matched],
+            group_map=group_map, group_label=group_label, pass_map=pass_map,
+        )
 
         drawn_any = False
         for run_id, fpath in matched:
-            is_fail = pass_map.get(run_id, True) is False if pass_map else False
             try:
                 df = pd.read_csv(fpath)
             except Exception:
@@ -824,18 +913,16 @@ class PlotManager:
                 ph_col = f"{sig}_phase"
                 if mag_col not in df.columns or ph_col not in df.columns:
                     continue
-                if single_signal_mode:
-                    color = fail_color if is_fail else run_color_map.get(run_id, sig_color[signals[0]])
-                else:
-                    color = fail_color if is_fail else sig_color[sig]
+                color, ls = style.color(run_id, sig), style.linestyle(sig)
                 mag_db = 20.0 * np.log10(np.maximum(np.abs(df[mag_col].values), 1e-30))
-                lines = ax_mag.plot(freq, mag_db, color=color, alpha=alpha,
-                                    linewidth=0.8, rasterized=(n_curves > 200),
-                                    picker=4)
+                lines = ax_mag.plot(freq, mag_db, color=color, linestyle=ls,
+                                    alpha=alpha, linewidth=0.8,
+                                    rasterized=(n_curves > 200), picker=4)
                 if lines:
                     line_map[lines[0]] = (run_id, f"{sig} (mag)")
-                ax_phase.plot(freq, df[ph_col], color=color, alpha=alpha,
-                              linewidth=0.8, rasterized=(n_curves > 200))
+                ax_phase.plot(freq, df[ph_col], color=color, linestyle=ls,
+                              alpha=alpha, linewidth=0.8,
+                              rasterized=(n_curves > 200))
                 drawn_any = True
 
         if not drawn_any:
@@ -858,26 +945,12 @@ class PlotManager:
         n_runs_drawn = len({rid for rid, _ in matched})
         ax_mag.set_title(
             f"Bode Plot — {n_runs_drawn} run(s) × {len(signals)} signal(s)"
+            + (f"  grouped by {group_label}" if style.grouped else "")
             + (f"  [α={alpha:.2f}]" if n_curves > 50 else ""),
             color=fg, pad=10,
         )
 
-        proxy_handles = []
-        if single_signal_mode:
-            proxy_handles.append(
-                Line2D([0], [0], color=plt.cm.viridis(0.1), linewidth=1.5,
-                       label=f"{signals[0]}  (color = run index)")
-            )
-        else:
-            for sig in signals:
-                proxy_handles.append(
-                    Line2D([0], [0], color=sig_color[sig], linewidth=1.5, label=sig)
-                )
-        if pass_map and any(v is False for v in pass_map.values()):
-            proxy_handles.append(
-                Line2D([0], [0], color=fail_color, linewidth=1.5, label="Failing run")
-            )
-        ax_mag.legend(handles=proxy_handles, loc="best",
+        ax_mag.legend(handles=style.legend_handles(), loc="best",
                       facecolor=th["legend_bg"], edgecolor=th["legend_edge"],
                       labelcolor=th["legend_text"], fontsize=9)
 

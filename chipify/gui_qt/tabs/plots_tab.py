@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Santiago Hofwimmer
 """
-transient_tab.py – Waveform overlays (Transient / DC sweep / Bode).
+plots_tab.py – Waveform overlays (Transient / DC sweep / Bode).
 
 Reuses the shared, framework-agnostic
 :mod:`chipify.uikit.services.transient_loader` (directory resolution + signal
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from chipify import data_loader as _dl
 from chipify import settings
 from chipify.uikit.services import transient_loader as _tl
 from chipify.uikit.state import AppState
@@ -35,15 +36,13 @@ from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas
 from chipify.plot_manager import PlotManager
 
-log = logging.getLogger("chipify.gui_qt.tabs.transient")
+log = logging.getLogger("chipify.gui_qt.tabs.plots")
 
-#: UI label → Analysis.kind (on disk / in df.attrs["analysis_dirs"]).
-_KIND_LABELS = {"Transient": "transient", "DC Sweep": "dc", "Bode": "ac"}
 _RUN_MODES = ["All Valid", "Failing Only", "First N", "Custom IDs"]
 _RUN_CAP = 500
 
 
-class TransientTab(QWidget):
+class PlotsTab(QWidget):
     """Per-run waveform overlay for the three analysis kinds."""
 
     def __init__(
@@ -71,11 +70,18 @@ class TransientTab(QWidget):
         controls.setSpacing(8)
 
         self.kind_combo = QComboBox()
-        self.kind_combo.addItems(list(_KIND_LABELS))
+        self.kind_combo.addItems(list(_tl.KIND_LABELS))
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(_RUN_MODES)
         for _c in (self.kind_combo, self.mode_combo):
             compact_combo(_c, length=12)
+        self.group_combo = QComboBox()
+        self.group_combo.addItems(["None"])
+        compact_combo(self.group_combo, length=12)
+        self.group_combo.setToolTip(
+            "Colour the curves by a swept input parameter (temp, corner, …) "
+            "instead of by run index."
+        )
         self.n_edit = QLineEdit("10")
         self.n_edit.setFixedWidth(90)
         self.n_edit.setPlaceholderText("N or ids…")
@@ -86,6 +92,8 @@ class TransientTab(QWidget):
         controls.addWidget(QLabel("Runs:"))
         controls.addWidget(self.mode_combo)
         controls.addWidget(self.n_edit)
+        controls.addWidget(QLabel("Group by:"))
+        controls.addWidget(self.group_combo)
         controls.addStretch(1)
         self.btn_export = QPushButton("Export…")
         self.btn_export.clicked.connect(self._export)
@@ -116,6 +124,7 @@ class TransientTab(QWidget):
 
         self.kind_combo.currentIndexChanged.connect(deferred(self._on_kind_change))
         self.mode_combo.currentIndexChanged.connect(deferred(self._on_mode_change))
+        self.group_combo.currentIndexChanged.connect(deferred(self._redraw))
         self.btn_refresh.clicked.connect(self._redraw)
         self.btn_select_all.clicked.connect(self.signal_list.selectAll)
         self._apply_mode_visibility()
@@ -123,7 +132,7 @@ class TransientTab(QWidget):
     # ── Control handlers ──────────────────────────────────────────────────────
 
     def _current_kind(self) -> str:
-        return _KIND_LABELS.get(self.kind_combo.currentText(), "transient")
+        return _tl.kind_for_label(self.kind_combo.currentText())
 
     def _apply_mode_visibility(self) -> None:
         self.n_edit.setVisible(self.mode_combo.currentText() in ("First N", "Custom IDs"))
@@ -137,29 +146,33 @@ class TransientTab(QWidget):
         self._redraw()
 
     def _on_data_changed(self, df=None, stim=None, switch_tab=False, **_kw) -> None:
+        self._refresh_group_options(df, stim)
         self._refresh_signal_list()
         self._redraw()
+
+    def _refresh_group_options(self, df, stim) -> None:
+        """Offer the genuinely swept parameters, as the Histogram tab does."""
+        if df is None or stim is None:
+            return
+        items = ["None"] + _dl.compute_plot_cols(df, stim).sweep_params
+        current = self.group_combo.currentText()
+        self.group_combo.blockSignals(True)
+        self.group_combo.clear()
+        self.group_combo.addItems(items)
+        if current in items:
+            self.group_combo.setCurrentText(current)
+        self.group_combo.blockSignals(False)
+
+    def _current_group(self) -> str:
+        text = self.group_combo.currentText()
+        return "" if text in ("", "None") else text
 
     # ── Signal list ───────────────────────────────────────────────────────────
 
     def _refresh_signal_list(self) -> None:
         """Populate the signal list from the stim's analyses for this kind."""
-        kind = self._current_kind()
         stim = self._state.current_stim
-        seen: list[str] = []
-        if stim is not None:
-            for test in stim.tests:
-                for an in getattr(test, "analyses", []) or []:
-                    if an.kind != kind:
-                        continue
-                    for sig in an.signals:
-                        if sig not in seen:
-                            seen.append(sig)
-        if kind == "transient":
-            for eq in self._tran_equations():
-                name = (eq.get("name") or "").strip()
-                if name and name not in seen:
-                    seen.append(name)
+        seen = _tl.list_kind_signals(stim, self._current_kind()) if stim else []
 
         # Preserve the user's selection across refreshes (e.g. after an
         # equation edit). Signals that were not in the old list at all — a
@@ -194,21 +207,24 @@ class TransientTab(QWidget):
         mode = self.mode_combo.currentText()
         if "run_id" not in df.columns:
             return []
+        # Ids are zero-padded to match the run_<id>__<tb>.csv filenames: a
+        # results frame read back from CSV parses run_id as an integer, and an
+        # unpadded "4" matches no waveform file at all.
         if mode == "Failing Only":
             if "global_pass" not in df.columns:
                 return []
-            ids = list(df[df["global_pass"] == False]["run_id"].astype(str))  # noqa: E712
+            ids = _tl.padded_run_ids(df[df["global_pass"] == False])  # noqa: E712
         elif mode == "First N":
             try:
                 n = int(self.n_edit.text())
             except ValueError:
                 n = 10
-            ids = list(df[df["sim_error"] == "None"]["run_id"].astype(str).head(n))
+            ids = _tl.padded_run_ids(df[df["sim_error"] == "None"].head(n))
         elif mode == "Custom IDs":
             raw = self.n_edit.text().replace(",", " ")
-            ids = [r.strip().zfill(6) for r in raw.split() if r.strip()]
+            ids = [_tl.pad_run_id(r) for r in raw.split() if r.strip()]
         else:  # All Valid
-            ids = list(df[df["sim_error"] == "None"]["run_id"].astype(str))
+            ids = _tl.padded_run_ids(df[df["sim_error"] == "None"])
         return ids[:_RUN_CAP]
 
     def _export(self) -> None:
@@ -249,13 +265,11 @@ class TransientTab(QWidget):
             return
 
         run_ids = self._selected_run_ids(df)
-        pass_map: dict[str, bool] = {}
-        if "global_pass" in df.columns and "run_id" in df.columns:
-            for _, r in df[["run_id", "global_pass"]].dropna(subset=["run_id"]).iterrows():
-                pass_map[str(r["run_id"]).zfill(6)] = bool(r["global_pass"])
+        group_col = self._current_group()
         equations = self._tran_equations() if kind == "transient" else []
         draw_fn(
             fig, canvas, adir, run_ids, signals,
-            pass_map=pass_map, bg_color=theme["bg"],
+            pass_map=_tl.run_pass_map(df), bg_color=theme["bg"],
             equations=equations, theme=theme,
+            group_map=_tl.run_group_map(df, group_col), group_label=group_col,
         )
