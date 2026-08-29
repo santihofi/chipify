@@ -31,7 +31,7 @@ from chipify.gui_qt.services import canvas_menu
 from chipify.gui_qt.services.throttle import Throttle
 from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas
-from chipify.plot_manager import PlotManager
+from chipify.plot_manager import PlotManager, param_plugin_modes
 
 log = logging.getLogger("chipify.gui_qt.tabs.analytics")
 
@@ -44,16 +44,6 @@ _BASE_MODES = [
 ]
 _XY_MODES = {"Scatter Plot", "Corner Yield Matrix"}
 _TARGET_MODES = {"Sensitivity (Tornado)"}
-
-
-def _param_plugin_modes() -> set[str]:
-    """Names of plot plugins that take a measurement selector (supports_param)."""
-    try:
-        from chipify.plugin_loader import get_plot_plugins
-        return {cls.name for cls in get_plot_plugins()
-                if getattr(cls, "supports_param", False)}
-    except Exception:  # noqa: BLE001
-        return set()
 
 
 class AnalyticsTab(QWidget):
@@ -148,7 +138,7 @@ class AnalyticsTab(QWidget):
     def _apply_mode_visibility(self) -> None:
         mode = self.mode_combo.currentText()
         xy = mode in _XY_MODES
-        param_mode = mode in _param_plugin_modes()
+        param_mode = mode in param_plugin_modes()
         tgt = mode in _TARGET_MODES or param_mode
         for w in (self.lbl_x, self.x_combo, self.lbl_y, self.y_combo):
             w.setVisible(xy)
@@ -226,7 +216,7 @@ class AnalyticsTab(QWidget):
         # Param-aware plugin modes plot the selected measurement only, unless
         # the "All measurements" box asks for the panel grid.
         plugin_param = None
-        if mode in _param_plugin_modes() and not self.all_params_check.isChecked():
+        if mode in param_plugin_modes() and not self.all_params_check.isChecked():
             plugin_param = target if target and target != "-" else None
         # Full frame: draw_adv_plot scopes rows per mode, so a crashed
         # testbench costs only its own curves. Filtering here with valid_rows

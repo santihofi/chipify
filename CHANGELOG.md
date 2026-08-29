@@ -138,6 +138,27 @@ Preparation for the initial public release.
   generator exists). Produced by `chipify-cli --reports` or the GUI's
   *Generate Reports* button into `out/reports/<timestamp>/`, with a `.latest`
   pointer. Previously a CLI run produced no figures at all.
+- Fixed: a measurement rendered differently in different formats. The PDF report
+  had its own histogram implementation that ignored the datasheet's `reports:`
+  spec, so a plot configured `group: temp` came out grouped as a PNG and
+  ungrouped in the PDF. Both now use one renderer and one set of options.
+- Report histograms zoom to their data by default. With spec limits far outside
+  the spread the bars previously collapsed into slivers against a spec-width
+  axis; `zoom: false` restores the wide view.
+- The `reports:` block is now editable in the GUI: **Reports…** in the Datasheet
+  Editor opens a dialog for the plots, formats and documents, saved into the
+  datasheet through the same writer the equations panel uses.
+- `Export PDF Report` and `Generate Reports` are unified into one button and one
+  code path. PDF output moves from the `out/reports/` root into the run's
+  `out/reports/<timestamp>/` folder with everything else; when a datasheet
+  declares no `reports:` block the button still offers a one-click PDF.
+- Markdown and PDF reports now use the same engineering-unit formatting
+  (`373.5 m`, `2.686 G`); they previously disagreed on the same numbers.
+  Dimensionless values such as Cpk keep the plain form.
+- Internal: run selection for waveform overlays lives once in
+  `transient_loader.select_run_ids` instead of three copies with two different
+  vocabularies, and a datasheet's `runs:` key now takes the same tokens as the
+  GUI (`all_valid`, `failing`, `first:N`).
 - The `Transient` tab is now `Plots`, since it has long covered DC sweep and
   Bode as well; the dashboard's waveform cell gained the same analysis-kind
   selector. Dashboards saved with the old `Transient` cell still open.

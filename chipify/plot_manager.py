@@ -35,6 +35,21 @@ _DEFAULT_THEME: dict = {
 }
 
 
+#: Light theme for paper output. Lets the PDF report draw through the same
+#: histogram renderer the GUI and the standalone figures use, instead of
+#: keeping a second implementation just to get white-background styling.
+PRINT_THEME: dict = {
+    "bg":          "white",
+    "fg":          "#2b2b2b",
+    "grid":        "#c8c8c8",
+    "spine":       "#c8c8c8",
+    "legend_bg":   "white",
+    "legend_edge": "#c8c8c8",
+    "legend_text": "#2b2b2b",
+    "accent":      "#1a5fa8",
+}
+
+
 def _resolve_theme(theme: dict | None, bg_color: str | None = None) -> dict:
     """Return a complete theme dict, filling missing keys from defaults.
 
@@ -53,6 +68,20 @@ def _resolve_theme(theme: dict | None, bg_color: str | None = None) -> dict:
 #: heatmap, a fail breakdown, an all-measurements plugin grid) and so must keep
 #: every run: scoping them to one measurement would throw away the very rows
 #: they exist to summarise.
+def param_plugin_modes() -> set[str]:
+    """Names of plot plugins that take a measurement selector (supports_param).
+
+    Lives here beside the mode dispatch rather than in the tabs: the Analytics
+    tab and the dashboard cell both need it and had byte-identical copies.
+    """
+    try:
+        from chipify.plugin_loader import get_plot_plugins
+        return {cls.name for cls in get_plot_plugins()
+                if getattr(cls, "supports_param", False)}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _adv_plot_columns(mode, x_col, y_col, target, plugin_param):
     """Measurement columns whose usability constrains the rows for *mode*."""
     if mode == "Scatter Plot":
@@ -175,7 +204,9 @@ class _OverlayStyle:
 
 class PlotManager:
     @staticmethod
-    def draw_histogram(fig, ax, canvas, df, current_stim, param, dist_type, group_col, bins_val, do_zoom, comp_run, theme=None):
+    def draw_histogram(fig, ax, canvas, df, current_stim, param, dist_type,
+                       group_col, bins_val, do_zoom, comp_run, theme=None,
+                       tight=True):
         import scipy.stats as stats  # lazy: keeps scipy off the GUI launch path
         from chipify import data_loader as _dl
 
@@ -346,7 +377,10 @@ class PlotManager:
             for txt in leg.get_texts():
                 txt.set_color(th["legend_text"])
 
-        fig.tight_layout()
+        # Callers that place their axes by hand (the PDF report lays out two
+        # per page) must opt out: tight_layout would move them.
+        if tight:
+            fig.tight_layout()
         canvas.draw()
 
     @staticmethod

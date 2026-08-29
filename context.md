@@ -22,7 +22,7 @@
 | `plot_manager.py` | All Matplotlib logic. Avoids GUI bloat. |
 | `data_loader.py` | Results loading / pass-fail / plot-column classification / history — shared by the engine, exporters, and GUI; headless, no GUI deps. |
 | `reports.py` | Vocabulary for the datasheet's `reports:` block: `PlotSpec` / `ReportsConfig` and the `PLOT_TYPES` registry. |
-| `report_service.py` | Renders that block headlessly to `out/reports/<timestamp>/` — shared by `--reports` and the GUI button. |
+| `report_service.py` | Renders that block headlessly to `out/reports/<timestamp>/` — the single path behind `--reports`, the GUI button and the one-click PDF (`config=pdf_only_config()`). |
 | `cli.py` | Entry point for headless execution or launching the GUI (`run_gui()` → Qt app). |
 
 ### Toolkit-agnostic GUI-support layer (`chipify/uikit/`)
@@ -132,6 +132,25 @@ Yield *visualisations* use `data_loader.effective_pass(df)`, not `global_pass`: 
 *   Each plot is rendered under its own guard: a spec naming a missing measurement, or a waveform directory that was never produced, records a warning in `ReportResult.warnings` and the remaining plots still render. `latex` is only honoured for the types whose `PlotType.supports_latex` is true.
 *   Output goes to `out/reports/<timestamp>/` with an `out/reports/.latest` pointer — the convention `simulator.write_analysis_pointers` uses for analysis data.
 *   Opt-in: `chipify-cli --reports`, or the GUI's *Generate Reports* button (which works on whatever run is loaded, including one picked from history).
+
+### One report path, one run-selection, one formatter
+*   `report_service.generate_reports(..., config=...)` overrides the datasheet's block. That override *is* the one-click PDF: `MainWindow` has a single `_run_report_job` helper and no separate `export_pdf`, so both write to `out/reports/<timestamp>/` and share the guard / status / dialog handling. A PDF must never land loose in `out/reports/` again.
+*   `transient_loader.select_run_ids(df, mode, n=, custom=)` owns run selection for the Plots tab, the dashboard cell **and** a datasheet's `runs:` key, including the padding and the `RUN_CAP`. Canonical modes are `all_valid` / `failing` / `first` / `custom`; `RUN_MODE_LABELS` maps the GUI labels onto them and `schema._validate_reports` validates `runs:` against the same vocabulary, so the datasheet and the GUI cannot disagree about which runs a plot covers.
+*   `measurements.fmt_eng` is the engineering-unit formatter shared by the Markdown and PDF reports (`373.5 m`, `2.686 G`). `measurements.fmt_value` stays the plain 4-digit form for the GUI table and for **dimensionless** quantities — Cpk must never be rendered as `380 m`.
+*   `plot_manager.param_plugin_modes()` is the one home for the plugin-mode lookup the Analytics tab and the dashboard cell both need.
+*   `tests/test_no_duplicate_functions.py` fails on any module-level function name defined in two files, with an `_ALLOWED` map carrying the reason for each deliberate exception (`main`, `fmt_value`) — the audit is re-run by the suite rather than by hand.
+
+### One histogram, every output format
+*   `reports.histogram_options(spec)` is the single place a histogram's `fit` / `group` / `bins` / `zoom` are resolved, and `reports.histogram_spec_for(stim, param)` finds the datasheet's spec for a measurement. Both the standalone figure (`report_service`) and the PDF report page (`pdf_export._add_histograms`) go through them, so a measurement cannot render differently in two formats.
+*   `pdf_export` no longer has its own histogram implementation. It draws through `PlotManager.draw_histogram` with `plot_manager.PRINT_THEME` and `tight=False` (its axes are placed by hand, so `tight_layout` would move them), then `_finish_pdf_hist` applies the page's type scale, pins the legend left and adds the μ/σ/Cpk badge. The old `_draw_hist_ax` — which hardcoded `bins="auto"`, no grouping and an always-on zoom — is gone.
+*   **`zoom` defaults to True for report figures.** A spec far wider than the spread (a ±10 mV limit on a 60 µV distribution) otherwise collapses every bar into a sliver against a spec-width axis. The PDF always behaved this way; the default makes every format agree. Set `zoom: false` in the plot spec to see distant spec lines instead.
+
+### Editing `reports:` from the GUI (`gui_qt/widgets/reports_dialog.py`)
+*   Opened by **Reports…** in the Datasheet Editor toolbar, because the block belongs to the datasheet — chipify's paradigm is that a datasheet is fully buildable from the GUI.
+*   Persists through `editor_tab.set_document_key("reports", …)`, the same call the equations panel uses: one writer for top-level datasheet keys, and pending form/raw edits are synced first. An empty config renders as `None`, which removes the key instead of leaving an empty husk.
+*   The per-plot form is **generated from `reports.PLOT_TYPES`** — a new plot type gets a GUI for free and the dialog never becomes a second place that knows the plot vocabulary. `_FIELD_KIND` maps each option *key* (not each type) to a widget kind, so nine entries cover every type.
+*   Dropdown names come from the loaded run when there is one, else from the datasheet parsed through `validate_datasheet` — the block must be configurable before the first simulation.
+*   Values a freshly built combo *displays* are committed into the spec (`_commit_displayed`), because otherwise a field the user can plainly see filled in would be absent from the saved YAML and the schema would reject it on the next load.
 
 ### Waveform overlay grouping (`plot_manager._OverlayStyle`)
 *   The Transient / DC sweep / Bode overlays share one colour-and-legend policy. Ungrouped, colour encodes the signal (or the run index for a single signal) and failing runs are red — unchanged.

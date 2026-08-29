@@ -321,3 +321,38 @@ def test_create_datasheet_rejects_empty_name(tmp_path) -> None:
     from chipify.uikit.services.yaml_editor_service import create_datasheet
     with pytest.raises(ValueError):
         create_datasheet(str(tmp_path), "   ")
+
+
+# ── reports: block round-trip (the dialog's data path) ────────────────────────
+
+def test_reports_block_round_trips_through_the_config():
+    """What the dialog reads and writes back must be byte-equal YAML."""
+    from chipify.uikit.services import yaml_editor_service as ye
+
+    block = {
+        "formats": ["png", "svg"],
+        "pdf": True,
+        "plots": [
+            {"type": "scatter", "x": "gain", "y": "pm", "formats": ["svg"]},
+            {"type": "histogram", "param": "gain", "group": "temp"},
+        ],
+    }
+    cfg = ye.reports_to_config({"reports": block})
+    assert [p.type for p in cfg.plots] == ["scatter", "histogram"]
+    assert cfg.plots[0].formats == ["svg"]          # per-plot override survives
+    assert ye.config_to_reports(cfg) == block
+
+
+def test_absent_reports_block_reads_as_empty():
+    from chipify.uikit.services import yaml_editor_service as ye
+
+    assert ye.get_reports_dict({}) == {}
+    assert not ye.reports_to_config({})
+
+
+def test_empty_config_renders_as_none_so_the_key_is_removed():
+    """Clearing the dialog must delete `reports:`, not leave an empty husk."""
+    from chipify.reports import ReportsConfig
+    from chipify.uikit.services import yaml_editor_service as ye
+
+    assert ye.config_to_reports(ReportsConfig()) is None

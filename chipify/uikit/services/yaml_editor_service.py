@@ -152,6 +152,52 @@ def get_tests_dict(yaml_data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return "tests", {}
 
 
+def get_reports_dict(yaml_data: dict[str, Any]) -> dict[str, Any]:
+    """The datasheet's raw ``reports:`` mapping ({} when absent)."""
+    block = yaml_data.get("reports")
+    return block if isinstance(block, dict) else {}
+
+
+def reports_to_config(yaml_data: dict[str, Any]) -> Any:
+    """Validate the ``reports:`` mapping into a :class:`ReportsConfig`.
+
+    Goes through the same ``schema`` validator the datasheet loader uses, so
+    the dialog and a CLI run can never disagree about what a block means.
+    """
+    from chipify.schema import _validate_reports
+    return _validate_reports({"reports": get_reports_dict(yaml_data)})
+
+
+def config_to_reports(config: Any) -> dict[str, Any] | None:
+    """Render a :class:`ReportsConfig` back to a YAML-ready mapping.
+
+    ``None`` when the config asks for nothing, which
+    ``editor_tab.set_document_key`` treats as "remove the key" — so clearing
+    the dialog removes the block rather than leaving an empty husk.
+    """
+    if not config:
+        return None
+    block: dict[str, Any] = {}
+    if config.formats:
+        block["formats"] = list(config.formats)
+    if config.pdf:
+        block["pdf"] = True
+    if config.markdown:
+        block["markdown"] = True
+    plots: list[dict[str, Any]] = []
+    for spec in config.plots:
+        entry: dict[str, Any] = {"type": spec.type}
+        if spec.name:
+            entry["name"] = spec.name
+        entry.update(spec.options)
+        if spec.formats:
+            entry["formats"] = list(spec.formats)
+        plots.append(entry)
+    if plots:
+        block["plots"] = plots
+    return block or None
+
+
 def _set_bound(v_data: dict[str, Any], primary: str, alias: str, raw: str) -> None:
     """Update one min/max bound on a measurement spec dict.
 

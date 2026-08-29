@@ -19,6 +19,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from chipify import data_loader as _dl
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -28,6 +30,8 @@ import scipy.stats as stats
 from chipify import app_config
 from chipify.uikit.services import measurements as _meas
 from chipify.plot_manager import PlotManager
+from chipify.plot_manager import PRINT_THEME as PlotManager_PRINT_THEME
+from chipify.reports import histogram_options, histogram_spec_for
 
 # ── Style constants ────────────────────────────────────────────────────────────
 BLUE   = "#1a5fa8"
@@ -58,42 +62,6 @@ _PDF_RCPARAMS = {
 
 
 # ── Low-level helpers ──────────────────────────────────────────────────────────
-
-def _fmt(v):
-    if v is None:
-        return "–"
-    if isinstance(v, float) and math.isnan(v):
-        return "–"
-    if isinstance(v, (int, float, np.number)):
-        return f"{v:.4g}"
-    return str(v)
-
-
-def _build_global_pass(df: pd.DataFrame) -> pd.DataFrame:
-    # Single source of truth for sim_error normalisation + global_pass.
-    from chipify import data_loader as _dl
-    return _dl.prepare_results(df)
-
-
-def _get_spec(val_obj):
-    lo = getattr(val_obj, "vmin", getattr(val_obj, "min", None))
-    hi = getattr(val_obj, "vmax", getattr(val_obj, "max", None))
-    return lo, hi
-
-
-def _compute_cpk(data: pd.Series, lo, hi) -> float:
-    if len(data) < 2:
-        return float("nan")
-    mu, sigma = data.mean(), data.std()
-    if sigma <= 0:
-        return float("nan")
-    cpks = []
-    if lo is not None:
-        cpks.append((mu - lo) / (3 * sigma))
-    if hi is not None:
-        cpks.append((hi - mu) / (3 * sigma))
-    return min(cpks) if cpks else float("nan")
-
 
 #: Status cell colours. ERROR is amber, deliberately not a shade of red: an
 #: un-takeable measurement is a different problem from an out-of-spec one.
@@ -224,7 +192,6 @@ def _add_cover(pdf: PdfPages, df: pd.DataFrame, yaml_path, rows, stim, sim_durat
     ax.axhline(0.772, xmin=0.0, xmax=1.0, color=MGRAY, linewidth=0.7)
 
     # ── Statistics ───────────────────────────────────────────────────────────
-    from chipify import data_loader as _dl
     s = _dl.result_summary(df)
     total, bad, valid, passed = s.total, s.crashes, s.valid, s.passed
     yld    = s.yield_pct
@@ -347,9 +314,9 @@ def _add_table(pdf: PdfPages, rows: list, valid_df: pd.DataFrame, stim):
 
             cells = [
                 row.name,
-                _fmt(row.sim_min), _fmt(row.sim_typ), _fmt(row.sim_max),
-                _fmt(row.spec_min), _fmt(row.spec_max),
-                _fmt(row.cpk),
+                _meas.fmt_eng(row.sim_min), _meas.fmt_eng(row.sim_typ), _meas.fmt_eng(row.sim_max),
+                _meas.fmt_eng(row.spec_min), _meas.fmt_eng(row.spec_max),
+                _meas.fmt_value(row.cpk),   # dimensionless: no unit suffix
                 row.status,
             ]
             row_bg = LGRAY if even else "white"
@@ -484,57 +451,36 @@ def _add_errors(pdf: PdfPages, errors: list):
 
 # ── Section 3: Histograms (2-up) ──────────────────────────────────────────────
 
-def _draw_hist_ax(ax, data, param, lo, hi, cpk, passed):
-    ax.set_facecolor("white")
-    ax.grid(True, linestyle="--", alpha=0.40, color=MGRAY, zorder=0)
+def _finish_pdf_hist(ax, data, cpk, passed):
+    """Apply the report's page styling over a shared-renderer histogram.
 
-    counts, _, _ = ax.hist(
-        data, bins="auto", density=True,
-        color=BLUE, alpha=0.55, edgecolor="white", linewidth=0.4,
-        zorder=2,
-    )
+    The renderer places its legend with ``loc="best"``, which lands top-right —
+    where the badge goes. Pin it left, shrink the type to page scale, then draw
+    the badge, so the paper layout matches what it has always been.
+    """
+    ax.set_xlabel(ax.get_xlabel(), fontsize=9, color=DGRAY)
+    ax.set_ylabel("Density", fontsize=9, color=DGRAY)
+    ax.tick_params(colors=DGRAY, labelsize=8)
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        ax.legend(handles, labels, fontsize=7.5, framealpha=0.9, loc="upper left")
 
     mu = sigma = float("nan")
-    if len(data) > 2:
+    if len(data):
         try:
             mu, sigma = stats.norm.fit(data)
-            xf = np.linspace(min(data), max(data), 300)
-            yf = np.clip(stats.norm.pdf(xf, mu, sigma), 0, max(counts, default=1) * 1.6)
-            ax.plot(xf, yf, color=BLUE, linewidth=2.0, zorder=3,
-                    label=f"Gauss  (μ={mu:.4g}, σ={sigma:.4g})")
-        except Exception:
+        except Exception:  # noqa: BLE001
             mu, sigma = data.mean(), data.std()
-    else:
-        mu, sigma = data.mean(), data.std()
-
-    for val, lbl in [(lo, "Min Spec"), (hi, "Max Spec")]:
-        if val is not None:
-            ax.axvline(val, color=RED, linestyle="--", linewidth=1.8, zorder=4,
-                       label=f"{lbl} ({_fmt(val)})")
 
     status_clr = GREEN if passed else RED
-    info = (f"μ = {_fmt(mu)}\nσ = {_fmt(sigma)}\n"
-            f"Cpk = {_fmt(cpk)}\n{'PASS' if passed else 'FAIL'}")
+    info = (f"μ = {_meas.fmt_eng(mu)}\nσ = {_meas.fmt_eng(sigma)}\n"
+            f"Cpk = {_meas.fmt_value(cpk)}\n{'PASS' if passed else 'FAIL'}")
     ax.text(0.975, 0.975, info,
             ha="right", va="top", transform=ax.transAxes,
             fontsize=8, family="monospace", color=status_clr, weight="bold",
             bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
                       edgecolor=status_clr, linewidth=1.2, alpha=0.93),
             zorder=5)
-
-    ax.set_title(param, fontsize=11, weight="bold", pad=6)
-    ax.set_xlabel(param, fontsize=9, color=DGRAY)
-    ax.set_ylabel("Density",         fontsize=9, color=DGRAY)
-    ax.tick_params(colors=DGRAY, labelsize=8)
-    for sp in ax.spines.values():
-        sp.set_edgecolor(MGRAY)
-    if ax.get_legend_handles_labels()[1]:
-        ax.legend(fontsize=7.5, framealpha=0.9, loc="upper left")
-    # Match GUI "fit" option behavior: zoom to simulated data range.
-    data_min = min(data) if len(data) else 0.0
-    data_max = max(data) if len(data) else 1.0
-    pad = (data_max - data_min) * 0.05
-    ax.set_xlim(data_min - (pad or 0.1), data_max + (pad or 0.1))
 
 
 def _add_histograms(pdf: PdfPages, df: pd.DataFrame, stim, rows_meta: list):
@@ -544,7 +490,6 @@ def _add_histograms(pdf: PdfPages, df: pd.DataFrame, stim, rows_meta: list):
     its own testbench produced data, so one crashed testbench costs only its own
     histograms instead of blanking every page.
     """
-    from chipify import data_loader as _dl
 
     meta = {r.name: r for r in rows_meta}
     params = [r.name for r in rows_meta if r.name in df.columns]
@@ -570,8 +515,15 @@ def _add_histograms(pdf: PdfPages, df: pd.DataFrame, stim, rows_meta: list):
             # Two balanced slots that avoid clipping and keep labels/legend readable.
             bottom = 0.56 - si * 0.43
             ax = fig.add_axes([ML + 0.015, bottom, 1 - 2 * (ML + 0.015), 0.29])
-            _draw_hist_ax(ax, data, p, m.spec_min, m.spec_max, m.cpk,
-                          m.status == _meas.STATUS_PASS)
+            # Same renderer, same options as the standalone figure: a report
+            # page must not show a measurement differently from its PNG.
+            hist = histogram_options(histogram_spec_for(stim, p))
+            PlotManager.draw_histogram(
+                fig, ax, fig.canvas, df, stim, p,
+                hist["fit"], hist["group"], hist["bins"], hist["zoom"],
+                "None", theme=PlotManager_PRINT_THEME, tight=False,
+            )
+            _finish_pdf_hist(ax, data, m.cpk, m.status == _meas.STATUS_PASS)
 
         pdf.savefig(fig)
         plt.close(fig)
@@ -665,7 +617,7 @@ def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
     ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     pdf_path = out_dir / f"report_{ts}.pdf"
 
-    prepared = _build_global_pass(df)
+    prepared = _dl.prepare_results(df)
     valid_df = prepared[prepared["sim_error"] == "None"]
     # The service scopes errors per testbench, so it takes the full frame: a
     # row-filtered one drops every run in which any testbench crashed, which is

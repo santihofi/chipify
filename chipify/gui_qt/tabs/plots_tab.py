@@ -38,8 +38,14 @@ from chipify.plot_manager import PlotManager
 
 log = logging.getLogger("chipify.gui_qt.tabs.plots")
 
-_RUN_MODES = ["All Valid", "Failing Only", "First N", "Custom IDs"]
-_RUN_CAP = 500
+
+def _int_or(text: str, default: int) -> int:
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return default
+
+_RUN_MODES = list(_tl.RUN_MODE_LABELS)
 
 
 class PlotsTab(QWidget):
@@ -204,28 +210,11 @@ class PlotsTab(QWidget):
         return _tl.resolve_analysis_dir(df, settings.OUT_DIR, self._current_kind())
 
     def _selected_run_ids(self, df) -> list[str]:
-        mode = self.mode_combo.currentText()
-        if "run_id" not in df.columns:
-            return []
-        # Ids are zero-padded to match the run_<id>__<tb>.csv filenames: a
-        # results frame read back from CSV parses run_id as an integer, and an
-        # unpadded "4" matches no waveform file at all.
-        if mode == "Failing Only":
-            if "global_pass" not in df.columns:
-                return []
-            ids = _tl.padded_run_ids(df[df["global_pass"] == False])  # noqa: E712
-        elif mode == "First N":
-            try:
-                n = int(self.n_edit.text())
-            except ValueError:
-                n = 10
-            ids = _tl.padded_run_ids(df[df["sim_error"] == "None"].head(n))
-        elif mode == "Custom IDs":
-            raw = self.n_edit.text().replace(",", " ")
-            ids = [_tl.pad_run_id(r) for r in raw.split() if r.strip()]
-        else:  # All Valid
-            ids = _tl.padded_run_ids(df[df["sim_error"] == "None"])
-        return ids[:_RUN_CAP]
+        """Run ids for the selected mode (shared with the dashboard and reports)."""
+        return _tl.select_run_ids(
+            df, self.mode_combo.currentText(),
+            n=_int_or(self.n_edit.text(), 10), custom=self.n_edit.text(),
+        )
 
     def _export(self) -> None:
         from chipify.gui_qt.services.figure_export import export_figure

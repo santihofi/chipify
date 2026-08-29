@@ -107,6 +107,51 @@ class PlotSpec:
         return list(self.formats) if self.formats else list(defaults)
 
 
+#: Default histogram settings for a report figure.
+#:
+#: ``zoom`` is on because a report histogram is fitted to its data: when the
+#: spec limits sit far outside the spread — a ±10 mV spec on a 60 µV
+#: distribution — an unzoomed view collapses every bar into a sliver. The PDF
+#: report has always done this; applying it to every format is what makes a
+#: measurement look the same whichever way it is exported.
+HISTOGRAM_DEFAULTS: dict[str, Any] = {
+    "fit": "Gauss (Normal)",
+    "group": "None",
+    "bins": "Auto",
+    "zoom": True,
+}
+
+
+def histogram_options(spec: "PlotSpec | None") -> dict[str, Any]:
+    """Effective ``fit`` / ``group`` / ``bins`` / ``zoom`` for a histogram.
+
+    The single place these defaults live, so the standalone figure and the PDF
+    page cannot render the same measurement differently.
+    """
+    opts = dict(HISTOGRAM_DEFAULTS)
+    for key in opts:
+        value = (spec.options.get(key) if spec is not None else None)
+        if value is not None and value != "":
+            opts[key] = value
+    opts["group"] = str(opts["group"] or "None")
+    opts["zoom"] = bool(opts["zoom"])
+    return opts
+
+
+def histogram_spec_for(stim: Any, param: str) -> PlotSpec | None:
+    """The datasheet's histogram spec for *param*, when it declares one.
+
+    Lets the PDF report render a measurement exactly as the standalone figure
+    does — same grouping, bins, fit and zoom — instead of ignoring the block.
+    """
+    cfg = getattr(stim, "reports", None)
+    plots: list[PlotSpec] = getattr(cfg, "plots", None) or []
+    for spec in plots:
+        if spec.type == "histogram" and str(spec.options.get("param", "")) == param:
+            return spec
+    return None
+
+
 @dataclass
 class ReportsConfig:
     """The datasheet's whole ``reports:`` block."""

@@ -373,6 +373,113 @@ def test_generate_reports_button(window, monkeypatch, tmp_path):
     assert "info" in seen and "1 file(s)" in seen["info"]
 
 
+def test_pdf_export_is_not_a_separate_path(window):
+    """The PDF button was a duplicate of the report job; it must stay gone."""
+    assert not hasattr(window, "export_pdf")
+    assert not hasattr(window, "btn_pdf")
+    assert hasattr(window, "_run_report_job")
+
+
+_DATASHEET = (
+    "parameters:\n"
+    "  temp: [-40, 27, 100]\n"
+    "tests:\n"
+    "  tb:\n"
+    "    gain: {min: 9, max: 11}\n"
+    "    pm: {min: 45}\n"
+)
+
+
+def _open_editor_on(window, tmp_path, monkeypatch, text):
+    """Load *text* as the editor's datasheet and return (editor, path)."""
+    import yaml
+    from chipify import settings
+
+    ds_dir = tmp_path / "datasheets"
+    ds_dir.mkdir(exist_ok=True)
+    ds = ds_dir / "d.yaml"
+    ds.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(settings, "IN_DIR", str(ds_dir))
+    monkeypatch.setattr(settings, "OUT_DIR", str(tmp_path / "out"))
+
+    editor = window.editor_tab
+    editor.current_yaml_path = str(ds)
+    editor.current_yaml_data = yaml.safe_load(text)
+    editor.raw_text = text
+    editor.mode_combo.setCurrentText("Raw YAML")
+    editor.raw_editor.setPlainText(text)
+    return editor, ds
+
+
+def test_reports_dialog_round_trips_through_the_datasheet(window, tmp_path, monkeypatch):
+    """Build a reports: block from scratch in the GUI and read it back."""
+    import yaml
+    from chipify.gui_qt.widgets.reports_dialog import ReportsDialog
+    from chipify.util import Stimuli
+
+    editor, ds = _open_editor_on(window, tmp_path, monkeypatch, _DATASHEET)
+    dlg = ReportsDialog(editor, window.app_state, editor)
+
+    # Names come from the datasheet even though no simulation has ever run —
+    # a reports: block must be buildable before the first run.
+    assert dlg._choices.measurements == ["gain", "pm"]
+    assert dlg._choices.sweeps == ["temp"]
+
+    dlg._add_plot()                       # defaults to scatter
+    dlg._fields["y"].setCurrentText("pm")
+    dlg.format_checks["png"].setChecked(True)
+    dlg.chk_pdf.setChecked(True)
+    assert dlg._write()
+
+    block = yaml.safe_load(ds.read_text(encoding="utf-8"))
+    assert set(block) == {"parameters", "tests", "reports"}   # nothing clobbered
+    assert block["reports"]["pdf"] is True
+    assert block["reports"]["formats"] == ["png"]
+    assert block["reports"]["plots"][0]["type"] == "scatter"
+
+    # What the form displayed is what it stored, so the block is valid to load.
+    assert Stimuli(str(ds)).reports.plots[0].options["y"] == "pm"
+
+    # Reopening shows what was saved.
+    editor.current_yaml_data = block
+    assert len(ReportsDialog(editor, window.app_state, editor)._config.plots) == 1
+
+
+def test_reports_dialog_shown_defaults_are_the_stored_ones(window, tmp_path, monkeypatch):
+    """A combo shows its first item; an untouched field must still be recorded.
+
+    Otherwise the dialog would display `param: gain` and save a histogram with
+    no `param` at all, which the schema then rejects on the next load.
+    """
+    from chipify.gui_qt.widgets.reports_dialog import ReportsDialog
+
+    editor, _ = _open_editor_on(window, tmp_path, monkeypatch, _DATASHEET)
+    dlg = ReportsDialog(editor, window.app_state, editor)
+    dlg._add_plot()
+    dlg._on_type_changed("histogram")
+
+    spec = dlg._current()
+    assert spec.options["param"] == dlg._fields["param"].currentText()
+    assert spec.options["param"] in ("gain", "pm")
+
+
+def test_reports_dialog_clearing_removes_the_block(window, tmp_path, monkeypatch):
+    """Emptying the dialog deletes the key rather than leaving an empty husk."""
+    import yaml
+    from chipify.gui_qt.widgets.reports_dialog import ReportsDialog
+
+    editor, ds = _open_editor_on(
+        window, tmp_path, monkeypatch,
+        "parameters:\n  temp: [27]\ntests:\n  tb:\n    gain: {min: 1}\n"
+        "reports:\n  pdf: true\n")
+
+    dlg = ReportsDialog(editor, window.app_state, editor)
+    assert dlg._config.pdf
+    dlg.chk_pdf.setChecked(False)
+    assert dlg._write()
+    assert "reports" not in yaml.safe_load(ds.read_text(encoding="utf-8"))
+
+
 def _select_datasheet(window, monkeypatch, path) -> None:
     """Point the window's read-only current_yaml_path property at *path*."""
     monkeypatch.setattr(type(window), "current_yaml_path",
@@ -617,7 +724,7 @@ def test_settings_dialog_saves_and_applies_theme(window, monkeypatch):
 
 
 def test_left_panel_actions_exist(window):
-    for attr in ("btn_settings", "btn_pdf", "btn_open_folder", "btn_annotate",
+    for attr in ("btn_settings", "btn_reports", "btn_open_folder", "btn_annotate",
                  "btn_multiplot"):
         assert hasattr(window, attr)
 

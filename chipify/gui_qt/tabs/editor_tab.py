@@ -130,6 +130,11 @@ class DatasheetEditorTab(QWidget):
         self.btn_new = QPushButton("New…")
         self.btn_new.clicked.connect(self._action_new)
         top.addWidget(self.btn_new)
+        self.btn_reports = QPushButton("Reports…")
+        self.btn_reports.setToolTip(
+            "Choose which plots and reports this datasheet generates.")
+        self.btn_reports.clicked.connect(self._action_reports)
+        top.addWidget(self.btn_reports)
         self.btn_save = QPushButton("Save Datasheet")
         self.btn_save.setObjectName("Accent")
         self.btn_save.clicked.connect(self._save)
@@ -527,6 +532,19 @@ class DatasheetEditorTab(QWidget):
         text = self.raw_editor.toPlainText()
         yaml.safe_load(text)  # validate — raises on malformed YAML
         return text
+
+    def _action_reports(self) -> None:
+        """Open the Reports dialog for the loaded datasheet."""
+        from chipify.gui_qt.widgets.reports_dialog import ReportsDialog
+
+        if not self.current_yaml_path:
+            QMessageBox.warning(self, "Reports", "No datasheet selected.")
+            return
+        # The dialog edits current_yaml_data and persists via set_document_key,
+        # which syncs the active view first — so pick up pending edits now.
+        if self.mode_combo.currentText() == "Form View":
+            self._sync_to_state()
+        ReportsDialog(self, self._window.app_state, self).exec()
 
     def _save(self) -> None:
         if not self.current_yaml_path:

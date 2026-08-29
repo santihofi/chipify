@@ -66,7 +66,7 @@ def test_full_block_parses():
           plots:
             - {type: scatter, x: gain, y: pm, formats: [svg], name: g_vs_pm}
             - {type: histogram, param: gain, group: temp}
-            - {type: bode, signals: [outp], group: temp, runs: valid}
+            - {type: bode, signals: [outp], group: temp, runs: all_valid}
     """).reports
     assert cfg.formats == ["png", "svg"] and cfg.pdf and cfg.markdown
     assert [p.type for p in cfg.plots] == ["scatter", "histogram", "bode"]
@@ -211,3 +211,134 @@ def test_empty_config_reports_that_there_is_nothing_to_do(tmp_path):
     assert "no 'reports:' block" in result.warnings[0]
     # Nothing was created for a datasheet that asked for nothing.
     assert not result.out_dir.exists()
+
+
+# ── Config override (the unified PDF path) ────────────────────────────────────
+
+def test_config_override_ignores_the_datasheet_block(tmp_path):
+    """How the one-click PDF reuses this path instead of having its own."""
+    stim = _stim("""
+        reports:
+          formats: [png]
+          plots: [{type: scatter, x: gain, y: pm}]
+    """)
+    result = rs.generate_reports(_results(), stim, "d.yaml", tmp_path,
+                                 config=rs.pdf_only_config())
+    assert [f.suffix for f in result.files] == [".pdf"]
+    assert not result.warnings
+
+
+def test_pdf_only_config_works_without_any_reports_block(tmp_path):
+    """A datasheet that declares nothing can still produce a PDF."""
+    result = rs.generate_reports(_results(), _stim(), "d.yaml", tmp_path,
+                                 config=rs.pdf_only_config())
+    assert [f.suffix for f in result.files] == [".pdf"]
+    # And it lands in the timestamped folder like everything else, rather than
+    # loose in out/reports/ as the old export_pdf path did.
+    assert result.out_dir.parent == rs.reports_dir(tmp_path)
+
+
+# ── runs: shares the GUI's vocabulary ─────────────────────────────────────────
+
+@pytest.mark.parametrize("runs", ["all_valid", "failing", "first:5", "All Valid"])
+def test_runs_accepts_the_canonical_tokens(runs):
+    cfg = _stim(f"""
+        reports:
+          plots: [{{type: bode, runs: {runs}}}]
+    """).reports
+    assert cfg.plots[0].options["runs"] == runs
+
+
+def test_unknown_runs_value_is_rejected():
+    from chipify.schema import SchemaError
+    with pytest.raises(SchemaError) as exc:
+        _stim("""
+            reports:
+              plots: [{type: bode, runs: whenever}]
+        """)
+    assert "all_valid" in str(exc.value)
+
+
+# ── One histogram, every format ───────────────────────────────────────────────
+
+def test_histogram_options_come_from_one_place():
+    """The PNG and the PDF page must resolve identical settings for a spec."""
+    from chipify.reports import histogram_options, histogram_spec_for
+
+    stim = _stim("""
+        reports:
+          plots: [{type: histogram, param: gain, group: temp, bins: '20'}]
+    """)
+    spec = histogram_spec_for(stim, "gain")
+    assert spec is not None
+    opts = histogram_options(spec)
+    assert opts["group"] == "temp" and opts["bins"] == "20"
+    # Unset keys fall back to the shared defaults, not to per-renderer ones.
+    assert opts["fit"] == "Gauss (Normal)"
+    assert opts["zoom"] is True
+
+
+def test_report_histograms_zoom_to_the_data_by_default():
+    """A spec far wider than the spread must not collapse into slivers.
+
+    A +/-10 mV spec on a 60 uV distribution rendered every bar as a sliver
+    because the axis spanned the spec, not the data.
+    """
+    from chipify.reports import histogram_options
+
+    assert histogram_options(None)["zoom"] is True
+    assert histogram_options(
+        PlotSpec("histogram", options={"param": "gain", "zoom": False})
+    )["zoom"] is False
+
+
+def test_histogram_spec_for_only_matches_its_own_measurement():
+    from chipify.reports import histogram_spec_for
+
+    stim = _stim("""
+        reports:
+          plots:
+            - {type: histogram, param: gain, group: temp}
+            - {type: scatter, x: gain, y: pm}
+    """)
+    assert histogram_spec_for(stim, "gain").options["group"] == "temp"
+    assert histogram_spec_for(stim, "pm") is None          # the scatter is not one
+    assert histogram_spec_for(_stim(), "gain") is None     # no block at all
+
+
+def test_pdf_page_and_standalone_png_render_the_same_grouping(tmp_path):
+    """The reported bug: the PNG was grouped by temp and the PDF was not."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from chipify import pdf_export
+    from chipify.reports import histogram_options, histogram_spec_for
+    from chipify.uikit.services import measurements as meas
+
+    stim = _stim("""
+        reports:
+          pdf: true
+          formats: [png]
+          plots: [{type: histogram, param: gain, group: temp}]
+    """)
+    df = _dl_prepared()
+    captured = {}
+
+    class _Stub:
+        def savefig(self, fig):
+            # The page carries header/title axes too; take the one that plotted.
+            captured["ax"] = next(a for a in fig.axes if a.get_legend() is not None)
+
+    pdf_export._add_histograms(_Stub(), df, stim, meas.measurement_rows(df, stim))
+    labels = [t.get_text() for t in captured["ax"].get_legend().get_texts()]
+    # One legend entry per temperature: the PDF honours the datasheet's grouping.
+    assert any(l.startswith("temp=") for l in labels), labels
+
+    # And it is zoomed to the data, not to the far-away spec limits.
+    lo, hi = captured["ax"].get_xlim()
+    assert hi - lo < 5.0, (lo, hi)
+    assert histogram_options(histogram_spec_for(stim, "gain"))["group"] == "temp"
+
+
+def _dl_prepared():
+    from chipify import data_loader as _dl
+    return _dl.prepare_results(_results())

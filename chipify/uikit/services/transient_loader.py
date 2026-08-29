@@ -60,6 +60,82 @@ def padded_run_ids(df: pd.DataFrame) -> list[str]:
     return [pad_run_id(v) for v in df["run_id"]]
 
 
+#: Canonical run-selection modes. The Plots tab, the dashboard cell and a
+#: datasheet's ``runs:`` key all resolve to these, so the GUI labels and the
+#: YAML vocabulary cannot drift apart again.
+RUN_MODE_ALL = "all_valid"
+RUN_MODE_FAILING = "failing"
+RUN_MODE_FIRST = "first"
+RUN_MODE_CUSTOM = "custom"
+RUN_MODES = (RUN_MODE_ALL, RUN_MODE_FAILING, RUN_MODE_FIRST, RUN_MODE_CUSTOM)
+
+#: UI label -> canonical mode, for the two waveform surfaces.
+RUN_MODE_LABELS: dict[str, str] = {
+    "All Valid": RUN_MODE_ALL,
+    "Failing Only": RUN_MODE_FAILING,
+    "First N": RUN_MODE_FIRST,
+    "Custom IDs": RUN_MODE_CUSTOM,
+}
+
+#: Most runs one overlay will draw. Overlaying more is unreadable and slow.
+RUN_CAP = 500
+
+
+def parse_run_mode(value: str) -> tuple[str, int]:
+    """Split a ``runs:`` value into ``(mode, n)``.
+
+    Accepts the canonical tokens and the ``first:N`` shorthand, plus the UI
+    labels, so one function serves the datasheet and both waveform surfaces.
+    """
+    text = str(value or RUN_MODE_ALL).strip()
+    if text in RUN_MODE_LABELS:
+        return RUN_MODE_LABELS[text], 10
+    token, _, count = text.lower().partition(":")
+    token = token.strip()
+    if token not in RUN_MODES:
+        raise ValueError(
+            f"unknown run selection {text!r}; expected one of "
+            f"{', '.join(RUN_MODES)} (or 'first:N')"
+        )
+    try:
+        n = int(count) if count.strip() else 10
+    except ValueError:
+        raise ValueError(f"invalid run count in {text!r}") from None
+    return token, n
+
+
+def select_run_ids(df: pd.DataFrame, mode: str = RUN_MODE_ALL, *,
+                   n: int = 10, custom: str = "") -> list[str]:
+    """Zero-padded run ids for a waveform overlay, capped at :data:`RUN_CAP`.
+
+    The single implementation behind the Plots tab, the dashboard cell and a
+    datasheet's ``reports:`` ``runs:`` key — which previously each had their own
+    copy, with two different vocabularies between them.
+    """
+    if df is None or "run_id" not in df.columns:
+        return []
+    token, parsed_n = parse_run_mode(mode)
+    if token == RUN_MODE_FIRST and parsed_n != 10:
+        n = parsed_n
+
+    if token == RUN_MODE_CUSTOM:
+        ids = [pad_run_id(r) for r in str(custom).replace(",", " ").split() if r.strip()]
+    elif token == RUN_MODE_FAILING:
+        if "global_pass" not in df.columns:
+            return []
+        ids = padded_run_ids(df[df["global_pass"] == False])  # noqa: E712
+    elif token == RUN_MODE_FIRST:
+        ids = padded_run_ids(_valid(df).head(n))
+    else:
+        ids = padded_run_ids(_valid(df))
+    return ids[:RUN_CAP]
+
+
+def _valid(df: pd.DataFrame) -> pd.DataFrame:
+    from chipify import data_loader as _dl
+    return _dl.valid_rows(df)
+
+
 def run_pass_map(df: pd.DataFrame) -> dict[str, bool]:
     """``run_id -> passed`` for every run in *df*.
 

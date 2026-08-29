@@ -18,6 +18,7 @@ No GUI-toolkit imports — usable headlessly and unit-testable.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -76,6 +77,28 @@ def fmt_value(val: Any) -> str:
     if val is None or pd.isna(val):
         return "-"
     return f"{val:.4g}"
+
+
+def fmt_eng(val: Any) -> str:
+    """Render a value with an engineering-unit suffix (``373.5 m``, ``2.686 G``).
+
+    Shared by the Markdown and PDF reports so the same measurement does not
+    appear as ``373.5 m`` in one and ``0.3735`` in the other. The GUI table
+    keeps :func:`fmt_value`'s plain 4-digit form, where column width matters
+    more than readability of the magnitude.
+    """
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return "—"
+    if not isinstance(val, (int, float, np.number)) or isinstance(val, bool):
+        return str(val)
+    v = float(val)
+    for limit, scale, suffix in (
+        (1e9, 1e-9, " G"), (1e6, 1e-6, " M"), (1e3, 1e-3, " k"),
+        (1.0, 1.0, ""), (1e-3, 1e3, " m"), (1e-6, 1e6, " µ"),
+    ):
+        if abs(v) >= limit:
+            return f"{v * scale:.4g}{suffix}"
+    return f"{v:.4g}"
 
 
 def _tb_path(test: Any) -> str:

@@ -22,32 +22,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from chipify import data_loader as _dl
+
 from chipify.uikit.services import measurements as _meas
 
 
 # ── internal helpers ──────────────────────────────────────────────────────────
-
-def _build_global_pass(df: pd.DataFrame) -> pd.DataFrame:
-    # Single source of truth for sim_error normalisation + global_pass.
-    from chipify import data_loader as _dl
-    return _dl.prepare_results(df)
-
-
-def _fmt(v) -> str:
-    if v is None or (isinstance(v, float) and math.isnan(v)):
-        return "—"
-    if abs(v) >= 1e6:
-        return f"{v/1e6:.4g} M"
-    if abs(v) >= 1e3:
-        return f"{v/1e3:.4g} k"
-    if abs(v) >= 1:
-        return f"{v:.4g}"
-    if abs(v) >= 1e-3:
-        return f"{v*1e3:.4g} m"
-    if abs(v) >= 1e-6:
-        return f"{v*1e6:.4g} µ"
-    return f"{v:.4g}"
-
 
 def _status_cell(r) -> str:
     """Markdown for one measurement's verdict.
@@ -71,8 +51,8 @@ def _md_table(rows) -> str:
     for r in rows:
         cpk_s = f"{r.cpk:.2f}" if not math.isnan(r.cpk) else "—"
         lines.append(
-            f"| {r.name} | {_fmt(r.sim_min)} | {_fmt(r.sim_typ)} | {_fmt(r.sim_max)} "
-            f"| {_fmt(r.spec_min)} | {_fmt(r.spec_max)} | {cpk_s} | {_status_cell(r)} |"
+            f"| {r.name} | {_meas.fmt_eng(r.sim_min)} | {_meas.fmt_eng(r.sim_typ)} | {_meas.fmt_eng(r.sim_max)} "
+            f"| {_meas.fmt_eng(r.spec_min)} | {_meas.fmt_eng(r.spec_max)} | {cpk_s} | {_status_cell(r)} |"
         )
     return "\n".join(lines)
 
@@ -91,14 +71,13 @@ def generate_md_report(
 
     Returns *output_path* on success.
     """
-    prepared = _build_global_pass(df)
+    prepared = _dl.prepare_results(df)
     valid_df  = prepared[prepared["sim_error"] == "None"]
     # The service scopes errors per testbench, so it needs the full frame:
     # a row-filtered one hides the measurements of every testbench that
     # worked, and reports the ones that crashed as a clean PASS.
     rows      = _meas.measurement_rows(prepared, stim)
 
-    from chipify import data_loader as _dl
     s = _dl.result_summary(prepared)
     total, crashes, valid, passed, yield_ = (
         s.total, s.crashes, s.valid, s.passed, s.yield_pct)
@@ -152,8 +131,8 @@ def generate_md_report(
             usable = r.total_n - r.error_n
             lines.append(
                 f"- **{r.name}**: {r.fail_n} fail(s) out of {usable} usable runs. "
-                f"Spec [{_fmt(r.spec_min)}, {_fmt(r.spec_max)}], "
-                f"simulated [{_fmt(r.sim_min)}, {_fmt(r.sim_max)}]."
+                f"Spec [{_meas.fmt_eng(r.spec_min)}, {_meas.fmt_eng(r.spec_max)}], "
+                f"simulated [{_meas.fmt_eng(r.sim_min)}, {_meas.fmt_eng(r.sim_max)}]."
             )
         lines.append("")
 

@@ -321,6 +321,15 @@ def _validate_reports(data: dict[str, Any]) -> "Any":
                     f"{path}: plot type {ptype!r} requires {key!r}."
                 )
 
+        # Validate the run selection against the same vocabulary the GUI uses,
+        # so a typo is caught at load time rather than silently plotting all runs.
+        if "runs" in entry:
+            from chipify.uikit.services.transient_loader import parse_run_mode
+            try:
+                parse_run_mode(entry["runs"])
+            except ValueError as exc:
+                raise SchemaError(f"{path}.runs: {exc}") from None
+
         formats = _formats(entry.get("formats"), f"{path}.formats")
         if LATEX_FORMAT in formats and not spec_type.supports_latex:
             # Not fatal: report_service warns and still writes the other

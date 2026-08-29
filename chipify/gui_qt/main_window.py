@@ -208,10 +208,6 @@ class MainWindow(QMainWindow):
 
         # ── Actions ───────────────────────────────────────────────────────────
         layout.addSpacing(12)
-        self.btn_pdf = QPushButton("Export PDF Report")
-        self.btn_pdf.clicked.connect(self.export_pdf)
-        layout.addWidget(self.btn_pdf)
-
         self.btn_reports = QPushButton("Generate Reports")
         self.btn_reports.setToolTip(
             "Render the plots and reports declared in the datasheet's "
@@ -424,26 +420,46 @@ class MainWindow(QMainWindow):
         Path(settings.OUT_DIR).mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(settings.OUT_DIR)))
 
-    def export_pdf(self) -> None:
+    def _run_report_job(self, config=None, *, title: str = "Generate Reports") -> None:
+        """Run a report job and report the outcome.
+
+        The single implementation behind every report action. It used to exist
+        twice — `export_pdf` and `generate_reports` shared the same guard,
+        status, try/except and dialog sequence and differed only in which
+        generator they called, with the PDF one writing to a different
+        directory.
+        """
+        from chipify import report_service
+
         df = self.app_state.current_df
         stim = self.app_state.current_stim
         if df is None or stim is None:
-            QMessageBox.warning(self, "Export PDF", "No simulation data to export.")
+            QMessageBox.warning(self, title, "No simulation data loaded.")
             return
-        self.set_status("Generating PDF report…", "yellow")
+
+        self.set_status("Generating reports…", "yellow")
         try:
-            from chipify import pdf_export
-            path = pdf_export.generate_pdf_report(
-                df, stim, self.current_yaml_path,
-                Path(settings.OUT_DIR) / "reports",
-                sim_duration_sec=self.app_state.last_sim_duration_sec,
+            result = report_service.generate_reports(
+                df, stim, self.current_yaml_path, settings.OUT_DIR,
+                duration_s=self.app_state.last_sim_duration_sec,
+                theme=self.plot_theme(), config=config,
             )
         except Exception as exc:  # noqa: BLE001
-            self.set_status("PDF export failed", "#e74c3c")
-            QMessageBox.critical(self, "Export PDF", f"Failed to generate PDF:\n{exc}")
+            self.set_status("Report generation failed", "#e74c3c")
+            QMessageBox.critical(self, title, f"Failed to generate reports:\n{exc}")
             return
-        self.set_status("PDF saved to out/reports/", "#2ecc71")
-        QMessageBox.information(self, "Export PDF", f"Report saved as:\n{Path(path).name}")
+
+        summary = f"{len(result.files)} file(s) written to:\n{result.out_dir}"
+        if result.warnings:
+            self.set_status(
+                f"Reports: {len(result.files)} file(s), "
+                f"{len(result.warnings)} warning(s)", "#f39c12")
+            QMessageBox.warning(
+                self, title,
+                summary + "\n\nWarnings:\n- " + "\n- ".join(result.warnings))
+        else:
+            self.set_status(f"Reports saved to {result.out_dir.name}", "#2ecc71")
+            QMessageBox.information(self, title, summary)
 
     def generate_reports(self) -> None:
         """Render the datasheet's configured plots/reports for the loaded run.
@@ -454,44 +470,22 @@ class MainWindow(QMainWindow):
         """
         from chipify import report_service
 
-        df = self.app_state.current_df
         stim = self.app_state.current_stim
-        if df is None or stim is None:
-            QMessageBox.warning(self, "Generate Reports",
-                                "No simulation data loaded.")
-            return
-        if not getattr(stim, "reports", None):
-            QMessageBox.information(
+        if stim is not None and not getattr(stim, "reports", None):
+            # Nothing configured: offer the one-click PDF rather than a dead end,
+            # and point at where the configuration lives.
+            choice = QMessageBox.question(
                 self, "Generate Reports",
                 "This datasheet declares no 'reports:' block.\n\n"
-                "Add one to choose which plots and reports to generate.",
+                "Configure one with 'Reports…' in the Datasheet Editor.\n\n"
+                "Generate a PDF report now instead?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
             )
+            if choice != QMessageBox.Yes:
+                return
+            self._run_report_job(report_service.pdf_only_config())
             return
-
-        self.set_status("Generating reports…", "yellow")
-        try:
-            result = report_service.generate_reports(
-                df, stim, self.current_yaml_path, settings.OUT_DIR,
-                duration_s=self.app_state.last_sim_duration_sec,
-                theme=self.plot_theme(),
-            )
-        except Exception as exc:  # noqa: BLE001
-            self.set_status("Report generation failed", "#e74c3c")
-            QMessageBox.critical(self, "Generate Reports",
-                                 f"Failed to generate reports:\n{exc}")
-            return
-
-        summary = f"{len(result.files)} file(s) written to:\n{result.out_dir}"
-        if result.warnings:
-            self.set_status(
-                f"Reports: {len(result.files)} file(s), "
-                f"{len(result.warnings)} warning(s)", "#f39c12")
-            QMessageBox.warning(
-                self, "Generate Reports",
-                summary + "\n\nWarnings:\n- " + "\n- ".join(result.warnings))
-        else:
-            self.set_status(f"Reports saved to {result.out_dir.name}", "#2ecc71")
-            QMessageBox.information(self, "Generate Reports", summary)
+        self._run_report_job()
 
     # ── Selectors ─────────────────────────────────────────────────────────────
 

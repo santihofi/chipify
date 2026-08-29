@@ -29,13 +29,12 @@ from typing import Any
 import pandas as pd
 
 from chipify import data_loader as _dl
-from chipify.reports import LATEX_FORMAT, PLOT_TYPES, PlotSpec, ReportsConfig
+from chipify.reports import (LATEX_FORMAT, PLOT_TYPES, PlotSpec,
+                             ReportsConfig, histogram_options,
+                             histogram_spec_for)  # noqa: F401
 from chipify.uikit.services import transient_loader as _tl
 
 log = logging.getLogger("chipify.report_service")
-
-#: Cap on overlaid runs, matching the Plots tab's own limit.
-_RUN_CAP = 500
 
 
 @dataclass
@@ -94,24 +93,6 @@ def _new_figure():
     return fig, canvas
 
 
-def _selected_run_ids(df: pd.DataFrame, runs: str) -> list[str]:
-    """Run ids for a waveform overlay, mirroring the Plots tab's run modes."""
-    if df is None or "run_id" not in df.columns:
-        return []
-    mode = str(runs or "valid").strip().lower()
-    if mode == "failing" and "global_pass" in df.columns:
-        subset = df[df["global_pass"] == False]  # noqa: E712
-    elif mode.startswith("first"):
-        try:
-            n = int(mode.split(":", 1)[1])
-        except (IndexError, ValueError):
-            n = 10
-        subset = _dl.valid_rows(df).head(n)
-    else:
-        subset = _dl.valid_rows(df)
-    return _tl.padded_run_ids(subset)[:_RUN_CAP]
-
-
 def _render_waveform(spec: PlotSpec, df, stim, out_dir: Path, theme):
     """Draw one transient / dc / bode overlay. Returns (fig, latex_callable)."""
     from chipify.plot_manager import PlotManager
@@ -126,7 +107,7 @@ def _render_waveform(spec: PlotSpec, df, stim, out_dir: Path, theme):
     if not adir:
         raise ValueError(f"no {kind} waveform directory for this run")
 
-    run_ids = _selected_run_ids(df, opts.get("runs", "valid"))
+    run_ids = _tl.select_run_ids(df, opts.get("runs", _tl.RUN_MODE_ALL))
     if not run_ids:
         raise ValueError("no runs matched the requested selection")
 
@@ -164,24 +145,22 @@ def _render_histogram(spec: PlotSpec, df, stim, theme):
     if param not in df.columns:
         raise ValueError(f"measurement {param!r} is not in this run's results")
 
+    hist = histogram_options(spec)
     fig, canvas = _new_figure()
     ax = fig.add_subplot(111)
     PlotManager.draw_histogram(
         fig, ax, canvas, df, stim, param,
-        str(opts.get("fit", "Gauss (Normal)")),
-        str(opts.get("group") or "None"),
-        str(opts.get("bins", "Auto")),
-        bool(opts.get("zoom", False)),
+        hist["fit"], hist["group"], hist["bins"], hist["zoom"],
         "None", theme=theme,
     )
 
     def _latex(dest: Path, stem: str):
         from chipify import export_latex
         data = _dl.plot_rows(df, stim, [param])[param]
-        bins_text = str(opts.get("bins", "Auto"))
+        bins_text = str(hist["bins"])
         bins = "auto" if bins_text == "Auto" else int(bins_text)
         return export_latex.generate_latex_export(
-            stem, data, str(opts.get("fit", "Gauss (Normal)")), bins, str(dest))
+            stem, data, str(hist["fit"]), bins, str(dest))
 
     return fig, _latex
 
@@ -307,16 +286,29 @@ def latest_reports(out_dir: str | Path) -> str:
         return ""
 
 
+def pdf_only_config() -> ReportsConfig:
+    """Config for "just give me the PDF", independent of the datasheet.
+
+    The one-click PDF is this plus :func:`generate_reports`, rather than a
+    second code path with its own output location and error handling.
+    """
+    return ReportsConfig(pdf=True)
+
+
 def generate_reports(df: pd.DataFrame, stim: Any, yaml_path: str,
                      out_dir: str | Path, *, duration_s: float | None = None,
-                     theme: dict | None = None) -> ReportResult:
+                     theme: dict | None = None,
+                     config: ReportsConfig | None = None) -> ReportResult:
     """Render everything the datasheet's ``reports:`` block asks for.
 
     Writes into ``<out_dir>/reports/<timestamp>/`` and points
     ``<out_dir>/reports/.latest`` at it — the pointer convention
     ``simulator.write_analysis_pointers`` already uses for analysis data.
+
+    *config* overrides the datasheet's block, which is how the PDF-only action
+    reuses this single path (see :func:`pdf_only_config`).
     """
-    cfg: ReportsConfig = getattr(stim, "reports", None) or ReportsConfig()
+    cfg: ReportsConfig = config or getattr(stim, "reports", None) or ReportsConfig()
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = reports_dir(out_dir) / stamp
     result = ReportResult(out_dir=dest)

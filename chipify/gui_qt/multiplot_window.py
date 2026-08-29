@@ -39,7 +39,7 @@ from chipify.uikit.state import AppState
 from chipify.gui_qt.services import canvas_menu
 from chipify.gui_qt.widgets.helpers import compact_combo, deferred
 from chipify.gui_qt.widgets.mpl_canvas import MplCanvas
-from chipify.plot_manager import PlotManager
+from chipify.plot_manager import PlotManager, param_plugin_modes
 
 log = logging.getLogger("chipify.gui_qt.multiplot")
 
@@ -53,7 +53,7 @@ _LEGACY_MODES = {"Transient": "Plots"}
 _FIT_CURVES = ["Gauss (Normal)", "KDE (Smoothed)", "Uniform",
                "Log-Normal", "Exponential", "Chi-Squared", "None"]
 _BINS = ["Auto", "10", "20", "50", "100", "200"]
-_TRAN_RUN_MODES = ["All Valid", "Failing Only", "First N"]
+_TRAN_RUN_MODES = ["All Valid", "Failing Only", "First N"]  # subset of _tl.RUN_MODE_LABELS
 
 
 def _all_modes() -> list[str]:
@@ -64,16 +64,6 @@ def _all_modes() -> list[str]:
     except Exception:  # noqa: BLE001
         pass
     return modes
-
-
-def _param_plugin_modes() -> set[str]:
-    """Names of plot plugins that take a measurement selector (supports_param)."""
-    try:
-        from chipify.plugin_loader import get_plot_plugins
-        return {cls.name for cls in get_plot_plugins()
-                if getattr(cls, "supports_param", False)}
-    except Exception:  # noqa: BLE001
-        return set()
 
 
 class PlotCell(QFrame):
@@ -213,12 +203,12 @@ class PlotCell(QFrame):
             vis[self.tran_signal_combo] = vis[self.tran_mode_combo] = True
             vis[self.tran_n_edit] = True
             vis[self.group_combo] = True
-        elif mode in _param_plugin_modes():
+        elif mode in param_plugin_modes():
             vis[self.target_combo] = vis[self.all_check] = True
         for w, on in vis.items():
             w.setVisible(on)
         self.target_combo.setEnabled(
-            not (mode in _param_plugin_modes() and self.all_check.isChecked())
+            not (mode in param_plugin_modes() and self.all_check.isChecked())
         )
 
     def _on_mode_change(self, *_a) -> None:
@@ -320,7 +310,7 @@ class PlotCell(QFrame):
             else:
                 target = self.target_combo.currentText()
                 plugin_param = None
-                if mode in _param_plugin_modes() and not self.all_check.isChecked():
+                if mode in param_plugin_modes() and not self.all_check.isChecked():
                     plugin_param = target if target and target != "-" else None
                 self._sc_plot, self._scatter_df = PlotManager.draw_adv_plot(
                     fig, None, canvas, df, stim, mode,
@@ -355,23 +345,11 @@ class PlotCell(QFrame):
                    else _tl.list_kind_signals(stim, kind))
 
         df = self._state.active_df
-        run_ids: list[str] = []
-        if df is not None and "run_id" in df.columns:
-            run_mode = self.tran_mode_combo.currentText()
-            # Padded to match the run_<id>__<tb>.csv filenames — see
-            # transient_loader.pad_run_id.
-            if run_mode == "Failing Only" and "global_pass" in df.columns:
-                run_ids = _tl.padded_run_ids(df[df["global_pass"] == False])  # noqa: E712
-            elif run_mode == "All Valid":
-                run_ids = _tl.padded_run_ids(df[df.get("sim_error", "None") == "None"])
-            else:
-                try:
-                    n = int(self.tran_n_edit.text())
-                except ValueError:
-                    n = 10
-                run_ids = _tl.padded_run_ids(
-                    df[df.get("sim_error", "None") == "None"].head(n))
-        run_ids = run_ids[:500]
+        try:
+            n = int(self.tran_n_edit.text())
+        except ValueError:
+            n = 10
+        run_ids = _tl.select_run_ids(df, self.tran_mode_combo.currentText(), n=n)
 
         adir = (_tl.resolve_analysis_dir(df, settings.OUT_DIR, kind)
                 if df is not None else "")
