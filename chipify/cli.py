@@ -26,6 +26,21 @@ def _json_summary(df, yaml_name: str, duration_s: float) -> dict:
     }
 
 
+def _generate_reports(df, stim, yaml_path, out_dir, duration_s) -> str:
+    """Write the datasheet's configured plots/reports; return the directory."""
+    from chipify import report_service
+
+    result = report_service.generate_reports(
+        df, stim, str(yaml_path), out_dir, duration_s=duration_s)
+    for path in result.files:
+        print(f"[+] {path}")
+    for warning in result.warnings:
+        print(f"[!] {warning}")
+    if result.files:
+        print(f"[+] {len(result.files)} report file(s) in {result.out_dir}")
+    return str(result.out_dir)
+
+
 def _make_progress_stream_cb():
     """Return a progress_callback that emits 'PROGRESS: <done> <total>' to stdout.
 
@@ -41,7 +56,8 @@ def _run_single(yaml_path: str | os.PathLike[str], *, json_out: bool = False,
                 simulator_override: str | None = None,
                 templates_dir: str | None = None,
                 progress_stream: bool = False,
-                out_dir: str | os.PathLike[str] | None = None) -> dict | None:
+                out_dir: str | os.PathLike[str] | None = None,
+                reports: bool = False) -> dict | None:
     """Run simulation for one yaml file. Returns summary dict or None on failure.
 
     out_dir:
@@ -105,6 +121,9 @@ def _run_single(yaml_path: str | os.PathLike[str], *, json_out: bool = False,
     print_summary(df, stim)
 
     summary = _json_summary(df, yaml_path.name, duration_s)
+    if reports:
+        summary["reports_dir"] = _generate_reports(df, stim, yaml_path,
+                                                   out_dir, duration_s)
     if json_out:
         print(json.dumps(summary))
     return summary
@@ -191,6 +210,13 @@ def main():
     )
 
     parser.add_argument(
+        "--reports",
+        action="store_true",
+        help="After simulation, write the plots and reports declared in the "
+             "datasheet's 'reports:' block to out/reports/<timestamp>/.",
+    )
+
+    parser.add_argument(
         "--progress-stream",
         action="store_true",
         default=False,
@@ -232,7 +258,7 @@ def main():
                                   simulator_override=args.simulator,
                                   templates_dir=args.templates_dir,
                                   progress_stream=args.progress_stream,
-                                  out_dir=run_out_dir)
+                                  out_dir=run_out_dir, reports=args.reports)
             if summary is None:
                 all_ok = False
                 summary = {"yaml": yaml_path.name, "error": "no data"}
@@ -274,7 +300,8 @@ def main():
     summary = _run_single(yaml_path, json_out=args.json,
                           simulator_override=args.simulator,
                           templates_dir=args.templates_dir,
-                          progress_stream=args.progress_stream)
+                          progress_stream=args.progress_stream,
+                          reports=args.reports)
     if summary is None:
         sys.exit(1)
 

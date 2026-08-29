@@ -211,6 +211,14 @@ class MainWindow(QMainWindow):
         self.btn_pdf = QPushButton("Export PDF Report")
         self.btn_pdf.clicked.connect(self.export_pdf)
         layout.addWidget(self.btn_pdf)
+
+        self.btn_reports = QPushButton("Generate Reports")
+        self.btn_reports.setToolTip(
+            "Render the plots and reports declared in the datasheet's "
+            "'reports:' block for the currently loaded results."
+        )
+        self.btn_reports.clicked.connect(self.generate_reports)
+        layout.addWidget(self.btn_reports)
         self.btn_open_folder = QPushButton("Open Output Folder")
         self.btn_open_folder.clicked.connect(self.open_output_folder)
         layout.addWidget(self.btn_open_folder)
@@ -436,6 +444,54 @@ class MainWindow(QMainWindow):
             return
         self.set_status("PDF saved to out/reports/", "#2ecc71")
         QMessageBox.information(self, "Export PDF", f"Report saved as:\n{Path(path).name}")
+
+    def generate_reports(self) -> None:
+        """Render the datasheet's configured plots/reports for the loaded run.
+
+        Reads whatever is currently loaded rather than the last simulation, so
+        it also regenerates the figures for a run picked from the history
+        dropdown.
+        """
+        from chipify import report_service
+
+        df = self.app_state.current_df
+        stim = self.app_state.current_stim
+        if df is None or stim is None:
+            QMessageBox.warning(self, "Generate Reports",
+                                "No simulation data loaded.")
+            return
+        if not getattr(stim, "reports", None):
+            QMessageBox.information(
+                self, "Generate Reports",
+                "This datasheet declares no 'reports:' block.\n\n"
+                "Add one to choose which plots and reports to generate.",
+            )
+            return
+
+        self.set_status("Generating reports…", "yellow")
+        try:
+            result = report_service.generate_reports(
+                df, stim, self.current_yaml_path, settings.OUT_DIR,
+                duration_s=self.app_state.last_sim_duration_sec,
+                theme=self.plot_theme(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.set_status("Report generation failed", "#e74c3c")
+            QMessageBox.critical(self, "Generate Reports",
+                                 f"Failed to generate reports:\n{exc}")
+            return
+
+        summary = f"{len(result.files)} file(s) written to:\n{result.out_dir}"
+        if result.warnings:
+            self.set_status(
+                f"Reports: {len(result.files)} file(s), "
+                f"{len(result.warnings)} warning(s)", "#f39c12")
+            QMessageBox.warning(
+                self, "Generate Reports",
+                summary + "\n\nWarnings:\n- " + "\n- ".join(result.warnings))
+        else:
+            self.set_status(f"Reports saved to {result.out_dir.name}", "#2ecc71")
+            QMessageBox.information(self, "Generate Reports", summary)
 
     # ── Selectors ─────────────────────────────────────────────────────────────
 

@@ -132,6 +132,12 @@ Preparation for the initial public release.
   CSV. `run_id` parses back as an integer, so the lookup asked for `run_4`
   while the file is `run_000004__<tb>.csv`; only a run still in memory from a
   live simulation ever drew.
+- New optional `reports:` block in the datasheet declares figures and reports to
+  generate: plot type, axes/signals, grouping and output formats (any
+  `ExporterPlugin` extension such as `png`/`svg`, plus `latex` where a pgfplots
+  generator exists). Produced by `chipify-cli --reports` or the GUI's
+  *Generate Reports* button into `out/reports/<timestamp>/`, with a `.latest`
+  pointer. Previously a CLI run produced no figures at all.
 - The `Transient` tab is now `Plots`, since it has long covered DC sweep and
   Bode as well; the dashboard's waveform cell gained the same analysis-kind
   selector. Dashboards saved with the old `Transient` cell still open.

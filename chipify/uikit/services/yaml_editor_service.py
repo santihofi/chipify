@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Santiago Hofwimmer
+# Copyright (c) 2026 Santiago Hofwimmer
 """
 yaml_editor_service.py – Pure-logic helpers for the YAML datasheet editor tab.
 
@@ -73,6 +73,17 @@ def new_datasheet_template() -> str:
         "      max: 1.0\n"
         "      typ: 0.5\n"
         "      unit: V        # optional, display-only label\n"
+        "\n"
+        "# Optional: figures and reports written by `chipify-cli --reports`\n"
+        "# (or the GUI's Generate Reports button) into out/reports/<timestamp>/.\n"
+        "# Plot types: scatter, histogram, transient, dc, bode, corner_yield,\n"
+        "# correlation, tornado, fail_breakdown.\n"
+        "# reports:\n"
+        "#   formats: [png, svg]   # any ExporterPlugin extension, plus 'latex'\n"
+        "#   pdf: true\n"
+        "#   plots:\n"
+        "#     - {type: scatter, x: my_measurement, y: other, formats: [svg]}\n"
+        "#     - {type: histogram, param: my_measurement, group: temp}\n"
     )
 
 

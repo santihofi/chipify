@@ -232,6 +232,8 @@ class PowerEfficiency(ExpressionPlugin):
 
 PNG and SVG ship as built-in exporters. To support a new format — TIFF, EPS, WebP, JPG, PDF-per-plot, anything Matplotlib's `savefig()` understands — drop one of these plugins into the plugin directory.
 
+An exporter's `extension` doubles as a `formats:` value in a datasheet's `reports:` block, so installing an exporter plugin makes that format available to automatic report generation (`chipify-cli --reports`) with no further wiring.
+
 ### Class attributes
 
 | Attribute | Type | Required | Description |

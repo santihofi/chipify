@@ -338,6 +338,41 @@ def test_plots_survive_a_failing_testbench(window):
     assert "tb_ac" in title and "excluded" in title
 
 
+def test_generate_reports_button(window, monkeypatch, tmp_path):
+    """The button renders the datasheet's reports for whatever is loaded."""
+    import pandas as pd
+    from PySide6.QtWidgets import QMessageBox
+    from chipify import settings
+    from chipify.reports import PlotSpec, ReportsConfig
+
+    seen = {}
+    monkeypatch.setattr(QMessageBox, "information",
+                        lambda *a, **k: seen.setdefault("info", a[-1]))
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *a, **k: seen.setdefault("warn", a[-1]))
+
+    # No data loaded -> warns instead of raising.
+    window.generate_reports()
+    assert "warn" in seen
+
+    seen.clear()
+    monkeypatch.setattr(settings, "OUT_DIR", str(tmp_path))
+
+    class _Stim(_FakeStim):
+        def __init__(self):
+            super().__init__()
+            self.reports = ReportsConfig(
+                formats=["png"],
+                plots=[PlotSpec("histogram", options={"param": "gain"})],
+            )
+
+    window.show_results(_sample_df(), _Stim(), switch_tab=False)
+    window.generate_reports()
+    written = list((tmp_path / "reports").rglob("*.png"))
+    assert written, "the button produced no figure"
+    assert "info" in seen and "1 file(s)" in seen["info"]
+
+
 def _select_datasheet(window, monkeypatch, path) -> None:
     """Point the window's read-only current_yaml_path property at *path*."""
     monkeypatch.setattr(type(window), "current_yaml_path",

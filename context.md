@@ -21,6 +21,8 @@
 | `simulator.py` | Multiprocessing simulation engine (`NgspiceSimulator`, `VacaskSimulator`). File-based abort via `/tmp/sim_work/abort.flag`. |
 | `plot_manager.py` | All Matplotlib logic. Avoids GUI bloat. |
 | `data_loader.py` | Results loading / pass-fail / plot-column classification / history — shared by the engine, exporters, and GUI; headless, no GUI deps. |
+| `reports.py` | Vocabulary for the datasheet's `reports:` block: `PlotSpec` / `ReportsConfig` and the `PLOT_TYPES` registry. |
+| `report_service.py` | Renders that block headlessly to `out/reports/<timestamp>/` — shared by `--reports` and the GUI button. |
 | `cli.py` | Entry point for headless execution or launching the GUI (`run_gui()` → Qt app). |
 
 ### Toolkit-agnostic GUI-support layer (`chipify/uikit/`)
@@ -122,6 +124,14 @@ A measurement's status is `PASS` / `FAIL` / `ERROR` (`measurements.STATUS_*`). `
 Yield *visualisations* use `data_loader.effective_pass(df)`, not `global_pass`: `global_pass` ANDs every testbench, so one permanently broken testbench drives it false everywhere and flattens the Corner Yield Matrix to 0 %. `effective_pass` ignores the testbenches that errored in a row (NaN when none ran, so those rows drop out of a `mean`), and the matrix names the excluded testbenches in its title. `global_pass` remains correct for run-level yield counts.
 
 `run_sim` returns `None` **only** on user abort; every other failure raises, so callers must report it rather than mistake it for a cancellation.
+
+### Auto-generated reports (`reports.py` + `report_service.py`)
+*   The datasheet's optional `reports:` block declares which figures and reports a run should produce; `schema._validate_reports` turns it into a `ReportsConfig` on `Stimuli.reports`, exactly as `equations:` becomes `Stimuli.equations`.
+*   `PLOT_TYPES` in `reports.py` is the **single registry** the validator, the renderer and the tests read. Adding a plot type is one entry — a type that is not in the render matrix fails `test_registry_and_test_matrix_stay_in_step`.
+*   `report_service.generate_reports` is headless: figures come from the same `PlotManager` entry points the tabs use, drawn on a `FigureCanvasAgg`; images are written by the `ExporterPlugin` registry (so a user exporter is a usable `formats:` value), and PDF / Markdown / LaTeX delegate to the existing generators. **No plotting code lives in the service.**
+*   Each plot is rendered under its own guard: a spec naming a missing measurement, or a waveform directory that was never produced, records a warning in `ReportResult.warnings` and the remaining plots still render. `latex` is only honoured for the types whose `PlotType.supports_latex` is true.
+*   Output goes to `out/reports/<timestamp>/` with an `out/reports/.latest` pointer — the convention `simulator.write_analysis_pointers` uses for analysis data.
+*   Opt-in: `chipify-cli --reports`, or the GUI's *Generate Reports* button (which works on whatever run is loaded, including one picked from history).
 
 ### Waveform overlay grouping (`plot_manager._OverlayStyle`)
 *   The Transient / DC sweep / Bode overlays share one colour-and-legend policy. Ungrouped, colour encodes the signal (or the run index for a single signal) and failing runs are red — unchanged.

@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Santiago Hofwimmer
+# Copyright (c) 2026 Santiago Hofwimmer
 """
 schema.py – TypedDicts and validation helpers for the Chipify datasheet YAML.
 
@@ -16,9 +16,12 @@ from schema.py to avoid circular imports.
 from __future__ import annotations
 
 import ast
+import logging
 from typing import Any
 
 import numpy as np
+
+log = logging.getLogger("chipify.schema")
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
@@ -235,6 +238,119 @@ def _validate_equations(data: dict[str, Any], key: str) -> list[dict[str, str]]:
     return out
 
 
+def _validate_reports(data: dict[str, Any]) -> "Any":
+    """Validate the top-level ``reports:`` block into a ``ReportsConfig``.
+
+    Absent or empty yields an empty config, so datasheets that declare nothing
+    are unaffected. Every error names the offending path, because a typo in a
+    plot spec would otherwise only surface as a missing file much later.
+    """
+    from chipify.reports import (COMMON_KEYS, LATEX_FORMAT, PLOT_TYPES,
+                                 PlotSpec, ReportsConfig)
+
+    raw = data.get("reports")
+    if raw is None:
+        return ReportsConfig()
+    if not isinstance(raw, dict):
+        raise SchemaError(
+            f"reports: expected a mapping, got {type(raw).__name__}."
+        )
+
+    def _formats(value: Any, path: str) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            raise SchemaError(f"{path}: expected a list of formats, "
+                              f"got {type(value).__name__}.")
+        known = _known_formats()
+        out: list[str] = []
+        for fmt in value:
+            name = str(fmt).strip().lower().lstrip(".")
+            if name not in known:
+                raise SchemaError(
+                    f"{path}: unknown format {name!r}. Available: "
+                    f"{', '.join(sorted(known))}."
+                )
+            if name not in out:
+                out.append(name)
+        return out
+
+    cfg = ReportsConfig(
+        formats=_formats(raw.get("formats"), "reports.formats"),
+        pdf=bool(raw.get("pdf", False)),
+        markdown=bool(raw.get("markdown", False)),
+    )
+
+    # Only an absent/null key defaults to "no plots": `plots: {}` is a typo for
+    # a list and must be reported, not silently read as an empty one.
+    plots_raw = raw.get("plots")
+    if plots_raw is None:
+        plots_raw = []
+    if not isinstance(plots_raw, list):
+        raise SchemaError(
+            f"reports.plots: expected a list, got {type(plots_raw).__name__}."
+        )
+
+    for i, entry in enumerate(plots_raw):
+        path = f"reports.plots[{i}]"
+        if not isinstance(entry, dict):
+            raise SchemaError(f"{path}: expected a mapping, got {entry!r}.")
+
+        ptype = str(entry.get("type", "")).strip()
+        if not ptype:
+            raise SchemaError(f"{path}: missing required key 'type'.")
+        if ptype not in PLOT_TYPES:
+            raise SchemaError(
+                f"{path}.type: unknown plot type {ptype!r}. Available: "
+                f"{', '.join(sorted(PLOT_TYPES))}."
+            )
+        spec_type = PLOT_TYPES[ptype]
+
+        allowed = set(COMMON_KEYS) | set(spec_type.required) | set(spec_type.optional)
+        for key in entry:
+            if key not in allowed:
+                raise SchemaError(
+                    f"{path}: unknown key {key!r} for plot type {ptype!r}. "
+                    f"Allowed: {', '.join(sorted(allowed))}."
+                )
+        for key in spec_type.required:
+            if not str(entry.get(key, "")).strip():
+                raise SchemaError(
+                    f"{path}: plot type {ptype!r} requires {key!r}."
+                )
+
+        formats = _formats(entry.get("formats"), f"{path}.formats")
+        if LATEX_FORMAT in formats and not spec_type.supports_latex:
+            # Not fatal: report_service warns and still writes the other
+            # formats. Failing the whole datasheet load over it would be
+            # disproportionate for a presentational request.
+            log.warning("%s: LaTeX export is not available for plot type %r; "
+                        "it will be skipped.", path, ptype)
+
+        options = {k: v for k, v in entry.items() if k not in COMMON_KEYS}
+        cfg.plots.append(PlotSpec(
+            type=ptype,
+            name=str(entry.get("name", "")).strip(),
+            formats=formats,
+            options=options,
+        ))
+
+    return cfg
+
+
+def _known_formats() -> set[str]:
+    """Image extensions from the exporter registry, plus ``latex``."""
+    from chipify.reports import LATEX_FORMAT
+    try:
+        from chipify.plugin_loader import get_exporter_plugins
+        exts = {e.extension.lstrip(".").lower() for e in get_exporter_plugins()}
+    except Exception:  # noqa: BLE001 — a broken user plugin must not block loading
+        exts = {"png", "svg"}
+    return exts | {LATEX_FORMAT}
+
+
 def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
     """
     Build and return a validated ``util.Stimuli`` object from a raw YAML dict.
@@ -267,6 +383,9 @@ def validate_datasheet(data: dict[str, Any]) -> "Any":  # returns util.Stimuli
     # ── Custom equations (scalar + waveform) ──────────────────────────────────
     stim.equations = _validate_equations(data, "equations")
     stim.transient_equations = _validate_equations(data, "transient_equations")
+
+    # ── Auto-generated plots / reports ────────────────────────────────────────
+    stim.reports = _validate_reports(data)
 
     # ── Tests / Testbenches ───────────────────────────────────────────────────
     tests_raw: dict[str, Any] = {}

@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Santiago Hofwimmer
+# Copyright (c) 2026 Santiago Hofwimmer
 """
 util.py – Core domain objects and utilities for Chipify.
 
@@ -30,6 +30,10 @@ class Stimuli:
         # ``transient_equations:`` blocks, as [{"name", "expr"}] dicts.
         self.equations: list[dict[str, str]] = []
         self.transient_equations: list[dict[str, str]] = []
+        # Datasheet's top-level ``reports:`` block — which figures and reports
+        # a run should produce. Empty unless the datasheet declares one.
+        from chipify.reports import ReportsConfig  # local: avoid a cycle
+        self.reports: ReportsConfig = ReportsConfig()
         if yaml_file:
             self._load_from_yaml(yaml_file)
 
@@ -54,6 +58,7 @@ class Stimuli:
         self.tests = validated.tests
         self.equations = getattr(validated, "equations", [])
         self.transient_equations = getattr(validated, "transient_equations", [])
+        self.reports = getattr(validated, "reports", self.reports)
 
     def addTest(self, test: "Test") -> None:
         self.tests.append(test)
