@@ -13,6 +13,7 @@ Page structure (strict A4 portrait throughout):
 """
 
 import datetime
+import logging
 import math
 import textwrap
 from pathlib import Path
@@ -31,6 +32,7 @@ from chipify import app_config
 from chipify.uikit.services import measurements as _meas
 from chipify.plot_manager import PlotManager
 from chipify.plot_manager import PRINT_THEME as PlotManager_PRINT_THEME
+from chipify.exporters._white_bg import white_background
 from chipify.reports import histogram_options, histogram_spec_for
 
 # ── Style constants ────────────────────────────────────────────────────────────
@@ -46,6 +48,9 @@ MGRAY  = "#c8c8c8"
 DGRAY  = "#555555"
 
 A4     = (8.27, 11.69)   # inches
+A4_LANDSCAPE = (11.69, 8.27)
+
+log = logging.getLogger("chipify.pdf_export")
 ML     = 0.07            # left/right margin in figure-fraction units
 MB     = 0.05            # bottom margin
 
@@ -483,6 +488,48 @@ def _finish_pdf_hist(ax, data, cpk, passed):
             zorder=5)
 
 
+def _add_report_plots(pdf: PdfPages, df, stim, plots: list, out_root) -> None:
+    """One page per plot declared in the datasheet's ``reports:`` block.
+
+    Renders through ``report_service.render_spec`` — the same call that writes
+    the standalone PNG/SVG — so the report contains exactly the configured
+    plots and each one looks the same in both places. Previously the PDF only
+    ever showed its own per-measurement histograms, so a configured scatter,
+    transient or DC sweep appeared as an image but was missing from the report.
+
+    Each renderer owns its whole figure (they all call ``fig.clf()``), so every
+    plot gets its own page rather than sharing one.
+    """
+    from chipify import report_service
+
+    total = len(plots)
+    for i, spec in enumerate(plots, start=1):
+        name = report_service.default_plot_name(spec)
+        try:
+            fig, _ = report_service.render_spec(
+                spec, df, stim, out_root=out_root,
+                theme=PlotManager_PRINT_THEME, figsize=A4_LANDSCAPE,
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad spec must not kill the report
+            log.warning("Report plot %r could not be drawn into the PDF: %s", name, exc)
+            fig = plt.figure(figsize=A4_LANDSCAPE, facecolor="white")
+            fig.text(0.5, 0.5, f"{name}\ncould not be rendered:\n{exc}",
+                     ha="center", va="center", color=RED, fontsize=11, wrap=True)
+
+        # Top-left corner: the renderers centre their own axes title and put
+        # the x-label along the bottom, so both the centre and the footer are
+        # already taken. Added after rendering — every renderer clears the
+        # figure first.
+        fig.text(0.008, 0.992, f"{name}   ({i} / {total})",
+                 ha="left", va="top", fontsize=7.5, color=DGRAY)
+        # The same re-skin the PNG/SVG exporters apply. Without it the report
+        # embedded the dark on-screen palette while the exported image of the
+        # very same plot came out light.
+        with white_background(fig):
+            pdf.savefig(fig, facecolor="white")
+        plt.close(fig)
+
+
 def _add_histograms(pdf: PdfPages, df: pd.DataFrame, stim, rows_meta: list):
     """Distribution pages, one measurement per slot.
 
@@ -611,9 +658,21 @@ def _add_plugin_pages(pdf: PdfPages, valid_df: pd.DataFrame, stim):
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
+def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None,
+                        reports_config=None, out_root=None):
+    """Build the PDF report.
+
+    When the datasheet (or *reports_config*) declares ``plots:``, the report's
+    figure pages are exactly those plots. With nothing declared it falls back
+    to the automatic per-measurement histograms and correlation page.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = reports_config if reports_config is not None else getattr(stim, "reports", None)
+    cfg_plots = list(getattr(cfg, "plots", None) or [])
+    # Waveform plots resolve their CSVs under the project output directory;
+    # out_dir is the run's report folder inside it.
+    out_root = Path(out_root) if out_root else out_dir.parent.parent
     ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     pdf_path = out_dir / f"report_{ts}.pdf"
 
@@ -629,10 +688,16 @@ def generate_pdf_report(df, stim, yaml_path, out_dir, sim_duration_sec=None):
         _add_cover(pdf, prepared, yaml_path, rows, stim, sim_duration_sec=sim_duration_sec)
         _add_table(pdf, rows, valid_df, stim)
         _add_errors(pdf, errors)
-        _add_histograms(pdf, prepared, stim, rows)
-        # corr() is pairwise and the nunique() > 1 filter already drops all-NaN
-        # columns, so the full frame is safe and keeps the healthy measurements.
-        _add_correlation(pdf, prepared)
+        if cfg_plots:
+            # "Exactly the plots the datasheet asks for": the automatic
+            # per-measurement histograms and the correlation page would be
+            # extra figures nobody requested.
+            _add_report_plots(pdf, prepared, stim, cfg_plots, out_root)
+        else:
+            _add_histograms(pdf, prepared, stim, rows)
+            # corr() is pairwise and the nunique() > 1 filter already drops
+            # all-NaN columns, so the full frame is safe.
+            _add_correlation(pdf, prepared)
         _add_plugin_pages(pdf, valid_df, stim)
 
     return str(pdf_path)

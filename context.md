@@ -140,6 +140,12 @@ Yield *visualisations* use `data_loader.effective_pass(df)`, not `global_pass`: 
 *   `plot_manager.param_plugin_modes()` is the one home for the plugin-mode lookup the Analytics tab and the dashboard cell both need.
 *   `tests/test_no_duplicate_functions.py` fails on any module-level function name defined in two files, with an `_ALLOWED` map carrying the reason for each deliberate exception (`main`, `fmt_value`) — the audit is re-run by the suite rather than by hand.
 
+### The PDF contains exactly the configured plots
+*   `report_service.render_spec(spec, df, stim, out_root=…, theme=…, figsize=…)` is the public renderer for one plot spec. `pdf_export._add_report_plots` calls it once per entry in `reports: plots:` and gives each its own page — the renderers all `fig.clf()`, so they cannot share one.
+*   With a `plots:` list the report's figure pages are **exactly** those plots; `_add_histograms` / `_add_correlation` only run when nothing is declared. `generate_pdf_report(reports_config=…, out_root=…)` takes the effective config so a PDF-only run still gets the automatic sections.
+*   Pages are written inside `exporters._white_bg.white_background(fig)` — the same re-skin the PNG/SVG exporters apply. `PdfPages.savefig` bypasses `save_with_white_bg`, so without it the report embedded the dark on-screen palette while the exported image of the same plot came out light.
+*   The page label goes in the **top-left corner**: renderers centre their own axes title and use the bottom for the x-label, so both the centre and the footer are taken.
+
 ### One histogram, every output format
 *   `reports.histogram_options(spec)` is the single place a histogram's `fit` / `group` / `bins` / `zoom` are resolved, and `reports.histogram_spec_for(stim, param)` finds the datasheet's spec for a measurement. Both the standalone figure (`report_service`) and the PDF report page (`pdf_export._add_histograms`) go through them, so a measurement cannot render differently in two formats.
 *   `pdf_export` no longer has its own histogram implementation. It draws through `PlotManager.draw_histogram` with `plot_manager.PRINT_THEME` and `tight=False` (its axes are placed by hand, so `tight_layout` would move them), then `_finish_pdf_hist` applies the page's type scale, pins the legend left and adds the μ/σ/Cpk badge. The old `_draw_hist_ax` — which hardcoded `bins="auto"`, no grouping and an always-on zoom — is gone.

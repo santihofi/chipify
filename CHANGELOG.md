@@ -138,6 +138,17 @@ Preparation for the initial public release.
   generator exists). Produced by `chipify-cli --reports` or the GUI's
   *Generate Reports* button into `out/reports/<timestamp>/`, with a `.latest`
   pointer. Previously a CLI run produced no figures at all.
+- Fixed: the PDF report only ever contained histograms. A configured scatter,
+  transient, DC sweep, Bode, correlation or tornado plot was written as an
+  image but never reached the report, which instead showed an automatic
+  histogram per measurement plus a correlation page nobody asked for. When a
+  datasheet declares `reports: plots:`, the report's figure pages are now
+  exactly those plots, in order, rendered through the same call that writes the
+  standalone image. Datasheets without a `plots:` list keep the automatic
+  sections.
+- Fixed: figures embedded in the PDF kept the dark on-screen palette, while the
+  same plot exported as a PNG came out light — the report path bypassed the
+  exporters' white-paper re-skin.
 - Fixed: custom equations could not be deleted. Removing a row without then
   pressing Apply was silently undone by the next table reload (a mode switch or
   datasheet reload put the equation straight back), and clicking Remove with no

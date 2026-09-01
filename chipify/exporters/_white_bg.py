@@ -18,6 +18,7 @@ touched.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -108,15 +109,19 @@ def _restore_axes(ax: "Axes", snap: dict[str, Any]) -> None:
             t.set_color(c)
 
 
-def save_with_white_bg(fig: "Figure", out_path: str, **savefig_kwargs: Any) -> str:
-    """
-    Save *fig* to *out_path* with a forced white-paper palette.
+@contextmanager
+def white_background(fig: "Figure"):
+    """Re-skin *fig* to the white-paper palette for the duration of the block.
 
-    All chrome (figure bg, axes bg, spines, ticks, tick labels, axis
-    labels, titles, grid lines, legend frame and text) is flipped to a
-    white-friendly palette for the duration of the save, then restored
+    All chrome (figure bg, axes bg, spines, ticks, tick labels, axis labels,
+    titles, grid lines, legend frame and text) is flipped, then restored
     exactly. Plotted data series (lines, bars, scatter points, image
     colormaps) are left untouched.
+
+    Exposed separately from :func:`save_with_white_bg` because the PDF report
+    embeds figures through ``PdfPages.savefig`` rather than ``fig.savefig``:
+    without this it wrote the dark on-screen palette straight onto the page,
+    while the same plot exported as a PNG came out light.
     """
     orig_fig_fc = fig.get_facecolor()
     orig_fig_ec = fig.get_edgecolor()
@@ -126,18 +131,21 @@ def save_with_white_bg(fig: "Figure", out_path: str, **savefig_kwargs: Any) -> s
     fig.patch.set_edgecolor(_WHITE)
     for ax, _ in snapshots:
         _apply_white(ax)
-
-    # Force facecolor on the save call too — bbox_inches="tight" can
-    # otherwise inherit a leftover rcParams value.
-    savefig_kwargs.setdefault("facecolor", _WHITE)
-    savefig_kwargs.setdefault("edgecolor", _WHITE)
-
     try:
-        fig.savefig(out_path, **savefig_kwargs)
+        yield fig
     finally:
         fig.patch.set_facecolor(orig_fig_fc)
         fig.patch.set_edgecolor(orig_fig_ec)
         for ax, snap in snapshots:
             _restore_axes(ax, snap)
 
+
+def save_with_white_bg(fig: "Figure", out_path: str, **savefig_kwargs: Any) -> str:
+    """Save *fig* to *out_path* with a forced white-paper palette."""
+    # Force facecolor on the save call too — bbox_inches="tight" can
+    # otherwise inherit a leftover rcParams value.
+    savefig_kwargs.setdefault("facecolor", _WHITE)
+    savefig_kwargs.setdefault("edgecolor", _WHITE)
+    with white_background(fig):
+        fig.savefig(out_path, **savefig_kwargs)
     return out_path

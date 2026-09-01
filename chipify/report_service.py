@@ -83,24 +83,28 @@ def default_plot_name(spec: PlotSpec) -> str:
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
-def _new_figure():
+#: Default size of a standalone report figure, in inches.
+FIGSIZE = (8.0, 5.0)
+
+
+def _new_figure(figsize=None):
     """A figure plus an Agg canvas satisfying the PlotManager draw contract."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
-    fig = Figure(figsize=(8, 5), dpi=150)
+    fig = Figure(figsize=figsize or FIGSIZE, dpi=150)
     canvas = FigureCanvasAgg(fig)
     return fig, canvas
 
 
-def _render_waveform(spec: PlotSpec, df, stim, out_dir: Path, theme):
+def _render_waveform(spec: PlotSpec, df, stim, out_root, theme, figsize=None):
     """Draw one transient / dc / bode overlay. Returns (fig, latex_callable)."""
     from chipify.plot_manager import PlotManager
 
     ptype = spec.plot_type
     opts = spec.options
     kind = ptype.kind
-    adir = _tl.resolve_analysis_dir(df, str(out_dir.parent.parent), kind)
+    adir = _tl.resolve_analysis_dir(df, str(out_root), kind)
     signals = list(opts.get("signals") or _tl.list_kind_signals(stim, kind))
     if not signals:
         raise ValueError(f"no {kind} signals declared in the datasheet")
@@ -120,7 +124,7 @@ def _render_waveform(spec: PlotSpec, df, stim, out_dir: Path, theme):
         "ac": PlotManager.draw_bode_plot,
     }[kind]
 
-    fig, canvas = _new_figure()
+    fig, canvas = _new_figure(figsize)
     draw_fn(fig, canvas, adir, run_ids, signals,
             pass_map=_tl.run_pass_map(df), equations=equations, theme=theme,
             group_map=_tl.run_group_map(df, group_col), group_label=group_col)
@@ -137,7 +141,7 @@ def _render_waveform(spec: PlotSpec, df, stim, out_dir: Path, theme):
     return fig, _latex
 
 
-def _render_histogram(spec: PlotSpec, df, stim, theme):
+def _render_histogram(spec: PlotSpec, df, stim, theme, figsize=None):
     from chipify.plot_manager import PlotManager
 
     opts = spec.options
@@ -146,7 +150,7 @@ def _render_histogram(spec: PlotSpec, df, stim, theme):
         raise ValueError(f"measurement {param!r} is not in this run's results")
 
     hist = histogram_options(spec)
-    fig, canvas = _new_figure()
+    fig, canvas = _new_figure(figsize)
     ax = fig.add_subplot(111)
     PlotManager.draw_histogram(
         fig, ax, canvas, df, stim, param,
@@ -165,11 +169,11 @@ def _render_histogram(spec: PlotSpec, df, stim, theme):
     return fig, _latex
 
 
-def _render_advanced(spec: PlotSpec, df, stim, theme):
+def _render_advanced(spec: PlotSpec, df, stim, theme, figsize=None):
     from chipify.plot_manager import PlotManager
 
     opts = spec.options
-    fig, canvas = _new_figure()
+    fig, canvas = _new_figure(figsize)
     PlotManager.draw_adv_plot(
         fig, None, canvas, df, stim, spec.plot_type.adv_mode,
         str(opts.get("x", "")), str(opts.get("y", "")),
@@ -183,13 +187,21 @@ def _eq_service():
     return equation_service
 
 
-def _render(spec: PlotSpec, df, stim, out_dir: Path, theme):
-    """Dispatch one spec to its renderer. Returns ``(figure, latex_callable)``."""
+def render_spec(spec: PlotSpec, df, stim, *, out_root, theme=None, figsize=None):
+    """Render one plot spec. Returns ``(figure, latex_callable_or_None)``.
+
+    Public because the PDF report renders the datasheet's configured plots
+    through exactly this function — a plot must not look different depending on
+    whether it was exported as an image or embedded in the report.
+
+    *out_root* is the project's output directory (the one holding
+    ``analysis_data/``), needed to locate waveform CSVs.
+    """
     if spec.plot_type.is_waveform:
-        return _render_waveform(spec, df, stim, out_dir, theme)
+        return _render_waveform(spec, df, stim, out_root, theme, figsize)
     if spec.type == "histogram":
-        return _render_histogram(spec, df, stim, theme)
-    return _render_advanced(spec, df, stim, theme)
+        return _render_histogram(spec, df, stim, theme, figsize)
+    return _render_advanced(spec, df, stim, theme, figsize)
 
 
 # ── Writing ───────────────────────────────────────────────────────────────────
@@ -208,7 +220,9 @@ def _write_plot(spec: PlotSpec, cfg: ReportsConfig, df, stim,
         return
 
     try:
-        fig, latex_fn = _render(spec, df, stim, out_dir, theme)
+        fig, latex_fn = render_spec(spec, df, stim,
+                                    out_root=out_dir.parent.parent,
+                                    theme=theme)
     except Exception as exc:  # noqa: BLE001 — one bad spec must not stop the rest
         result.warnings.append(f"{stem}: could not render ({exc})")
         log.warning("Report plot %r failed to render: %s", stem, exc)
@@ -254,8 +268,11 @@ def _write_documents(cfg: ReportsConfig, df, stim, yaml_path: str,
     if cfg.pdf:
         try:
             from chipify import pdf_export
+            # Pass the effective config, not stim.reports: a PDF-only run
+            # overrides it, and the report must reflect what was asked for.
             result.files.append(Path(pdf_export.generate_pdf_report(
-                df, stim, yaml_path, str(out_dir), sim_duration_sec=duration_s)))
+                df, stim, yaml_path, str(out_dir), sim_duration_sec=duration_s,
+                reports_config=cfg, out_root=out_dir.parent.parent)))
         except Exception as exc:  # noqa: BLE001
             result.warnings.append(f"PDF report failed ({exc})")
             log.warning("PDF report failed: %s", exc)

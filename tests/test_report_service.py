@@ -342,3 +342,101 @@ def test_pdf_page_and_standalone_png_render_the_same_grouping(tmp_path):
 def _dl_prepared():
     from chipify import data_loader as _dl
     return _dl.prepare_results(_results())
+
+
+# ── The PDF contains exactly the configured plots ─────────────────────────────
+
+def _pdf_pages(stim, df, out_root):
+    """Render the report's plot pages and return one summary per page."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from chipify import pdf_export
+
+    pages = []
+
+    class _Stub:
+        def savefig(self, fig, **_kw):
+            pages.append({
+                "titles": [a.get_title() for a in fig.axes if a.get_title()],
+                "artists": sum(len(a.lines) + len(a.patches) + len(a.collections)
+                               + len(a.images) for a in fig.axes),
+                "labels": [t.get_text() for t in fig.texts],
+                "facecolors": [a.get_facecolor() for a in fig.axes],
+            })
+
+    pdf_export._add_report_plots(_Stub(), df, stim, stim.reports.plots, out_root)
+    return pages
+
+
+def test_pdf_renders_every_configured_plot_type(tmp_path):
+    """Only histograms used to reach the PDF; scatter/correlation were dropped."""
+    stim = _stim("""
+        reports:
+          pdf: true
+          plots:
+            - {type: histogram, param: gain}
+            - {type: scatter, x: gain, y: pm}
+            - {type: correlation}
+            - {type: tornado, target: gain}
+    """)
+    df = _dl_prepared()
+    pages = _pdf_pages(stim, df, tmp_path)
+
+    assert len(pages) == 4, "one page per configured plot"
+    for page in pages:
+        assert page["artists"] > 0, page          # not a blank page
+    joined = " ".join(t for p in pages for t in p["titles"])
+    assert "Distribution of" in joined and "Shmoo" in joined
+    assert "Correlation" in joined
+
+
+def test_pdf_plot_pages_are_labelled_in_order(tmp_path):
+    stim = _stim("""
+        reports:
+          pdf: true
+          plots:
+            - {type: histogram, param: gain}
+            - {type: scatter, x: gain, y: pm}
+    """)
+    pages = _pdf_pages(stim, _dl_prepared(), tmp_path)
+    labels = [" ".join(p["labels"]) for p in pages]
+    assert "histogram_gain" in labels[0] and "(1 / 2)" in labels[0]
+    assert "scatter_gain_vs_pm" in labels[1] and "(2 / 2)" in labels[1]
+
+
+def test_pdf_plot_pages_use_the_white_paper_palette(tmp_path):
+    """Embedded pages must not carry the dark on-screen theme onto paper."""
+    stim = _stim("""
+        reports:
+          pdf: true
+          plots: [{type: scatter, x: gain, y: pm}]
+    """)
+    pages = _pdf_pages(stim, _dl_prepared(), tmp_path)
+    # white_background() is active while the page is written.
+    for fc in pages[0]["facecolors"]:
+        assert tuple(round(c, 3) for c in fc[:3]) == (1.0, 1.0, 1.0), fc
+
+
+def test_configured_plots_replace_the_automatic_sections(tmp_path):
+    """"Exactly the plots the datasheet asks for" — no extra auto figures."""
+    stim = _stim("""
+        reports:
+          pdf: true
+          plots: [{type: scatter, x: gain, y: pm}]
+    """)
+    result = rs.generate_reports(_results(), stim, "d.yaml", tmp_path)
+    pdf = next(f for f in result.files if f.suffix == ".pdf")
+    from pypdf import PdfReader
+    pages = PdfReader(str(pdf)).pages
+    # cover + measurement table + the single configured plot.
+    assert len(pages) == 3, len(pages)
+
+
+def test_no_plots_configured_keeps_the_default_report(tmp_path):
+    """A pdf-only run still gets the automatic histograms and correlation."""
+    stim = _stim()
+    result = rs.generate_reports(_results(), stim, "d.yaml", tmp_path,
+                                 config=rs.pdf_only_config())
+    pdf = next(f for f in result.files if f.suffix == ".pdf")
+    from pypdf import PdfReader
+    assert len(PdfReader(str(pdf)).pages) > 3
