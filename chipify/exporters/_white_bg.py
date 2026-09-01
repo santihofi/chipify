@@ -110,13 +110,13 @@ def _restore_axes(ax: "Axes", snap: dict[str, Any]) -> None:
 
 
 @contextmanager
-def white_background(fig: "Figure"):
+def white_background(fig: "Figure", axes: "list[Axes] | None" = None):
     """Re-skin *fig* to the white-paper palette for the duration of the block.
 
     All chrome (figure bg, axes bg, spines, ticks, tick labels, axis labels,
     titles, grid lines, legend frame and text) is flipped, then restored
     exactly. Plotted data series (lines, bars, scatter points, image
-    colormaps) are left untouched.
+    colormaps) are left untouched. Pass *axes* to re-skin only some of them.
 
     Exposed separately from :func:`save_with_white_bg` because the PDF report
     embeds figures through ``PdfPages.savefig`` rather than ``fig.savefig``:
@@ -125,7 +125,10 @@ def white_background(fig: "Figure"):
     """
     orig_fig_fc = fig.get_facecolor()
     orig_fig_ec = fig.get_edgecolor()
-    snapshots = [(ax, _snapshot_axes(ax)) for ax in fig.axes]
+    # *axes* restricts the re-skin: the PDF report's pages carry a coloured
+    # header banner that must survive, while the plot below it is whitened.
+    targets = fig.axes if axes is None else [a for a in axes if a in fig.axes]
+    snapshots = [(ax, _snapshot_axes(ax)) for ax in targets]
 
     fig.patch.set_facecolor(_WHITE)
     fig.patch.set_edgecolor(_WHITE)

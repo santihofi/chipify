@@ -146,6 +146,10 @@ Preparation for the initial public release.
   exactly those plots, in order, rendered through the same call that writes the
   standalone image. Datasheets without a `plots:` list keep the automatic
   sections.
+- Fixed: the page-header banner was never visible. `axis("off")` also skips an
+  axes' background patch, so every report page drew its white banner text on
+  white — "Measurements (1 / 1)", "Histograms (1 / 4)" and the rest were in the
+  PDF's text layer but invisible on the page.
 - Fixed: figures embedded in the PDF kept the dark on-screen palette, while the
   same plot exported as a PNG came out light — the report path bypassed the
   exporters' white-paper re-skin.

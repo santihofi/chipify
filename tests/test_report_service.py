@@ -356,12 +356,17 @@ def _pdf_pages(stim, df, out_root):
 
     class _Stub:
         def savefig(self, fig, **_kw):
+            # The banner sits at the top of the page; everything below is plot.
+            header = [a for a in fig.axes if a.get_position().y0 > 0.9]
+            plots = [a for a in fig.axes if a not in header]
             pages.append({
-                "titles": [a.get_title() for a in fig.axes if a.get_title()],
+                "titles": [a.get_title() for a in plots if a.get_title()],
                 "artists": sum(len(a.lines) + len(a.patches) + len(a.collections)
-                               + len(a.images) for a in fig.axes),
-                "labels": [t.get_text() for t in fig.texts],
-                "facecolors": [a.get_facecolor() for a in fig.axes],
+                               + len(a.images) for a in plots),
+                "labels": [t.get_text() for a in header for t in a.texts]
+                          + [t.get_text() for t in fig.texts],
+                "facecolors": [a.get_facecolor() for a in plots],
+                "header_facecolors": [a.get_facecolor() for a in header],
             })
 
     pdf_export._add_report_plots(_Stub(), df, stim, stim.reports.plots, out_root)
@@ -415,6 +420,10 @@ def test_pdf_plot_pages_use_the_white_paper_palette(tmp_path):
     # white_background() is active while the page is written.
     for fc in pages[0]["facecolors"]:
         assert tuple(round(c, 3) for c in fc[:3]) == (1.0, 1.0, 1.0), fc
+    # ...but the header banner keeps its colour, or it would vanish into
+    # white-on-white like it used to.
+    for fc in pages[0]["header_facecolors"]:
+        assert tuple(round(c, 3) for c in fc[:3]) != (1.0, 1.0, 1.0), fc
 
 
 def test_configured_plots_replace_the_automatic_sections(tmp_path):
@@ -440,3 +449,60 @@ def test_no_plots_configured_keeps_the_default_report(tmp_path):
     pdf = next(f for f in result.files if f.suffix == ".pdf")
     from pypdf import PdfReader
     assert len(PdfReader(str(pdf)).pages) > 3
+
+
+def test_pdf_pages_are_portrait(tmp_path):
+    """Plot pages must match the rest of the report, not sit sideways."""
+    from chipify import pdf_export
+
+    stim = _stim("""
+        reports:
+          pdf: true
+          plots:
+            - {type: histogram, param: gain}
+            - {type: scatter, x: gain, y: pm}
+            - {type: correlation}
+    """)
+    result = rs.generate_reports(_results(), stim, "d.yaml", tmp_path)
+    pdf = next(f for f in result.files if f.suffix == ".pdf")
+
+    from pypdf import PdfReader
+    for page in PdfReader(str(pdf)).pages:
+        w, h = float(page.mediabox.width), float(page.mediabox.height)
+        assert h > w, f"page is landscape: {w} x {h}"
+        assert round(w / 72, 1) == round(pdf_export.A4[0], 1)
+
+
+def test_plot_axes_are_fitted_into_the_page_band(tmp_path):
+    """A plot must not stretch down the whole sheet on a portrait page."""
+    from chipify import pdf_export
+
+    stim = _stim("""
+        reports:
+          pdf: true
+          plots: [{type: scatter, x: gain, y: pm}]
+    """)
+    pages = _pdf_pages(stim, _dl_prepared(), tmp_path)
+    assert len(pages) == 1
+    # Recorded by _pdf_pages below via the axes positions.
+    left, bottom, width, height = pdf_export._PLOT_BAND
+    assert 0.0 < height < 0.7, "band should leave margins above and below"
+    assert left + width <= 0.95, "band must leave room for colorbar labels"
+
+
+def test_page_header_banner_is_actually_drawn():
+    """axis("off") also hides the patch, which left the banner invisible."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from chipify import pdf_export
+
+    fig = plt.figure(figsize=pdf_export.A4, facecolor="white")
+    ax = pdf_export._page_header(fig, "Banner")
+    try:
+        assert ax.get_frame_on()
+        assert ax.axison, "the axis must stay on or the background patch is skipped"
+        assert not any(s.get_visible() for s in ax.spines.values())
+        assert ax.get_xticks().size == 0 and ax.get_yticks().size == 0
+    finally:
+        plt.close(fig)

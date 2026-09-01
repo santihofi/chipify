@@ -48,7 +48,6 @@ MGRAY  = "#c8c8c8"
 DGRAY  = "#555555"
 
 A4     = (8.27, 11.69)   # inches
-A4_LANDSCAPE = (11.69, 8.27)
 
 log = logging.getLogger("chipify.pdf_export")
 ML     = 0.07            # left/right margin in figure-fraction units
@@ -142,9 +141,18 @@ class _DummyCanvas:
 # ── Page header bar (shared across all pages) ─────────────────────────────────
 
 def _page_header(fig, label: str):
+    """Blue banner across the top of a report page.
+
+    Ticks and spines are hidden individually rather than with ``axis("off")``:
+    that turns the whole axis off, and matplotlib then skips the background
+    patch as well — which left every page's banner as white text on white.
+    """
     ax = fig.add_axes([0, 0.935, 1, 0.065])
     ax.set_facecolor(BLUE)
-    ax.axis("off")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
     ax.text(0.5, 0.5, label, color="white", fontsize=14, weight="bold",
             ha="center", va="center", transform=ax.transAxes)
     return ax
@@ -488,6 +496,43 @@ def _finish_pdf_hist(ax, data, cpk, passed):
             zorder=5)
 
 
+#: Where a plot sits on its portrait page: (left, bottom, width, height) in
+#: figure coordinates. Roughly 6.5 x 5.6 inches on A4 — letting a plot fill
+#: the full page height would stretch it into a tall, hard-to-read strip.
+#: The right margin leaves room for a colorbar's tick labels.
+_PLOT_BAND = (0.11, 0.30, 0.79, 0.48)
+
+
+def _fit_axes_to_band(fig, band=_PLOT_BAND) -> None:
+    """Map every axes of *fig* into *band*, preserving their relative layout.
+
+    The renderers lay themselves out for a figure of their own proportions, so
+    on a portrait page their axes would span the whole sheet. Rescaling the
+    union of the axes into a band keeps a readable aspect ratio, and doing it
+    proportionally keeps stacked plots (the Bode magnitude/phase pair) and
+    colorbars in the right places relative to each other.
+    """
+    axes = list(fig.axes)
+    if not axes:
+        return
+    boxes = [ax.get_position() for ax in axes]
+    x0 = min(b.x0 for b in boxes)
+    x1 = max(b.x1 for b in boxes)
+    y0 = min(b.y0 for b in boxes)
+    y1 = max(b.y1 for b in boxes)
+    span_x = (x1 - x0) or 1.0
+    span_y = (y1 - y0) or 1.0
+
+    bx, by, bw, bh = band
+    for ax, box in zip(axes, boxes):
+        ax.set_position([
+            bx + (box.x0 - x0) / span_x * bw,
+            by + (box.y0 - y0) / span_y * bh,
+            box.width / span_x * bw,
+            box.height / span_y * bh,
+        ])
+
+
 def _add_report_plots(pdf: PdfPages, df, stim, plots: list, out_root) -> None:
     """One page per plot declared in the datasheet's ``reports:`` block.
 
@@ -508,27 +553,25 @@ def _add_report_plots(pdf: PdfPages, df, stim, plots: list, out_root) -> None:
         try:
             fig, _ = report_service.render_spec(
                 spec, df, stim, out_root=out_root,
-                theme=PlotManager_PRINT_THEME, figsize=A4_LANDSCAPE,
+                theme=PlotManager_PRINT_THEME, figsize=A4,
             )
+            _fit_axes_to_band(fig)
         except Exception as exc:  # noqa: BLE001 — one bad spec must not kill the report
             log.warning("Report plot %r could not be drawn into the PDF: %s", name, exc)
-            fig = plt.figure(figsize=A4_LANDSCAPE, facecolor="white")
+            fig = plt.figure(figsize=A4, facecolor="white")
             fig.text(0.5, 0.5, f"{name}\ncould not be rendered:\n{exc}",
                      ha="center", va="center", color=RED, fontsize=11, wrap=True)
 
-        # Top-left corner: the renderers centre their own axes title and put
-        # the x-label along the bottom, so both the centre and the footer are
-        # already taken. Added after rendering — every renderer clears the
-        # figure first.
-        fig.text(0.008, 0.992, f"{name}   ({i} / {total})",
-                 ha="left", va="top", fontsize=7.5, color=DGRAY)
+        # Snapshot before the banner is added: white_background must whiten the
+        # plot but leave the header's colour alone.
+        plot_axes = list(fig.axes)
+        _page_header(fig, f"{name}   ({i} / {total})")
         # The same re-skin the PNG/SVG exporters apply. Without it the report
         # embedded the dark on-screen palette while the exported image of the
         # very same plot came out light.
-        with white_background(fig):
+        with white_background(fig, axes=plot_axes):
             pdf.savefig(fig, facecolor="white")
         plt.close(fig)
-
 
 def _add_histograms(pdf: PdfPages, df: pd.DataFrame, stim, rows_meta: list):
     """Distribution pages, one measurement per slot.
