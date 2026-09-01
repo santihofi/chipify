@@ -145,6 +145,10 @@ Yield *visualisations* use `data_loader.effective_pass(df)`, not `global_pass`: 
 *   `pdf_export` no longer has its own histogram implementation. It draws through `PlotManager.draw_histogram` with `plot_manager.PRINT_THEME` and `tight=False` (its axes are placed by hand, so `tight_layout` would move them), then `_finish_pdf_hist` applies the page's type scale, pins the legend left and adds the μ/σ/Cpk badge. The old `_draw_hist_ax` — which hardcoded `bins="auto"`, no grouping and an always-on zoom — is gone.
 *   **`zoom` defaults to True for report figures.** A spec far wider than the spread (a ±10 mV limit on a 60 µV distribution) otherwise collapses every bar into a sliver against a spec-width axis. The PDF always behaved this way; the default makes every format agree. Set `zoom: false` in the plot spec to see distant spec lines instead.
 
+### Equations panel edits
+*   The table is a staging area that `▶ Apply` persists — but **removing a row saves immediately**, because a deletion left pending was reverted by the next `reload()` and looked like "I cannot delete this". Add/edit still need Apply.
+*   `_dirty` tracks hand edits (`itemChanged`, suppressed while `_loading`), so a `reload()` that drops unsaved work says so rather than reverting silently. `_apply()` returns a bool so a removal knows whether it actually persisted.
+
 ### Editing `reports:` from the GUI (`gui_qt/widgets/reports_dialog.py`)
 *   Opened by **Reports…** in the Datasheet Editor toolbar, because the block belongs to the datasheet — chipify's paradigm is that a datasheet is fully buildable from the GUI.
 *   Persists through `editor_tab.set_document_key("reports", …)`, the same call the equations panel uses: one writer for top-level datasheet keys, and pending form/raw edits are synced first. An empty config renders as `None`, which removes the key instead of leaving an empty husk.

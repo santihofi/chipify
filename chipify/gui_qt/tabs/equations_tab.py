@@ -108,8 +108,20 @@ class EquationsTab(QWidget):
         self.btn_add.clicked.connect(lambda: self._append_row("", ""))
         self.btn_remove.clicked.connect(self._remove_selected)
         self.btn_apply.clicked.connect(self._apply)
+        # Any hand edit marks the table dirty, so reload() can say it is about
+        # to discard unsaved work instead of quietly reverting it.
+        self.table.itemChanged.connect(self._on_edited)
 
     # ── Row helpers ───────────────────────────────────────────────────────────
+
+    #: True when the table holds edits that Apply has not persisted yet.
+    _dirty: bool = False
+    #: Set while reload() repopulates, so programmatic fills are not "edits".
+    _loading: bool = False
+
+    def _on_edited(self, *_a) -> None:
+        if not self._loading:
+            self._dirty = True
 
     def _append_row(self, name: str, expr: str) -> None:
         r = self.table.rowCount()
@@ -118,9 +130,33 @@ class EquationsTab(QWidget):
         self.table.setItem(r, 1, QTableWidgetItem(expr))
 
     def _remove_selected(self) -> None:
+        """Delete the selected equations and persist immediately.
+
+        Two things used to make deleting feel broken. Clicking Remove with no
+        selection did nothing at all and said nothing, and a removal that was
+        not followed by Apply was silently undone by the next ``reload()`` —
+        which fires on a mode switch or a datasheet reload, so the row simply
+        came back. Deleting is unambiguous, so it saves itself; adding and
+        editing still go through Apply.
+        """
         rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
+        if not rows and self.table.currentRow() >= 0:
+            rows = [self.table.currentRow()]      # a focused row counts as chosen
+        if not rows:
+            self.log.setPlainText(
+                "Nothing removed — select the equation's row first "
+                "(click its Name or Expression cell)."
+            )
+            return
+
+        names = [self.table.item(r, 0).text().strip() if self.table.item(r, 0) else ""
+                 for r in sorted(rows)]
         for r in rows:
             self.table.removeRow(r)
+        self._dirty = False          # the removal is about to be persisted
+        removed = ", ".join(n for n in names if n) or f"{len(rows)} row(s)"
+        if self._apply():
+            self.log.setPlainText(f"Removed {removed}.\n" + self.log.toPlainText())
 
     def reload(self, *_a) -> None:
         """Repopulate from the editor's YAML document (legacy settings fallback)."""
@@ -134,9 +170,20 @@ class EquationsTab(QWidget):
             legacy = app_config.load_config().get(legacy_key, []) or []
             pairs = [(e.get("name", ""), e.get("expr", ""))
                      for e in legacy if isinstance(e, dict)]
-        self.table.setRowCount(0)
-        for name, expr in pairs:
-            self._append_row(name, expr)
+        discarded = self._dirty
+        self._loading = True
+        try:
+            self.table.setRowCount(0)
+            for name, expr in pairs:
+                self._append_row(name, expr)
+        finally:
+            self._loading = False
+        self._dirty = False
+        if discarded:
+            self.log.setPlainText(
+                "Unsaved equation edits were discarded when the table "
+                "reloaded — use ▶ Apply to save changes."
+            )
 
     def _collect(self) -> list[dict[str, str]]:
         out: list[dict[str, str]] = []
@@ -149,14 +196,14 @@ class EquationsTab(QWidget):
 
     # ── Apply ─────────────────────────────────────────────────────────────────
 
-    def _apply(self) -> None:
+    def _apply(self) -> bool:
         mode = self.mode_combo.currentText()
         yaml_key, legacy_key = _MODE_KEYS[mode]
         editor = self._editor
         if not getattr(editor, "current_yaml_path", None):
             self.log.setPlainText("No datasheet selected — equations are stored "
                                   "in the datasheet YAML.")
-            return
+            return False
 
         equations = self._collect()
         bad = [eq["name"] for eq in equations if not eq["name"].isidentifier()]
@@ -165,14 +212,14 @@ class EquationsTab(QWidget):
                 "Not saved — equation names must be valid identifiers "
                 f"(they become result columns): {', '.join(bad)}"
             )
-            return
+            return False
 
         # Persist through the editor so file, form, and raw view stay
         # consistent (and concurrent edits in either view are kept).
         value = {eq["name"]: eq["expr"] for eq in equations} if equations else None
         if not editor.set_document_key(yaml_key, value):
             self.log.setPlainText("Could not save the datasheet — see error dialog.")
-            return
+            return False
 
         # Hard migration: the datasheet is the storage now.
         cfg = app_config.load_config()
@@ -190,13 +237,16 @@ class EquationsTab(QWidget):
                 f"Saved {len(equations)} transient equation(s) to the datasheet. "
                 "Waveform plots list them as signals."
             )
-            return
+            self._dirty = False
+            return True
 
         derived = ", ".join(c for c in (self._last_derived or [])) or "—"
         self.log.setPlainText(
             f"Saved {len(equations)} scalar equation(s) to the datasheet. "
             f"Derived columns: {derived}"
         )
+        self._dirty = False
+        return True
 
     #: Set by the window after a reapply so the log can report derived names.
     _last_derived: list[str] | None = None

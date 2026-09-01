@@ -138,6 +138,12 @@ Preparation for the initial public release.
   generator exists). Produced by `chipify-cli --reports` or the GUI's
   *Generate Reports* button into `out/reports/<timestamp>/`, with a `.latest`
   pointer. Previously a CLI run produced no figures at all.
+- Fixed: custom equations could not be deleted. Removing a row without then
+  pressing Apply was silently undone by the next table reload (a mode switch or
+  datasheet reload put the equation straight back), and clicking Remove with no
+  row selected did nothing and said nothing. Removing now saves immediately,
+  falls back to the focused row, reports when there is nothing to remove, and an
+  unsaved edit discarded by a reload is announced instead of vanishing.
 - Fixed: a measurement rendered differently in different formats. The PDF report
   had its own histogram implementation that ignored the datasheet's `reports:`
   spec, so a plot configured `group: temp` came out grouped as a PNG and

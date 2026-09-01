@@ -480,6 +480,135 @@ def test_reports_dialog_clearing_removes_the_block(window, tmp_path, monkeypatch
     assert "reports" not in yaml.safe_load(ds.read_text(encoding="utf-8"))
 
 
+def _editor_with_equations(window, tmp_path, monkeypatch, body):
+    """Open the editor on a datasheet and return its equations panel."""
+    import yaml
+    from chipify import settings
+
+    ds_dir = tmp_path / "datasheets"
+    ds_dir.mkdir(exist_ok=True)
+    ds = ds_dir / "d.yaml"
+    ds.write_text(body, encoding="utf-8")
+    monkeypatch.setattr(settings, "IN_DIR", str(ds_dir))
+    monkeypatch.setattr(settings, "OUT_DIR", str(tmp_path / "out"))
+
+    editor = window.editor_tab
+    editor.current_yaml_path = str(ds)
+    editor.current_yaml_data = yaml.safe_load(body)
+    editor.raw_text = body
+    editor.mode_combo.setCurrentText("Raw YAML")
+    editor.raw_editor.setPlainText(body)
+    panel = editor.equations_panel
+    panel.reload()
+    return panel, ds
+
+
+_TWO_EQUATIONS = (
+    "parameters:\n  temp: [27]\n"
+    "tests:\n  tb:\n    gain: {min: 1}\n"
+    "equations:\n  vd_tr: outp-outn\n  gain_x2: gain * 2\n"
+)
+
+
+def test_removing_an_equation_persists_without_pressing_apply(window, tmp_path, monkeypatch):
+    """Deleting used to revert: the row vanished but the file kept the entry.
+
+    reload() then put it straight back, so the equation could not be deleted.
+    """
+    import yaml
+
+    panel, ds = _editor_with_equations(window, tmp_path, monkeypatch, _TWO_EQUATIONS)
+    assert panel.table.rowCount() == 2
+
+    panel.table.selectRow(0)
+    panel._remove_selected()
+
+    assert yaml.safe_load(ds.read_text(encoding="utf-8"))["equations"] == {
+        "gain_x2": "gain * 2"}
+    panel.reload()
+    assert [panel.table.item(r, 0).text()
+            for r in range(panel.table.rowCount())] == ["gain_x2"]
+
+
+def test_removing_the_last_equation_drops_the_key(window, tmp_path, monkeypatch):
+    import yaml
+
+    panel, ds = _editor_with_equations(
+        window, tmp_path, monkeypatch,
+        "parameters:\n  temp: [27]\ntests:\n  tb:\n    gain: {min: 1}\n"
+        "equations:\n  vd_tr: outp-outn\n")
+    panel.table.selectRow(0)
+    panel._remove_selected()
+    assert "equations" not in yaml.safe_load(ds.read_text(encoding="utf-8"))
+    panel.reload()
+    assert panel.table.rowCount() == 0
+
+
+def test_remove_with_no_selection_says_so(window, tmp_path, monkeypatch):
+    """It used to do nothing at all, with no message — it just looked broken."""
+    panel, _ = _editor_with_equations(window, tmp_path, monkeypatch, _TWO_EQUATIONS)
+    panel.table.clearSelection()
+    panel.table.setCurrentCell(-1, -1)
+
+    panel._remove_selected()
+    assert panel.table.rowCount() == 2
+    assert "select" in panel.log.toPlainText().lower()
+
+
+def test_remove_falls_back_to_the_focused_row(window, tmp_path, monkeypatch):
+    """A row the user has clicked into counts as chosen."""
+    panel, _ = _editor_with_equations(window, tmp_path, monkeypatch, _TWO_EQUATIONS)
+    panel.table.clearSelection()
+    panel.table.setCurrentCell(1, 0)
+
+    panel._remove_selected()
+    assert [panel.table.item(r, 0).text()
+            for r in range(panel.table.rowCount())] == ["vd_tr"]
+
+
+def test_removing_a_transient_equation_leaves_the_scalar_block(window, tmp_path,
+                                                               monkeypatch):
+    import yaml
+
+    panel, ds = _editor_with_equations(
+        window, tmp_path, monkeypatch,
+        "parameters:\n  temp: [27]\ntests:\n  tb:\n    gain: {min: 1}\n"
+        "equations:\n  vd_tr: outp-outn\n"
+        "transient_equations:\n  out_d: outp-outn\n")
+
+    panel.mode_combo.setCurrentText("Transient")
+    panel.reload()
+    panel.table.selectRow(0)
+    panel._remove_selected()
+
+    data = yaml.safe_load(ds.read_text(encoding="utf-8"))
+    assert "transient_equations" not in data
+    assert data["equations"] == {"vd_tr": "outp-outn"}      # untouched
+
+
+def test_unsaved_edits_are_reported_when_a_reload_discards_them(window, tmp_path,
+                                                                monkeypatch):
+    """Editing then reloading used to revert in complete silence."""
+    from PySide6.QtWidgets import QTableWidgetItem
+
+    panel, _ = _editor_with_equations(window, tmp_path, monkeypatch, _TWO_EQUATIONS)
+    panel.table.setItem(0, 1, QTableWidgetItem("gain * 999"))
+    assert panel._dirty
+
+    panel.reload()
+    assert not panel._dirty
+    assert "unsaved" in panel.log.toPlainText().lower()
+
+
+def test_reload_alone_does_not_mark_the_table_dirty(window, tmp_path, monkeypatch):
+    """Programmatic population must not look like a user edit."""
+    panel, _ = _editor_with_equations(window, tmp_path, monkeypatch, _TWO_EQUATIONS)
+    assert not panel._dirty
+    panel.reload()
+    assert not panel._dirty
+    assert "unsaved" not in panel.log.toPlainText().lower()
+
+
 def _select_datasheet(window, monkeypatch, path) -> None:
     """Point the window's read-only current_yaml_path property at *path*."""
     monkeypatch.setattr(type(window), "current_yaml_path",
